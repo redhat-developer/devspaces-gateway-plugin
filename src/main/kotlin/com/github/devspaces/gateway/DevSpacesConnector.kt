@@ -11,6 +11,8 @@
  */
 package com.github.devspaces.gateway
 
+import com.github.devspaces.gateway.help.DEVSPACES_DOC_LINK
+import com.github.devspaces.gateway.view.DevSpacesMainView
 import com.jetbrains.gateway.api.GatewayConnector
 import com.jetbrains.gateway.api.GatewayConnectorDocumentationPage
 import com.jetbrains.gateway.api.GatewayConnectorView
@@ -18,13 +20,13 @@ import com.jetbrains.rd.util.lifetime.Lifetime
 import javax.swing.Icon
 
 class DevSpacesConnector : GatewayConnector {
-    override fun getConnectorId() = "devspaces.connector"
+    override fun getConnectorId() = "devspaces.gateway.connector"
 
     override val icon: Icon
         get() = DevSpacesIcons.LOGO
 
     override fun createView(lifetime: Lifetime): GatewayConnectorView {
-        return DevSpacesView()
+        return DevSpacesMainView()
     }
 
     override fun getActionText(): String {
@@ -35,10 +37,7 @@ class DevSpacesConnector : GatewayConnector {
         return DevSpacesBundle.message("connector.description")
     }
 
-    override fun getDocumentationAction() = GatewayConnectorDocumentationPage("https://access.redhat.com/documentation/en-us/red_hat_openshift_dev_spaces")
-
-//    override fun getRecentConnections(setContentCallback: (Component) -> Unit): GatewayRecentConnections {
-//    }
+    override fun getDocumentationAction() = GatewayConnectorDocumentationPage(DEVSPACES_DOC_LINK)
 
     override fun getTitle(): String {
         return DevSpacesBundle.message("connector.title")
