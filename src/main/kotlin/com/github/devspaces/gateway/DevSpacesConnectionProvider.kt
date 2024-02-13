@@ -25,6 +25,7 @@ import java.net.URI
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
+    @Suppress("UnstableApiUsage")
     override suspend fun connect(parameters: Map<String, String>, requestor: ConnectionRequestor): GatewayConnectionHandle? {
         val joinLink = parameters["link"]?.replace("_", "&")
         LinkedClientManager.getInstance().startNewClient(Lifetime.Eternal, URI(joinLink))
