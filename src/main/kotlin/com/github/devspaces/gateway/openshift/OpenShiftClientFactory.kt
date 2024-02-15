@@ -29,7 +29,7 @@ class OpenShiftClientFactory(private val host: String, private val port: String,
         val cluster = mapOf(
             "name" to clusterName,
             "cluster" to mapOf(
-                "server" to String.format("https://%s:%s", host, port),
+                "server" to String.format("https://%s:%s", host.trim(), port.trim()),
                 "insecure-skip-tls-verify" to true
             )
         )
@@ -37,7 +37,7 @@ class OpenShiftClientFactory(private val host: String, private val port: String,
         val user = mapOf(
             "name" to userName,
             "user" to mapOf(
-                "token" to String(token)
+                "token" to String(token).trim()
             )
         )
 

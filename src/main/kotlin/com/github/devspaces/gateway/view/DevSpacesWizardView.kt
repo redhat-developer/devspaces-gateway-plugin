@@ -11,21 +11,25 @@
  */
 package com.github.devspaces.gateway.view
 
-import com.github.devspaces.gateway.openshift.DevSpacesContext
-import com.github.devspaces.gateway.openshift.DevSpacesGatewayConnection
+import com.github.devspaces.gateway.DevSpacesBundle
+import com.github.devspaces.gateway.DevSpacesConnection
+import com.github.devspaces.gateway.DevSpacesContext
 import com.github.devspaces.gateway.view.steps.DevSpacesDevWorkspaceSelectingStepView
 import com.github.devspaces.gateway.view.steps.DevSpacesOpenShiftConnectionStepView
 import com.github.devspaces.gateway.view.steps.DevSpacesWizardStep
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
+import com.intellij.ui.JBColor
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.components.BorderLayoutPanel
 import com.jetbrains.gateway.api.GatewayUI
 import java.awt.Component
 import javax.swing.JButton
+import javax.swing.JLabel
 
 class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : BorderLayoutPanel(), Disposable {
     private var steps = arrayListOf<DevSpacesWizardStep>()
@@ -33,13 +37,14 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
 
     private var previousButton = JButton()
     private var nextButton = JButton()
+    private var statusLabel = JLabel()
 
     init {
         steps.add(DevSpacesOpenShiftConnectionStepView(devSpacesContext))
         steps.add(DevSpacesDevWorkspaceSelectingStepView(devSpacesContext))
 
         addToBottom(createButtons())
-        applyStep()
+        applyStep(0)
     }
 
     override fun dispose() {
@@ -48,6 +53,14 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
 
     private fun createButtons(): Component {
         return panel {
+            row {
+                statusLabel =
+                    label("")
+                        .resizableColumn().align(AlignX.RIGHT).gap(RightGap.SMALL).applyToComponent {
+                            font = JBFont.h4().asBold()
+                            foreground = JBColor.GREEN
+                        }.component
+            }
             separator(background = WelcomeScreenUIManager.getSeparatorColor())
             row {
                 label("").resizableColumn().align(AlignX.FILL).gap(RightGap.SMALL)
@@ -66,7 +79,7 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
             }
         }.apply {
             background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
-            border = JBUI.Borders.empty()
+            border = JBUI.Borders.empty(4)
         }
     }
 
@@ -74,28 +87,34 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
         if (!steps[currentStep].onNext()) return
 
         if (isLastStep()) {
-            DevSpacesGatewayConnection(devSpacesContext).connect()
+            DevSpacesConnection(devSpacesContext).connect(
+                onStarted = {
+                    statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_started")
+                },
+                onTerminated = {
+                    statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_terminated")
+                },
+            )
         } else {
-            remove(steps[currentStep].component)
-            updateUI()
-
-            currentStep++
-            applyStep()
+            applyStep(+1)
         }
     }
 
     private fun previousStep() {
         if (!steps[currentStep].onPrevious()) return
 
+        if (isFirstStep()) {
+            GatewayUI.getInstance().reset()
+        } else {
+            applyStep(-1)
+        }
+    }
+
+    private fun applyStep(shift: Int) {
         remove(steps[currentStep].component)
         updateUI()
 
-        currentStep--
-        if (isFirstStep()) GatewayUI.getInstance().reset()
-        applyStep()
-    }
-
-    private fun applyStep() {
+        currentStep += shift
         steps[currentStep].apply {
             addToCenter(component)
             nextButton.text = nextActionText
