@@ -13,7 +13,7 @@ package com.github.devspaces.gateway.view.steps
 
 import com.github.devspaces.gateway.DevSpacesBundle
 import com.github.devspaces.gateway.openshift.DevWorkspaces
-import com.github.devspaces.gateway.openshift.DevSpacesContext
+import com.github.devspaces.gateway.DevSpacesContext
 import com.github.devspaces.gateway.openshift.Projects
 import com.github.devspaces.gateway.openshift.Utils
 import com.github.devspaces.gateway.view.Dialog

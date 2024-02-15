@@ -9,7 +9,7 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.github.devspaces.gateway.openshift
+package com.github.devspaces.gateway
 
 import io.kubernetes.client.openapi.ApiClient
 

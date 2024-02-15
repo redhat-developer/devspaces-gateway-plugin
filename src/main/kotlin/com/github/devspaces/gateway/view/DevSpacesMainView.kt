@@ -11,7 +11,7 @@
  */
 package com.github.devspaces.gateway.view
 
-import com.github.devspaces.gateway.openshift.DevSpacesContext
+import com.github.devspaces.gateway.DevSpacesContext
 import com.intellij.ui.components.panels.Wrapper
 import com.intellij.util.ui.JBUI
 import com.jetbrains.gateway.api.GatewayConnectorView
