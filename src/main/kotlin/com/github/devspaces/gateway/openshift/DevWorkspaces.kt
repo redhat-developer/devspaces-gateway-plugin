@@ -14,6 +14,9 @@ package com.github.devspaces.gateway.openshift
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
+import java.io.IOException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class DevWorkspaces(private val client: ApiClient) {
     @Throws(ApiException::class)
@@ -35,5 +38,65 @@ class DevWorkspaces(private val client: ApiClient) {
             -1,
             false
         )
+    }
+
+    fun get(namespace: String, name: String): Any {
+        val customApi = CustomObjectsApi(client)
+        return customApi.getNamespacedCustomObject(
+            "workspace.devfile.io",
+            "v1alpha2",
+            namespace,
+            "devworkspaces",
+            name
+        )
+    }
+
+    @Throws(ApiException::class)
+    fun patch(namespace: String, name: String, body: Any) {
+        val customApi = CustomObjectsApi(client)
+        customApi.patchNamespacedCustomObject(
+            "workspace.devfile.io",
+            "v1alpha2",
+            namespace,
+            "devworkspaces",
+            name,
+            body,
+            null,
+            null,
+            null
+        )
+    }
+
+    @Throws(ApiException::class)
+    fun start(namespace: String, name: String) {
+        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to true))
+        patch(namespace, name, patch)
+    }
+
+    @Throws(ApiException::class, IOException::class)
+    fun waitRunning(namespace: String, name: String) {
+        val lock = Object()
+        val dwPhase = java.util.concurrent.atomic.AtomicReference<String>()
+
+        val executor = Executors.newScheduledThreadPool(1)
+        executor.scheduleAtFixedRate(
+            {
+                val devWorkspace = get(namespace, name)
+                dwPhase.set(Utils.getValue(devWorkspace, arrayOf("status", "phase")) as String)
+
+                if (dwPhase.get() == "Running" || dwPhase.get() == "Failed") {
+                    synchronized(lock) {
+                        lock.notify()
+                    }
+                }
+            },
+            0, 5, TimeUnit.SECONDS
+        )
+
+        synchronized(lock) {
+            lock.wait()
+        }
+
+        if (dwPhase.get() != "Running") throw IOException("Failed to start Dev Workspace")
     }
 }
