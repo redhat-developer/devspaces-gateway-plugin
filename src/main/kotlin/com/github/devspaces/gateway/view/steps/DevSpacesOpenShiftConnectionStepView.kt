@@ -25,7 +25,7 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
-    private var tfHost = JBTextField("api.che-dev.x6e0.p1.openshiftapps.com")
+    private var tfHost = JBTextField("")
     private var tfPort = JBTextField("6443")
     private var tfPassword = JBPasswordField()
 
