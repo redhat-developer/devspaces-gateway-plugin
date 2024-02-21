@@ -25,7 +25,9 @@ import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import java.awt.Component
+import java.awt.Font
 import javax.swing.DefaultListModel
 import javax.swing.JList
 import javax.swing.ListCellRenderer
@@ -89,13 +91,7 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
 
                 val devWorkspaces = DevWorkspaces(devSpacesContext.client).list(name) as Map<*, *>
                 val devWorkspaceItems = devWorkspaces["items"] as List<*>
-
-                devWorkspaceItems.forEach { devWorkspaceItem ->
-                    val phase = Utils.getValue(devWorkspaceItem, arrayOf("status", "phase")) as String
-                    if (phase == "Running") {
-                        listDWDataModel.addElement(devWorkspaceItem)
-                    }
-                }
+                devWorkspaceItems.forEach{devWorkspaceItem -> listDWDataModel.addElement(devWorkspaceItem)}
             }
         } catch (e: Exception) {
             val dialog = Dialog(
@@ -115,8 +111,11 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
             isSelected: Boolean,
             cellHasFocus: Boolean
         ): Component {
-            val name = Utils.getValue(devWorkspace, arrayOf("metadata", "name"))
-            return JBLabel(name as String)
+            val name = Utils.getValue(devWorkspace, arrayOf("metadata", "name")) as String
+            val phase = Utils.getValue(devWorkspace, arrayOf("status", "phase")) as String
+            val item = JBLabel(String.format("[%s] %s", phase, name))
+            item.font = JBFont.h4().asPlain()
+            return item
         }
     }
 }
