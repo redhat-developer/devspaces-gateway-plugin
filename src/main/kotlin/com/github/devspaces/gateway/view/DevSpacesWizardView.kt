@@ -75,8 +75,8 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
         if (!steps[currentStep].onNext()) return
 
         if (isLastStep()) {
-            val lifetime = DevSpacesConnection(devSpacesContext).connect()
-            lifetime.waitTermination()
+            val client = DevSpacesConnection(devSpacesContext).connect()
+            client.lifetime.waitTermination()
         } else {
             applyStep(+1)
         }

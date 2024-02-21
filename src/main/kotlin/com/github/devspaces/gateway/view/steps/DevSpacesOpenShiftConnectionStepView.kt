@@ -65,7 +65,7 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
 
     private fun testConnection(): Boolean {
         try {
-            val client = OpenShiftClientFactory(tfHost.text, tfPort.text, tfPassword.password).create()
+            val client = OpenShiftClientFactory().create(tfHost.text, tfPort.text, tfPassword.password)
             devSpacesContext.client = client
 
             Projects(client).list()
