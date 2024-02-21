@@ -14,8 +14,8 @@ package com.github.devspaces.gateway
 import com.github.devspaces.gateway.openshift.Pods
 import com.github.devspaces.gateway.openshift.Utils
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
+import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
-import com.jetbrains.rd.util.lifetime.waitTermination
 import io.kubernetes.client.openapi.models.V1Pod
 import java.io.Closeable
 import java.io.IOException
@@ -24,7 +24,7 @@ import java.net.URI
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
-    fun connect(onStarted: () -> Unit, onTerminated: () -> Unit) {
+    fun connect(onStarted: () -> Unit, onTerminated: () -> Unit): ThinClientHandle {
         val dwName = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "name")) as String
         val dwNamespace = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "namespace")) as String
 
@@ -61,6 +61,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 }
             )
         }
+        return client;
     }
 
     private fun getConnectionLink(pod: V1Pod): String {

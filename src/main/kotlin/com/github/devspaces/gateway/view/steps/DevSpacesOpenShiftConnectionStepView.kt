@@ -25,7 +25,7 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
-    private var tfHost = JBTextField()
+    private var tfHost = JBTextField("api.che-dev.x6e0.p1.openshiftapps.com")
     private var tfPort = JBTextField("6443")
     private var tfPassword = JBPasswordField()
 
@@ -65,7 +65,8 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
 
     private fun testConnection(): Boolean {
         try {
-            val client = OpenShiftClientFactory(tfHost.text, tfPort.text, tfPassword.password).create()
+//            val client = OpenShiftClientFactory().create(tfHost.text, tfPort.text, tfPassword.password)
+            val client = OpenShiftClientFactory().create(tfHost.text, tfPort.text, "sha256~JN7ojBE7hfj5xxthkWlmYTEHexIekN-FoYEb8K4eY_s".toCharArray())
             devSpacesContext.client = client
 
             Projects(client).list()

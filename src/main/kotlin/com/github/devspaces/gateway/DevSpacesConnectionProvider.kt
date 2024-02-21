@@ -11,12 +11,19 @@
  */
 package com.github.devspaces.gateway
 
+import com.github.devspaces.gateway.openshift.DevWorkspaces
+import com.github.devspaces.gateway.openshift.OpenShiftClientFactory
+import com.github.devspaces.gateway.openshift.Utils
+import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.ui.dsl.builder.Align.Companion.CENTER
+import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
-import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.rd.util.lifetime.Lifetime
-import java.net.URI
+
+private const val DW_NAMESPACE = "dwNamespace"
+private const val DW_NAME = "dwName"
 
 /**
  * Handles links as:
@@ -27,9 +34,56 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
     @Suppress("UnstableApiUsage")
     override suspend fun connect(parameters: Map<String, String>, requestor: ConnectionRequestor): GatewayConnectionHandle? {
-        val joinLink = parameters["link"]?.replace("_", "&")
-        LinkedClientManager.getInstance().startNewClient(Lifetime.Eternal, URI(joinLink))
-        return null
+        thisLogger().debug("Launched Dev Spaces connection provider", parameters)
+
+        val dwNamespace = parameters[DW_NAMESPACE]
+        if (dwNamespace.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAMESPACE\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAMESPACE\" is missing")
+        }
+
+        val dwName = parameters[DW_NAME]
+        if (dwName.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAME\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
+        }
+
+        val ctx = DevSpacesContext()
+        ctx.client = OpenShiftClientFactory().create()
+
+        // TODO: probably, we don't need to specify `dwNamespace` here
+        //       as `ctx.client` should know it from the local `.kube/config`
+        val devWorkspaces = DevWorkspaces(ctx.client).list(dwNamespace) as Map<*, *>
+        val devWorkspaceItems = devWorkspaces["items"] as List<*>
+        val list = devWorkspaceItems.filter { (Utils.getValue(it, arrayOf("metadata", "name")) as String) == dwName }
+        ctx.devWorkspace = list[0]!!
+
+        val thinClient = DevSpacesConnection(ctx).connect(
+            onStarted = {
+//                statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_started")
+            },
+            onTerminated = {
+//                statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_terminated")
+            },
+        )
+
+        val connectionFrameComponent = panel {
+            indent {
+                row {
+                    resizableRow()
+                    panel {
+                        row {
+                            icon(DevSpacesIcons.LOGO).align(CENTER)
+                        }
+                        row {
+                            label(dwName).bold().align(CENTER)
+                        }
+                    }.align(CENTER)
+                }
+            }
+        }
+
+        return DevSpacesConnectionHandle(Lifetime.Eternal.createNested(), thinClient, connectionFrameComponent, dwName!!)
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {

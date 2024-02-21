@@ -12,20 +12,25 @@
 package com.github.devspaces.gateway.openshift
 
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
 
-class OpenShiftClientFactory(private val host: String, private val port: String, private val token: CharArray) {
+class OpenShiftClientFactory() {
     private val userName = "openshift_user"
     private val contextName = "openshift_context"
     private val clusterName = "openshift_cluster"
 
     fun create(): ApiClient {
-        val kubeConfig = createKubeConfig()
+        return ClientBuilder.defaultClient()
+    }
+
+    fun create(host: String, port: String, token: CharArray): ApiClient {
+        val kubeConfig = createKubeConfig(host, port, token)
         return Config.fromConfig(kubeConfig)
     }
 
-    private fun createKubeConfig(): KubeConfig {
+    private fun createKubeConfig(host: String, port: String, token: CharArray): KubeConfig {
         val cluster = mapOf(
             "name" to clusterName,
             "cluster" to mapOf(
