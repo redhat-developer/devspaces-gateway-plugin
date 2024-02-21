@@ -11,7 +11,6 @@
  */
 package com.github.devspaces.gateway.view
 
-import com.github.devspaces.gateway.DevSpacesBundle
 import com.github.devspaces.gateway.DevSpacesConnection
 import com.github.devspaces.gateway.DevSpacesContext
 import com.github.devspaces.gateway.view.steps.DevSpacesDevWorkspaceSelectingStepView
@@ -19,17 +18,15 @@ import com.github.devspaces.gateway.view.steps.DevSpacesOpenShiftConnectionStepV
 import com.github.devspaces.gateway.view.steps.DevSpacesWizardStep
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
-import com.intellij.ui.JBColor
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
-import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.components.BorderLayoutPanel
 import com.jetbrains.gateway.api.GatewayUI
+import com.jetbrains.rd.util.lifetime.waitTermination
 import java.awt.Component
 import javax.swing.JButton
-import javax.swing.JLabel
 
 class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : BorderLayoutPanel(), Disposable {
     private var steps = arrayListOf<DevSpacesWizardStep>()
@@ -37,7 +34,6 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
 
     private var previousButton = JButton()
     private var nextButton = JButton()
-    private var statusLabel = JLabel()
 
     init {
         steps.add(DevSpacesOpenShiftConnectionStepView(devSpacesContext))
@@ -53,14 +49,6 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
 
     private fun createButtons(): Component {
         return panel {
-            row {
-                statusLabel =
-                    label("")
-                        .resizableColumn().align(AlignX.RIGHT).gap(RightGap.SMALL).applyToComponent {
-                            font = JBFont.h4().asBold()
-                            foreground = JBColor.GREEN
-                        }.component
-            }
             separator(background = WelcomeScreenUIManager.getSeparatorColor())
             row {
                 label("").resizableColumn().align(AlignX.FILL).gap(RightGap.SMALL)
@@ -87,14 +75,8 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
         if (!steps[currentStep].onNext()) return
 
         if (isLastStep()) {
-            DevSpacesConnection(devSpacesContext).connect(
-                onStarted = {
-                    statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_started")
-                },
-                onTerminated = {
-                    statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_terminated")
-                },
-            )
+            val client = DevSpacesConnection(devSpacesContext).connect()
+            client.lifetime.waitTermination()
         } else {
             applyStep(+1)
         }

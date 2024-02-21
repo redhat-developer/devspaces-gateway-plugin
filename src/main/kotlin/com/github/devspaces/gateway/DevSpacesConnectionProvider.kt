@@ -58,14 +58,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         val list = devWorkspaceItems.filter { (Utils.getValue(it, arrayOf("metadata", "name")) as String) == dwName }
         ctx.devWorkspace = list[0]!!
 
-        val thinClient = DevSpacesConnection(ctx).connect(
-            onStarted = {
-//                statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_started")
-            },
-            onTerminated = {
-//                statusLabel.text = DevSpacesBundle.message("connector.wizard.status_label.client_terminated")
-            },
-        )
+        val thinClient = DevSpacesConnection(ctx).connect()
 
         val connectionFrameComponent = panel {
             indent {
