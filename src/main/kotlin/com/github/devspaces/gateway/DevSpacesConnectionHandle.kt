@@ -18,6 +18,7 @@ import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
 import javax.swing.JComponent
 
+@Suppress("UnstableApiUsage")
 class DevSpacesConnectionHandle(
     lifetime: Lifetime,
     clientHandle: ThinClientHandle,
