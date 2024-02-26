@@ -81,7 +81,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         for (i in 1..12) {
             val result = Pods(devSpacesContext.client).exec(
                 pod,
-                arrayOf("/bin/sh", "-c", "/idea-server/bin/remote-dev-server.sh status \$PROJECTS_ROOT | grep -Eo -m1 'tcp://[^\"]+'"),
+                arrayOf("/bin/sh", "-c", "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | grep -Eo -m1 'tcp://[^\"]+'"),
                 container.name
             ).trim()
             if (result.startsWith("tcp://")) return result
