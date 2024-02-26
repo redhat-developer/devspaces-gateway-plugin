@@ -32,7 +32,6 @@ private const val DW_NAME = "dwName"
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
-    @Suppress("UnstableApiUsage")
     override suspend fun connect(parameters: Map<String, String>, requestor: ConnectionRequestor): GatewayConnectionHandle? {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
@@ -76,7 +75,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             }
         }
 
-        return DevSpacesConnectionHandle(Lifetime.Eternal.createNested(), thinClient, connectionFrameComponent, dwName!!)
+        return DevSpacesConnectionHandle(Lifetime.Eternal.createNested(), thinClient, connectionFrameComponent, dwName)
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {
