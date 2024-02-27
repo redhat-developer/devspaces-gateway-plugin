@@ -12,32 +12,34 @@
 package com.github.devspaces.gateway.view.steps
 
 import com.github.devspaces.gateway.DevSpacesBundle
-import com.github.devspaces.gateway.openshift.DevWorkspaces
 import com.github.devspaces.gateway.DevSpacesContext
+import com.github.devspaces.gateway.openshift.DevWorkspaces
 import com.github.devspaces.gateway.openshift.Projects
 import com.github.devspaces.gateway.openshift.Utils
-import com.github.devspaces.gateway.view.Dialog
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.util.minimumHeight
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
-import com.intellij.util.ui.UIUtil
 import java.awt.Component
-import java.awt.Font
-import javax.swing.DefaultListModel
-import javax.swing.JList
-import javax.swing.ListCellRenderer
+import javax.swing.*
+import javax.swing.event.ListSelectionEvent
+import javax.swing.event.ListSelectionListener
 
 class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.devworkspace_selecting.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.devworkspace_selecting.button.previous")
+
     private var listDWDataModel = DefaultListModel<Any>()
     private var listDevWorkspaces = JBList(listDWDataModel)
+
+    private lateinit var stopDevWorkspaceButton: JButton
 
     override val component = panel {
         row {
@@ -49,6 +51,13 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
             cell(JBScrollPane(listDevWorkspaces)).align(AlignX.FILL)
         }
         row {
+            label("").resizableColumn().align(AlignX.FILL)
+
+            stopDevWorkspaceButton =
+                button(DevSpacesBundle.message("connector.wizard_step.devworkspace_selecting.button.stop")) {
+                    stopDevWorkspace()
+                }.gap(RightGap.SMALL).align(AlignX.RIGHT).component
+
             button(DevSpacesBundle.message("connector.wizard_step.devworkspace_selecting.button.refresh")) {
                 refreshDevWorkspaces()
             }.align(AlignX.RIGHT)
@@ -59,12 +68,14 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
     }
 
     override fun onInit() {
+        listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
+        listDevWorkspaces.minimumHeight = 150
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.devworkspace_selecting.list.empty_text"))
+
         refreshDevWorkspaces()
-        if (listDWDataModel.size > 0) {
-            listDevWorkspaces.selectedIndex = 0
-        }
+
+        listDevWorkspaces.selectedIndex = if (listDWDataModel.size > 0) 0 else -1
     }
 
     override fun onPrevious(): Boolean {
@@ -82,28 +93,28 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
     private fun refreshDevWorkspaces() {
         listDWDataModel.clear()
 
-        try {
-            val projects = Projects(devSpacesContext.client).list() as Map<*, *>
-            val projectItems = projects["items"] as List<*>
+        val projects = Projects(devSpacesContext.client).list() as Map<*, *>
+        val projectItems = projects["items"] as List<*>
 
-            projectItems.forEach { projectItem ->
-                val name = Utils.getValue(projectItem, arrayOf("metadata", "name")) as String
+        projectItems.forEach { projectItem ->
+            val name = Utils.getValue(projectItem, arrayOf("metadata", "name")) as String
 
-                val devWorkspaces = DevWorkspaces(devSpacesContext.client).list(name) as Map<*, *>
-                val devWorkspaceItems = devWorkspaces["items"] as List<*>
-                devWorkspaceItems.forEach{devWorkspaceItem -> listDWDataModel.addElement(devWorkspaceItem)}
-            }
-        } catch (e: Exception) {
-            val dialog = Dialog(
-                "Failed to list DevWorkspaces",
-                String.format("Caused: %s", e.toString()),
-                component
-            )
-            dialog.show()
+            val devWorkspaces = DevWorkspaces(devSpacesContext.client).list(name) as Map<*, *>
+            val devWorkspaceItems = devWorkspaces["items"] as List<*>
+            devWorkspaceItems.forEach { devWorkspaceItem -> listDWDataModel.addElement(devWorkspaceItem) }
         }
     }
 
-    class DevWorkspaceListRenderer<Any> : ListCellRenderer<Any> {
+    private fun stopDevWorkspace() {
+        if (listDevWorkspaces.selectedIndex != -1) {
+            val devWorkspace = listDWDataModel.get(listDevWorkspaces.selectedIndex)
+            val dwName = Utils.getValue(devWorkspace, arrayOf("metadata", "name")) as String
+            val dwNamespace = Utils.getValue(devWorkspace, arrayOf("metadata", "namespace")) as String
+            DevWorkspaces(devSpacesContext.client).stop(dwNamespace, dwName)
+        }
+    }
+
+    inner class DevWorkspaceListRenderer<Any> : ListCellRenderer<Any> {
         override fun getListCellRendererComponent(
             list: JList<out Any>?,
             devWorkspace: Any,
@@ -116,6 +127,20 @@ class DevSpacesDevWorkspaceSelectingStepView(private var devSpacesContext: DevSp
             val item = JBLabel(String.format("[%s] %s", phase, name))
             item.font = JBFont.h4().asPlain()
             return item
+        }
+    }
+
+    inner class DevWorkspaceSelection() : ListSelectionListener {
+        override fun valueChanged(e: ListSelectionEvent) {
+            val selectionModel = (e.source as ListSelectionModel)
+
+            if (selectionModel.isSelectionEmpty) {
+                stopDevWorkspaceButton.isEnabled = false
+                return
+            }
+
+            val devWorkspace = listDWDataModel.get(selectionModel.minSelectionIndex)
+            stopDevWorkspaceButton.isEnabled = Utils.getValue(devWorkspace, arrayOf("spec", "started")) as Boolean
         }
     }
 }
