@@ -19,6 +19,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DevWorkspaces(private val client: ApiClient) {
+
+    private var devWorkspaceStartingTimeout: Long = 300
+
     @Throws(ApiException::class)
     fun list(namespace: String): Any {
         val customApi = CustomObjectsApi(client)
@@ -53,6 +56,57 @@ class DevWorkspaces(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     fun patch(namespace: String, name: String, body: Any) {
+        doPatch(namespace, name, body)
+    }
+
+    @Throws(ApiException::class)
+    fun start(namespace: String, name: String) {
+        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to true))
+        doPatch(namespace, name, patch)
+    }
+
+    @Throws(ApiException::class)
+    fun stop(namespace: String, name: String) {
+        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to false))
+        doPatch(namespace, name, patch)
+    }
+
+    @Throws(ApiException::class, IOException::class)
+    fun waitRunning(namespace: String, name: String) {
+        val dwPhase = java.util.concurrent.atomic.AtomicReference<String>()
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        executor.scheduleAtFixedRate(
+            {
+                val devWorkspace = get(namespace, name)
+                dwPhase.set(Utils.getValue(devWorkspace, arrayOf("status", "phase")) as String)
+
+                if (dwPhase.get() == "Running" || dwPhase.get() == "Failed") {
+                    executor.shutdown()
+                }
+            }, 0, 5, TimeUnit.SECONDS
+        )
+
+        try {
+            executor.awaitTermination(devWorkspaceStartingTimeout, TimeUnit.SECONDS)
+        } finally {
+            executor.shutdown()
+        }
+
+        if (dwPhase.get() == "Failed") throw IOException(
+            String.format("DevWorkspace '%s' failed to start", name)
+        )
+
+        if (dwPhase.get() != "Running") throw IOException(
+            String.format(
+                "DevWorkspace '%s' is not running after %d seconds",
+                name,
+                devWorkspaceStartingTimeout
+            )
+        )
+    }
+
+    @Throws(ApiException::class)
+    private fun doPatch(namespace: String, name: String, body: Any) {
         val customApi = CustomObjectsApi(client)
         customApi.patchNamespacedCustomObject(
             "workspace.devfile.io",
@@ -65,38 +119,5 @@ class DevWorkspaces(private val client: ApiClient) {
             null,
             null
         )
-    }
-
-    @Throws(ApiException::class)
-    fun start(namespace: String, name: String) {
-        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to true))
-        patch(namespace, name, patch)
-    }
-
-    @Throws(ApiException::class, IOException::class)
-    fun waitRunning(namespace: String, name: String) {
-        val lock = Object()
-        val dwPhase = java.util.concurrent.atomic.AtomicReference<String>()
-
-        val executor = Executors.newScheduledThreadPool(1)
-        executor.scheduleAtFixedRate(
-            {
-                val devWorkspace = get(namespace, name)
-                dwPhase.set(Utils.getValue(devWorkspace, arrayOf("status", "phase")) as String)
-
-                if (dwPhase.get() == "Running" || dwPhase.get() == "Failed") {
-                    synchronized(lock) {
-                        lock.notify()
-                    }
-                }
-            },
-            0, 5, TimeUnit.SECONDS
-        )
-
-        synchronized(lock) {
-            lock.wait()
-        }
-
-        if (dwPhase.get() != "Running") throw IOException("Failed to start Dev Workspace")
     }
 }

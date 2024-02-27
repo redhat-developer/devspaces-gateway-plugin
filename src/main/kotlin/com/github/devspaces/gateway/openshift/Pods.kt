@@ -16,6 +16,7 @@ import io.ktor.utils.io.jvm.nio.*
 import io.kubernetes.client.Exec
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
@@ -29,22 +30,9 @@ import java.nio.channels.*
 
 
 class Pods(private val client: ApiClient) {
-    @Throws(Exception::class)
-    fun list(namespace: String, labelSelector: String = ""): V1PodList {
-        val customApi = CoreV1Api(client)
-        return customApi.listNamespacedPod(
-            namespace,
-            "false",
-            false,
-            "",
-            "",
-            labelSelector,
-            -1,
-            "",
-            "",
-            -1,
-            false
-        )
+    @Throws(ApiException::class)
+    fun list(namespace: String): V1PodList {
+        return doList(namespace)
     }
 
     // Sample:
@@ -102,7 +90,11 @@ class Pods(private val client: ApiClient) {
     }
 
     @Throws(IOException::class)
-    private suspend fun copyStreams(clientSocket: Socket, forwardResult: PortForward.PortForwardResult, remotePort: Int) {
+    private suspend fun copyStreams(
+        clientSocket: Socket,
+        forwardResult: PortForward.PortForwardResult,
+        remotePort: Int
+    ) {
         coroutineScope {
             ensureActive()
             launch {
@@ -123,5 +115,28 @@ class Pods(private val client: ApiClient) {
             destination.run { write(buffer, 0, bytesRead) }
         }
         destination.run { flush() }
+    }
+
+    @Throws(ApiException::class)
+    fun findFirst(namespace: String, labelSelector: String): V1Pod? {
+        val pods = doList(namespace, labelSelector)
+        return pods.items[0]
+    }
+
+    @Throws(ApiException::class)
+    private fun doList(namespace: String, labelSelector: String = ""): V1PodList {
+        return CoreV1Api(client).listNamespacedPod(
+            namespace,
+            "false",
+            false,
+            "",
+            "",
+            labelSelector,
+            -1,
+            "",
+            "",
+            -1,
+            false
+        )
     }
 }
