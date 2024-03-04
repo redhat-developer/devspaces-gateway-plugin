@@ -12,7 +12,9 @@
 package com.github.devspaces.gateway.view
 
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
@@ -20,13 +22,10 @@ import java.awt.Component
 import javax.swing.Action
 import javax.swing.JComponent
 
-class Dialog : DialogWrapper {
-    private var text: String
-    constructor(title: String, text: String, parent: Component) : super(parent, false) {
-        this.text = text
-
-        init()
-        setTitle(title)
+class InformationDialog(title: String, private var text: String, parent: Component) : DialogWrapper(parent, false) {
+    init {
+        super.init()
+        this.title = title
     }
 
     override fun createActions(): Array<Action> {
@@ -34,14 +33,10 @@ class Dialog : DialogWrapper {
     }
 
     override fun createCenterPanel(): JComponent {
-        val panel = panel {
+        return panel {
             row {
-                cell(JBTextArea(text)).resizableColumn().align(AlignX.FILL).applyToComponent {
-                    foreground = JBUI.CurrentTheme.NotificationInfo.foregroundColor()
-                }.component
+                cell(JBLabel(text)).resizableColumn().align(AlignX.FILL)
             }
         }
-
-        return panel
     }
 }

@@ -25,16 +25,16 @@ class OpenShiftClientFactory() {
         return ClientBuilder.defaultClient()
     }
 
-    fun create(host: String, port: String, token: CharArray): ApiClient {
-        val kubeConfig = createKubeConfig(host, port, token)
+    fun create(server: String, token: CharArray): ApiClient {
+        val kubeConfig = createKubeConfig(server, token)
         return Config.fromConfig(kubeConfig)
     }
 
-    private fun createKubeConfig(host: String, port: String, token: CharArray): KubeConfig {
+    private fun createKubeConfig(server: String, token: CharArray): KubeConfig {
         val cluster = mapOf(
             "name" to clusterName,
             "cluster" to mapOf(
-                "server" to String.format("https://%s:%s", host.trim(), port.trim()),
+                "server" to server.trim(),
                 "insecure-skip-tls-verify" to true
             )
         )

@@ -15,69 +15,94 @@ import com.github.devspaces.gateway.DevSpacesBundle
 import com.github.devspaces.gateway.DevSpacesContext
 import com.github.devspaces.gateway.openshift.OpenShiftClientFactory
 import com.github.devspaces.gateway.openshift.Projects
-import com.github.devspaces.gateway.view.Dialog
+import com.github.devspaces.gateway.settings.DevSpacesSettings
+import com.github.devspaces.gateway.view.InformationDialog
+import com.intellij.openapi.components.service
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
-import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.auth.ApiKeyAuth
+import io.kubernetes.client.util.Config
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
-    private var tfHost = JBTextField("")
-    private var tfPort = JBTextField("6443")
-    private var tfPassword = JBPasswordField()
+    private var tfServer = JBTextField("")
+    private var tfToken = JBTextField()
+
+    private val settings = service<DevSpacesSettings>()
 
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
-
     override val component = panel {
         row {
             label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.title")).applyToComponent {
                 font = JBFont.h2().asBold()
             }
         }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.host")) {
-            cell(tfHost).align(Align.FILL)
-        }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.port")) {
-            cell(tfPort).align(Align.FILL)
+        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.server")) {
+            cell(tfServer).align(Align.FILL)
         }
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
-            cell(tfPassword).align(Align.FILL)
+            cell(tfToken).align(Align.FILL)
         }
     }.apply {
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
         border = JBUI.Borders.empty(8)
     }
 
-    override fun onInit() {}
+    override fun onInit() {
+        loadOpenShiftConnectionSettings()
+    }
 
     override fun onPrevious(): Boolean {
         return true
     }
 
     override fun onNext(): Boolean {
-        return testConnection()
+        val client = OpenShiftClientFactory().create(tfServer.text, tfToken.text.toCharArray())
+        testConnection(client)
+
+        saveOpenShiftConnectionSettings()
+        devSpacesContext.client = client
+
+        return true
     }
 
-    private fun testConnection(): Boolean {
+    private fun testConnection(client: ApiClient) {
         try {
-            val client = OpenShiftClientFactory().create(tfHost.text, tfPort.text, tfPassword.password)
-            devSpacesContext.client = client
-
             Projects(client).list()
-            return true
         } catch (e: Exception) {
-            val dialog = Dialog(
-                "Failed to connect to OpenShift API server",
-                String.format("Caused: %s", e.toString()),
-                component
-            )
+            val dialog = InformationDialog("Failed to connect to OpenShift API server", e.message.orEmpty(), component)
             dialog.show()
-            return false
+            throw e
         }
+    }
+
+    private fun loadOpenShiftConnectionSettings() {
+        var server = settings.state.server.orEmpty()
+        var token = settings.state.token.orEmpty()
+
+        if (server.isEmpty() && token.isEmpty()) {
+            val config = Config.defaultClient()
+            server = config.basePath
+
+            val auth = config.authentications["BearerToken"]
+            if (auth is ApiKeyAuth) token = auth.apiKey
+
+
+            if (server.isEmpty() && token.isEmpty()) return
+        }
+
+        tfServer.text = server
+        tfToken.text = token
+    }
+
+    private fun saveOpenShiftConnectionSettings() {
+        settings.state.server = tfServer.text
+        settings.state.token = tfToken.text
     }
 }
