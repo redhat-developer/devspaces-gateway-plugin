@@ -2,7 +2,7 @@
 <idea-plugin>
     <id>com.github.devspaces.gateway</id>
     <name>OpenShift Dev Spaces</name>
-    <vendor>Red Hat</vendor>
+    <vendor email="developers@redhat.com" url="https://www.redhat.com">Red-Hat</vendor>
 
     <depends>com.intellij.modules.platform</depends>
 
