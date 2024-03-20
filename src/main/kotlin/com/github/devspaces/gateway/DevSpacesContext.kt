@@ -11,9 +11,19 @@
  */
 package com.github.devspaces.gateway
 
+import com.github.devspaces.gateway.openshift.DevWorkspace
 import io.kubernetes.client.openapi.ApiClient
 
-class DevSpacesContext() {
+class DevSpacesContext {
     lateinit var client: ApiClient
-    lateinit var devWorkspace: Any
+    lateinit var devWorkspace: DevWorkspace
+    var isConnected = false
+
+    fun setConnected() {
+        this.isConnected = true
+    }
+
+    fun setDisconnected() {
+        this.isConnected = false
+    }
 }

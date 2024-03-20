@@ -30,13 +30,9 @@ import java.nio.channels.*
 
 
 class Pods(private val client: ApiClient) {
-    @Throws(ApiException::class)
-    fun list(namespace: String): V1PodList {
-        return doList(namespace)
-    }
 
-    // Sample:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-19/src/main/java/io/kubernetes/client/examples/ExecExample.java
+    // Example:
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/ExecExample.java
     @Throws(IOException::class)
     fun exec(pod: V1Pod, command: Array<String>, container: String): String {
         val output = ByteArrayOutputStream()
@@ -55,8 +51,8 @@ class Pods(private val client: ApiClient) {
         return output.toString()
     }
 
-    // Sample:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-19/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
+    // Example:
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())

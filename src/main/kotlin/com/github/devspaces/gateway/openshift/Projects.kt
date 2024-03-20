@@ -17,9 +17,9 @@ import io.kubernetes.client.openapi.apis.CustomObjectsApi
 
 class Projects(private val client: ApiClient) {
     @Throws(ApiException::class)
-    fun list(): Any {
+    fun list(): List<*> {
         val customApi = CustomObjectsApi(client)
-        return customApi.listClusterCustomObject(
+        val response = customApi.listClusterCustomObject(
             "project.openshift.io",
             "v1",
             "projects",
@@ -33,6 +33,8 @@ class Projects(private val client: ApiClient) {
             "",
             -1,
             false
-        )
+        ) as Map<*, *>
+
+        return response["items"] as List<*>
     }
 }

@@ -12,28 +12,33 @@
 package com.github.devspaces.gateway.view
 
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.ui.components.JBLabel
+import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import java.awt.Component
+import java.awt.event.ActionListener
 import javax.swing.Action
 import javax.swing.JComponent
 
-class InformationDialog(title: String, private var text: String, parent: Component) : DialogWrapper(parent, false) {
+class LoaderDialog(private var text: String, parent: Component) : DialogWrapper(parent, false) {
     init {
         super.init()
-        this.title = title
+        this.setUndecorated(true)
+    }
+
+    fun hide() {
+        this.close(0)
     }
 
     override fun createActions(): Array<Action> {
-        return arrayOf(this.okAction)
+        return arrayOf()
+    }
+
+    override fun createCancelAction(): ActionListener? {
+        return null
     }
 
     override fun createCenterPanel(): JComponent {
-        return panel {
-            row {
-                cell(JBLabel(text)).resizableColumn().align(AlignX.FILL)
-            }
-        }
+        return panel { row { label(text).resizableColumn().align(Align.CENTER) } }
     }
 }

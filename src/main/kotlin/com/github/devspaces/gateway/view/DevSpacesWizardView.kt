@@ -11,12 +11,8 @@
  */
 package com.github.devspaces.gateway.view
 
-import com.github.devspaces.gateway.DevSpacesConnection
 import com.github.devspaces.gateway.DevSpacesContext
-import com.github.devspaces.gateway.openshift.DevWorkspaces
-import com.github.devspaces.gateway.openshift.Utils
-import com.github.devspaces.gateway.server.RemoteServer
-import com.github.devspaces.gateway.view.steps.DevSpacesDevWorkspaceSelectingStepView
+import com.github.devspaces.gateway.view.steps.DevSpacesRemoteServerConnectionStepView
 import com.github.devspaces.gateway.view.steps.DevSpacesOpenShiftConnectionStepView
 import com.github.devspaces.gateway.view.steps.DevSpacesWizardStep
 import com.intellij.openapi.Disposable
@@ -27,12 +23,10 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.components.BorderLayoutPanel
 import com.jetbrains.gateway.api.GatewayUI
-import com.jetbrains.rd.util.lifetime.waitTermination
-import okio.Closeable
 import java.awt.Component
 import javax.swing.JButton
 
-class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : BorderLayoutPanel(), Disposable {
+class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPanel(), Disposable {
     private var steps = arrayListOf<DevSpacesWizardStep>()
     private var currentStep = 0
 
@@ -41,7 +35,7 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
 
     init {
         steps.add(DevSpacesOpenShiftConnectionStepView(devSpacesContext))
-        steps.add(DevSpacesDevWorkspaceSelectingStepView(devSpacesContext))
+        steps.add(DevSpacesRemoteServerConnectionStepView(devSpacesContext))
 
         addToBottom(createButtons())
         applyStep(0)
@@ -75,16 +69,8 @@ class DevSpacesWizardView(private val devSpacesContext: DevSpacesContext) : Bord
         }
     }
 
-    @Suppress("UnstableApiUsage")
     private fun nextStep() {
-        if (!steps[currentStep].onNext()) return
-
-        if (isLastStep()) {
-            val client = DevSpacesConnection(devSpacesContext).connect()
-            client.lifetime.waitTermination()
-        } else {
-            applyStep(+1)
-        }
+        if (steps[currentStep].onNext()) applyStep(+1)
     }
 
     private fun previousStep() {

@@ -17,6 +17,7 @@ import com.github.devspaces.gateway.openshift.OpenShiftClientFactory
 import com.github.devspaces.gateway.openshift.Projects
 import com.github.devspaces.gateway.settings.DevSpacesSettings
 import com.github.devspaces.gateway.view.InformationDialog
+import com.google.gson.Gson
 import com.intellij.openapi.components.service
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBTextField
@@ -25,6 +26,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
 
@@ -32,6 +34,7 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
     private var tfServer = JBTextField("")
     private var tfToken = JBTextField()
 
+    private var settingsAreLoaded = false
     private val settings = service<DevSpacesSettings>()
 
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
@@ -76,33 +79,38 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
         try {
             Projects(client).list()
         } catch (e: Exception) {
-            val dialog = InformationDialog("Failed to connect to OpenShift API server", e.message.orEmpty(), component)
-            dialog.show()
+            var errorMsg = e.message.orEmpty()
+            if (e is ApiException) {
+                val response = Gson().fromJson(e.responseBody, Map::class.java)
+                errorMsg = String.format("Reason: %s", String.format(response["message"] as String))
+            }
+
+            InformationDialog("Connection failed", errorMsg, component)
+                .also { it.show() }
             throw e
         }
     }
 
     private fun loadOpenShiftConnectionSettings() {
-        var server = settings.state.server.orEmpty()
-        var token = settings.state.token.orEmpty()
+        // load from kubeconfig first
+        val config = Config.defaultClient()
+        tfServer.text = config.basePath
 
-        if (server.isEmpty() && token.isEmpty()) {
-            val config = Config.defaultClient()
-            server = config.basePath
+        val auth = config.authentications["BearerToken"]
+        if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
 
-            val auth = config.authentications["BearerToken"]
-            if (auth is ApiKeyAuth) token = auth.apiKey
-
-
-            if (server.isEmpty() && token.isEmpty()) return
+        // then from settings
+        if (tfServer.text.isEmpty() || tfToken.text.isEmpty()) {
+            tfServer.text = settings.state.server.orEmpty()
+            tfToken.text = settings.state.token.orEmpty()
+            settingsAreLoaded = true
         }
-
-        tfServer.text = server
-        tfToken.text = token
     }
 
     private fun saveOpenShiftConnectionSettings() {
-        settings.state.server = tfServer.text
-        settings.state.token = tfToken.text
+        if (settingsAreLoaded) {
+            settings.state.server = tfServer.text
+            settings.state.token = tfToken.text
+        }
     }
 }

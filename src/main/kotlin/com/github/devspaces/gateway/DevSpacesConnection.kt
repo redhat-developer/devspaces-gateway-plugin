@@ -13,12 +13,10 @@ package com.github.devspaces.gateway
 
 import com.github.devspaces.gateway.openshift.DevWorkspaces
 import com.github.devspaces.gateway.openshift.Pods
-import com.github.devspaces.gateway.openshift.Utils
 import com.github.devspaces.gateway.server.RemoteServer
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
-import org.bouncycastle.util.Arrays
 import java.io.Closeable
 import java.io.IOException
 import java.net.URI
@@ -26,39 +24,68 @@ import java.net.URI
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
-    fun connect(): ThinClientHandle {
-        val isStarted = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("spec", "started")) as Boolean
-        val dwName = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "name")) as String
-        val dwNamespace = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "namespace")) as String
-
-        if (!isStarted) {
-            DevWorkspaces(devSpacesContext.client).start(dwNamespace, dwName)
+    fun connect(
+        onConnected: () -> Unit,
+        onDisconnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
+    ): ThinClientHandle {
+        if (!devSpacesContext.devWorkspace.spec.started) {
+            DevWorkspaces(devSpacesContext.client)
+                .start(
+                    devSpacesContext.devWorkspace.metadata.namespace,
+                    devSpacesContext.devWorkspace.metadata.name
+                )
         }
-        DevWorkspaces(devSpacesContext.client).waitRunning(dwNamespace, dwName)
 
-        val remoteServer = RemoteServer(devSpacesContext)
-        remoteServer.waitProjects()
+        if (!DevWorkspaces(devSpacesContext.client)
+                .waitPhase(
+                    devSpacesContext.devWorkspace.metadata.namespace,
+                    devSpacesContext.devWorkspace.metadata.name,
+                    DevWorkspaces.RUNNING,
+                    DevWorkspaces.RUNNING_TIMEOUT
+                )
+        ) throw IOException(
+            String.format(
+                "DevWorkspace '%s' is not running after %d seconds",
+                devSpacesContext.devWorkspace.metadata.name,
+                DevWorkspaces.RUNNING_TIMEOUT
+            )
+        )
+
+
+        val remoteServer = RemoteServer(devSpacesContext).also { it.waitProjectsReady() }
         val projectStatus = remoteServer.getProjectStatus()
 
         if (projectStatus.joinLink.isEmpty()) throw IOException(
             String.format(
                 "Connection link to the remote server not found in the DevWorkspace: %s",
-                dwName
+                devSpacesContext.devWorkspace.metadata.name
             )
         )
 
-        val client = LinkedClientManager.getInstance().startNewClient(Lifetime.Eternal, URI(projectStatus.joinLink), "")
+        val client = LinkedClientManager
+            .getInstance()
+            .startNewClient(
+                Lifetime.Eternal,
+                URI(projectStatus.joinLink),
+                "",
+                onConnected
+            )
+
         val forwarder = Pods(devSpacesContext.client).forward(remoteServer.pod, 5990, 5990)
         client.run {
             lifetime.onTermination(forwarder)
-            lifetime.onTermination(
-                Closeable {
-                    val projectStatus = remoteServer.getProjectStatus()
-                    if (Arrays.isNullOrEmpty(projectStatus.projects)) {
-                        DevWorkspaces(devSpacesContext.client).stop(dwNamespace, dwName)
-                    }
+            lifetime.onTermination {
+                if (remoteServer.waitProjectsTerminated()) {
+                    DevWorkspaces(devSpacesContext.client)
+                        .stop(
+                            devSpacesContext.devWorkspace.metadata.namespace,
+                            devSpacesContext.devWorkspace.metadata.name
+                        )
+                    onDevWorkspaceStopped()
                 }
-            )
+            }
+            lifetime.onTermination(onDisconnected)
         }
 
         return client

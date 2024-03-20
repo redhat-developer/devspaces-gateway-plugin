@@ -11,21 +11,28 @@
  */
 package com.github.devspaces.gateway.openshift
 
+import com.google.gson.reflect.TypeToken
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
+import io.kubernetes.client.util.Watch
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DevWorkspaces(private val client: ApiClient) {
-
-    private var devWorkspaceStartingTimeout: Long = 300
+    companion object {
+        val FAILED: String = "Failed"
+        val RUNNING: String = "Running"
+        val STOPPED: String = "Stopped"
+        val STARTING: String = "Starting"
+        val RUNNING_TIMEOUT: Long = 300
+    }
 
     @Throws(ApiException::class)
-    fun list(namespace: String): Any {
+    fun list(namespace: String): List<DevWorkspace> {
         val customApi = CustomObjectsApi(client)
-        return customApi.listNamespacedCustomObject(
+        val response = customApi.listNamespacedCustomObject(
             "workspace.devfile.io",
             "v1alpha2",
             namespace,
@@ -41,22 +48,24 @@ class DevWorkspaces(private val client: ApiClient) {
             -1,
             false
         )
+
+        val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
+        return dwItems
+            .stream()
+            .map { dwItem -> DevWorkspace.from(dwItem) }
+            .toList()
     }
 
-    fun get(namespace: String, name: String): Any {
+    fun get(namespace: String, name: String): DevWorkspace {
         val customApi = CustomObjectsApi(client)
-        return customApi.getNamespacedCustomObject(
+        val dwObj = customApi.getNamespacedCustomObject(
             "workspace.devfile.io",
             "v1alpha2",
             namespace,
             "devworkspaces",
             name
         )
-    }
-
-    @Throws(ApiException::class)
-    fun patch(namespace: String, name: String, body: Any) {
-        doPatch(namespace, name, body)
+        return DevWorkspace.from(dwObj)
     }
 
     @Throws(ApiException::class)
@@ -72,37 +81,43 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     @Throws(ApiException::class, IOException::class)
-    fun waitRunning(namespace: String, name: String) {
-        val dwPhase = java.util.concurrent.atomic.AtomicReference<String>()
-        val executor = Executors.newSingleThreadScheduledExecutor()
-        executor.scheduleAtFixedRate(
-            {
-                val devWorkspace = get(namespace, name)
-                dwPhase.set(Utils.getValue(devWorkspace, arrayOf("status", "phase")) as String)
+    fun waitPhase(
+        namespace: String,
+        name: String,
+        desiredPhase: String,
+        timeout: Long
+    ): Boolean {
+        var phaseIsDesiredState = false
 
-                if (dwPhase.get() == "Running" || dwPhase.get() == "Failed") {
+        val watcher = createWatcher(namespace, String.format("metadata.name=%s", name))
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        executor.schedule(
+            {
+                try {
+                    for (item in watcher) {
+                        val devWorkspace = DevWorkspace.from(item.`object`)
+                        if (desiredPhase == devWorkspace.status.phase) {
+                            phaseIsDesiredState = true
+                            break
+                        }
+                    }
+                } finally {
+                    watcher.close()
                     executor.shutdown()
                 }
-            }, 0, 5, TimeUnit.SECONDS
+            },
+            0,
+            TimeUnit.SECONDS
         )
 
         try {
-            executor.awaitTermination(devWorkspaceStartingTimeout, TimeUnit.SECONDS)
+            executor.awaitTermination(timeout, TimeUnit.SECONDS)
         } finally {
+            watcher.close()
             executor.shutdown()
         }
 
-        if (dwPhase.get() == "Failed") throw IOException(
-            String.format("DevWorkspace '%s' failed to start", name)
-        )
-
-        if (dwPhase.get() != "Running") throw IOException(
-            String.format(
-                "DevWorkspace '%s' is not running after %d seconds",
-                name,
-                devWorkspaceStartingTimeout
-            )
-        )
+        return phaseIsDesiredState
     }
 
     @Throws(ApiException::class)
@@ -118,6 +133,33 @@ class DevWorkspaces(private val client: ApiClient) {
             null,
             null,
             null
+        )
+    }
+
+    // Example:
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/WatchExample.java
+    private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
+        val customObjectsApi = CustomObjectsApi(client)
+        return Watch.createWatch(
+            client,
+            customObjectsApi.listNamespacedCustomObjectCall(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                "false",
+                false,
+                "",
+                fieldSelector,
+                labelSelector,
+                -1,
+                "",
+                "",
+                0,
+                true,
+                null
+            ),
+            object : TypeToken<Watch.Response<Any>>() {}.type
         )
     }
 }
