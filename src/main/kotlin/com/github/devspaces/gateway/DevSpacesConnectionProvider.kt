@@ -13,7 +13,6 @@ package com.github.devspaces.gateway
 
 import com.github.devspaces.gateway.openshift.DevWorkspaces
 import com.github.devspaces.gateway.openshift.OpenShiftClientFactory
-import com.github.devspaces.gateway.openshift.Utils
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.ui.dsl.builder.Align.Companion.CENTER
 import com.intellij.ui.dsl.builder.panel
@@ -32,7 +31,10 @@ private const val DW_NAME = "dwName"
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
-    override suspend fun connect(parameters: Map<String, String>, requestor: ConnectionRequestor): GatewayConnectionHandle? {
+    override suspend fun connect(
+        parameters: Map<String, String>,
+        requestor: ConnectionRequestor
+    ): GatewayConnectionHandle? {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
         val dwNamespace = parameters[DW_NAMESPACE]
@@ -49,15 +51,9 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
         val ctx = DevSpacesContext()
         ctx.client = OpenShiftClientFactory().create()
+        ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
-        // TODO: probably, we don't need to specify `dwNamespace` here
-        //       as `ctx.client` should know it from the local `.kube/config`
-        val devWorkspaces = DevWorkspaces(ctx.client).list(dwNamespace) as Map<*, *>
-        val devWorkspaceItems = devWorkspaces["items"] as List<*>
-        val list = devWorkspaceItems.filter { (Utils.getValue(it, arrayOf("metadata", "name")) as String) == dwName }
-        ctx.devWorkspace = list[0]!!
-
-        val thinClient = DevSpacesConnection(ctx).connect()
+        val thinClient = DevSpacesConnection(ctx).connect({}, {}, {})
 
         val connectionFrameComponent = panel {
             indent {

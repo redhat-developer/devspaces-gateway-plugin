@@ -13,54 +13,98 @@ package com.github.devspaces.gateway
 
 import com.github.devspaces.gateway.openshift.DevWorkspaces
 import com.github.devspaces.gateway.openshift.Pods
-import com.github.devspaces.gateway.openshift.Utils
 import com.github.devspaces.gateway.server.RemoteServer
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
-import org.bouncycastle.util.Arrays
-import java.io.Closeable
+import io.kubernetes.client.openapi.ApiException
 import java.io.IOException
 import java.net.URI
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
-    fun connect(): ThinClientHandle {
-        val isStarted = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("spec", "started")) as Boolean
-        val dwName = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "name")) as String
-        val dwNamespace = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "namespace")) as String
+    fun connect(
+        onConnected: () -> Unit,
+        onDisconnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
+    ): ThinClientHandle {
+        if (devSpacesContext.isConnected)
+            throw IOException(String.format("Already connected to %s", devSpacesContext.devWorkspace.metadata.name))
 
-        if (!isStarted) {
-            DevWorkspaces(devSpacesContext.client).start(dwNamespace, dwName)
+        devSpacesContext.isConnected = true
+        try {
+            return doConnection(onConnected, onDevWorkspaceStopped, onDisconnected)
+        } catch (e: Exception) {
+            devSpacesContext.isConnected = false
+            throw e
         }
-        DevWorkspaces(devSpacesContext.client).waitRunning(dwNamespace, dwName)
+    }
 
-        val remoteServer = RemoteServer(devSpacesContext)
-        remoteServer.waitProjects()
+    @Throws(Exception::class)
+    @Suppress("UnstableApiUsage")
+    private fun doConnection(
+        onConnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
+        onDisconnected: () -> Unit
+    ): ThinClientHandle {
+        startAndWaitDevWorkspace()
+
+        val remoteServer = RemoteServer(devSpacesContext).also { it.waitProjectsReady() }
         val projectStatus = remoteServer.getProjectStatus()
 
-        if (projectStatus.joinLink.isEmpty()) throw IOException(
-            String.format(
-                "Connection link to the remote server not found in the DevWorkspace: %s",
-                dwName
+        val client = LinkedClientManager
+            .getInstance()
+            .startNewClient(
+                Lifetime.Eternal,
+                URI(projectStatus.joinLink),
+                "",
+                onConnected
             )
-        )
 
-        val client = LinkedClientManager.getInstance().startNewClient(Lifetime.Eternal, URI(projectStatus.joinLink), "")
         val forwarder = Pods(devSpacesContext.client).forward(remoteServer.pod, 5990, 5990)
+
         client.run {
-            lifetime.onTermination(forwarder)
-            lifetime.onTermination(
-                Closeable {
-                    val projectStatus = remoteServer.getProjectStatus()
-                    if (Arrays.isNullOrEmpty(projectStatus.projects)) {
-                        DevWorkspaces(devSpacesContext.client).stop(dwNamespace, dwName)
-                    }
-                }
-            )
+            lifetime.onTermination { forwarder.close() }
+            lifetime.onTermination {
+                if (remoteServer.waitProjectsTerminated())
+                    DevWorkspaces(devSpacesContext.client)
+                        .stop(
+                            devSpacesContext.devWorkspace.metadata.namespace,
+                            devSpacesContext.devWorkspace.metadata.name
+                        )
+                        .also { onDevWorkspaceStopped() }
+            }
+            lifetime.onTermination { devSpacesContext.isConnected = false }
+            lifetime.onTermination(onDisconnected)
         }
 
         return client
+    }
+
+    @Throws(IOException::class, ApiException::class)
+    private fun startAndWaitDevWorkspace() {
+        if (!devSpacesContext.devWorkspace.spec.started) {
+            DevWorkspaces(devSpacesContext.client)
+                .start(
+                    devSpacesContext.devWorkspace.metadata.namespace,
+                    devSpacesContext.devWorkspace.metadata.name
+                )
+        }
+
+        if (!DevWorkspaces(devSpacesContext.client)
+                .waitPhase(
+                    devSpacesContext.devWorkspace.metadata.namespace,
+                    devSpacesContext.devWorkspace.metadata.name,
+                    DevWorkspaces.RUNNING,
+                    DevWorkspaces.RUNNING_TIMEOUT
+                )
+        ) throw IOException(
+            String.format(
+                "DevWorkspace '%s' is not running after %d seconds",
+                devSpacesContext.devWorkspace.metadata.name,
+                DevWorkspaces.RUNNING_TIMEOUT
+            )
+        )
     }
 }

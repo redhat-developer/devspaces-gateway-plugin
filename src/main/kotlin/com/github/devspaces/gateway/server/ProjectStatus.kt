@@ -20,6 +20,11 @@ data class ProjectStatus(
     val runtimeVersion: String,
     val projects: Array<ProjectInfo>
 ) {
+    companion object {
+        fun empty(): ProjectStatus {
+            return ProjectStatus("", "", "", "", "", emptyArray())
+        }
+    }
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -45,6 +50,5 @@ data class ProjectStatus(
         result = 31 * result + projects.contentHashCode()
         return result
     }
-
 }
 

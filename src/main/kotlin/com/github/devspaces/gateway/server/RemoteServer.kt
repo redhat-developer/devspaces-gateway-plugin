@@ -14,8 +14,9 @@ package com.github.devspaces.gateway.server
 
 import com.github.devspaces.gateway.DevSpacesContext
 import com.github.devspaces.gateway.openshift.Pods
-import com.github.devspaces.gateway.openshift.Utils
+import com.google.common.base.Strings
 import com.google.gson.Gson
+import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
 import org.bouncycastle.util.Arrays
@@ -28,7 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class RemoteServer(private val devSpacesContext: DevSpacesContext) {
     var pod: V1Pod
     private var container: V1Container
-    private var waitingTimeout: Long = 60
+    private var readyTimeout: Long = 60
+    private var terminationTimeout: Long = 10
 
     init {
         pod = findPod()
@@ -36,54 +38,85 @@ class RemoteServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     fun getProjectStatus(): ProjectStatus {
-        val result = Pods(devSpacesContext.client).exec(
-            pod, arrayOf(
-                "/bin/sh",
-                "-c",
-                "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
-            ), container.name
-        ).trim()
-
-        return Gson().fromJson(result, ProjectStatus::class.java)
+        Pods(devSpacesContext.client)
+            .exec(
+                pod,
+                arrayOf(
+                    "/bin/sh",
+                    "-c",
+                    "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
+                ),
+                container.name
+            )
+            .trim()
+            .also {
+                return if (Strings.isNullOrEmpty(it)) ProjectStatus.empty()
+                else Gson().fromJson(it, ProjectStatus::class.java)
+            }
     }
 
     @Throws(IOException::class)
-    fun waitProjects() {
-        val projectsReady = AtomicBoolean()
+    fun waitProjectsReady() {
+        doWaitProjectsState(true, readyTimeout)
+            .also {
+                if (!it) throw IOException(
+                    String.format(
+                        "Projects are not ready after %d seconds.",
+                        readyTimeout
+                    )
+                )
+            }
+    }
+
+    @Throws(IOException::class)
+    fun waitProjectsTerminated(): Boolean {
+        return doWaitProjectsState(false, terminationTimeout)
+    }
+
+    @Throws(IOException::class)
+    fun doWaitProjectsState(isReadyState: Boolean, timeout: Long): Boolean {
+        val projectsInDesiredState = AtomicBoolean()
         val executor = Executors.newSingleThreadScheduledExecutor()
         executor.scheduleAtFixedRate(
             {
-                val projectStatus = getProjectStatus()
-                if (!Arrays.isNullOrEmpty(projectStatus.projects)) {
-                    projectsReady.set(true)
-                    executor.shutdown()
+                try {
+                    getProjectStatus().also {
+                        if (isReadyState == !Arrays.isNullOrEmpty(it.projects)) {
+                            projectsInDesiredState.set(true)
+                            executor.shutdown()
+                        }
+                    }
+                } catch (e: Exception) {
+                    thisLogger().debug("Failed to check project status", e)
                 }
             }, 0, 5, TimeUnit.SECONDS
         )
 
         try {
-            executor.awaitTermination(waitingTimeout, TimeUnit.SECONDS)
+            executor.awaitTermination(timeout, TimeUnit.SECONDS)
         } finally {
             executor.shutdown()
         }
 
-        if (!projectsReady.get()) throw IOException(
-            String.format(
-                "Projects are not ready after %d seconds.",
-                waitingTimeout
-            )
-        )
+        return projectsInDesiredState.get()
     }
 
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
-        val name = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "name")) as String
-        val namespace = Utils.getValue(devSpacesContext.devWorkspace, arrayOf("metadata", "namespace")) as String
-        val selector = String.format("controller.devfile.io/devworkspace_name=%s", name)
-
-        return Pods(devSpacesContext.client).findFirst(namespace, selector) ?: throw IOException(
+        val selector =
             String.format(
-                "DevWorkspace '%s' is not running.", name
+                "controller.devfile.io/devworkspace_name=%s",
+                devSpacesContext.devWorkspace.metadata.name
+            )
+
+        return Pods(devSpacesContext.client)
+            .findFirst(
+                devSpacesContext.devWorkspace.metadata.namespace,
+                selector
+            ) ?: throw IOException(
+            String.format(
+                "DevWorkspace '%s' is not running.",
+                devSpacesContext.devWorkspace.metadata.name
             )
         )
     }
