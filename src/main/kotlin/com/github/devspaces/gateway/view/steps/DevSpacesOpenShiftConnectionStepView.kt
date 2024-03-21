@@ -85,19 +85,22 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
                 errorMsg = String.format("Reason: %s", String.format(response["message"] as String))
             }
 
-            InformationDialog("Connection failed", errorMsg, component)
-                .also { it.show() }
+            InformationDialog("Connection failed", errorMsg, component).show()
             throw e
         }
     }
 
     private fun loadOpenShiftConnectionSettings() {
         // load from kubeconfig first
-        val config = Config.defaultClient()
-        tfServer.text = config.basePath
+        try {
+            val config = Config.defaultClient()
+            tfServer.text = config.basePath
 
-        val auth = config.authentications["BearerToken"]
-        if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
+            val auth = config.authentications["BearerToken"]
+            if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
+        } catch (e: Exception) {
+            // Do nothing
+        }
 
         // then from settings
         if (tfServer.text.isEmpty() || tfToken.text.isEmpty()) {

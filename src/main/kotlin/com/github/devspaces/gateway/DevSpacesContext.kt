@@ -18,12 +18,4 @@ class DevSpacesContext {
     lateinit var client: ApiClient
     lateinit var devWorkspace: DevWorkspace
     var isConnected = false
-
-    fun setConnected() {
-        this.isConnected = true
-    }
-
-    fun setDisconnected() {
-        this.isConnected = false
-    }
 }

@@ -175,13 +175,12 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
             InformationDialog(
                 "Connection failed",
                 String.format(
-                    DevSpacesBundle.message("connector.wizard_step.remote_server_connection.already_connected_message"),
+                    "Already connected to %s",
                     devSpacesContext.devWorkspace.metadata.name
                 ),
                 component
-            )
-                .also { it.show() }
-                .also { return }
+            ).show()
+            return
         }
 
         listDWDataModel
@@ -201,7 +200,6 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
             try {
                 DevSpacesConnection(devSpacesContext).connect(
                     {
-                        devSpacesContext.isConnected = true
                         EventQueue.invokeLater { loaderDialog.hide() }
                         refreshDevWorkspace(
                             devSpacesContext.devWorkspace.metadata.namespace,
@@ -210,7 +208,6 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                         refreshStopButton()
                     },
                     {
-                        devSpacesContext.isConnected = false
                     },
                     {
                         if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
@@ -223,7 +220,6 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                     }
                 )
             } catch (e: Exception) {
-                devSpacesContext.isConnected = false
                 EventQueue.invokeLater { loaderDialog.hide() }
                 refreshDevWorkspace(
                     devSpacesContext.devWorkspace.metadata.namespace,
