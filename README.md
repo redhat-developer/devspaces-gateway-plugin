@@ -1,40 +1,54 @@
-# gateway-plugin
+# OpenShift Dev Spaces Gateway Plugin
 
-![Build](https://github.com/che-incubator/gateway-plugin/workflows/Build/badge.svg)
-[![Version](https://img.shields.io/jetbrains/plugin/v/PLUGIN_ID.svg)](https://plugins.jetbrains.com/plugin/PLUGIN_ID)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/PLUGIN_ID.svg)](https://plugins.jetbrains.com/plugin/PLUGIN_ID)
-
-## Template ToDo list
-- [x] Create a new [IntelliJ Platform Plugin Template][template] project.
-- [ ] Get familiar with the [template documentation][template].
-- [ ] Adjust the [pluginGroup](./gradle.properties), [plugin ID](./src/main/resources/META-INF/plugin.xml) and [sources package](./src/main/kotlin).
-- [ ] Adjust the plugin description in `README` (see [Tips][docs:plugin-description])
-- [ ] Review the [Legal Agreements](https://plugins.jetbrains.com/docs/marketplace/legal-agreements.html?from=IJPluginTemplate).
-- [ ] [Publish a plugin manually](https://plugins.jetbrains.com/docs/intellij/publishing-plugin.html?from=IJPluginTemplate) for the first time.
-- [ ] Set the `PLUGIN_ID` in the above README badges.
-- [ ] Set the [Plugin Signing](https://plugins.jetbrains.com/docs/intellij/plugin-signing.html?from=IJPluginTemplate) related [secrets](https://github.com/JetBrains/intellij-platform-plugin-template#environment-variables).
-- [ ] Set the [Deployment Token](https://plugins.jetbrains.com/docs/marketplace/plugin-upload.html?from=IJPluginTemplate).
-- [ ] Click the <kbd>Watch</kbd> button on the top of the [IntelliJ Platform Plugin Template][template] to be notified about releases containing new features and fixes.
+[![Build](https://github.com/redhat-developer/devspaces-gateway-plugin/workflows/Build/badge.svg)](https://github.com/redhat-developer/devspaces-gateway-plugin/actions/workflows/build.yml)
+[![Version](https://img.shields.io/jetbrains/plugin/v/com.github.devspaces.gateway.svg)](https://plugins.jetbrains.com/plugin/com.github.devspaces.gateway)
+[![Downloads](https://img.shields.io/jetbrains/plugin/d/com.github.devspaces.gateway.svg)](https://plugins.jetbrains.com/plugin/com.github.devspaces.gateway)
 
 <!-- Plugin description -->
-This Fancy IntelliJ Platform Plugin is going to be your implementation of the brilliant ideas that you have.
-
-This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
-
-To keep everything working, do not remove `<!-- ... -->` sections. 
+<!-- This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process. -->
+Plugin for JetBrains Gateway enables local desktop development experience with the IntelliJ IDEs connected to OpenShift Dev Spaces.
 <!-- Plugin description end -->
 
-## Installation
+## Development
+- To test the plugin quickly against the Gateway instance bundled with the plugin, run:
 
-- Using the IDE built-in plugin system:
-  
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>Marketplace</kbd> > <kbd>Search for "gateway-plugin"</kbd> >
-  <kbd>Install</kbd>
-  
-- Manually:
+```console
+./gradlew runIde
+```
 
-  Download the [latest release](https://github.com/che-incubator/gateway-plugin/releases/latest) and install it manually using
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
+- To skip opening the Gateway main window and connect to an already running workspace with the IDEA dev server:
+
+```console
+./gradlew runIde --args="jetbrains-gateway://connect#type=devspaces&dwNamespace=john-che&dwName=my-ws"
+```
+
+with replacing your DevWorkspace's namespace and name in `dwNamespace` and `dwName` parameters.
+
+### Building
+1. Run:
+
+```console
+./gradlew clean buildPlugin
+```
+
+2. Find the built plugin in the `build/distributions` folder.
+
+### Installation
+In the Gateway, click the gear button <kbd>⚙️</kbd>, and choose `Manage Providers` to open the `Plugins` window.
+
+There're a couple of options to install the plugin:
+
+- Search for "OpenShift Dev Spaces".
+- Click the gear button <kbd>⚙️</kbd> and choose `Install Plugin from Disk...`. Then,
+  - choose the built plugin (zip) located at the `build/distributions` folder or
+  - download the plugin from the [latest release](https://github.com/redhat-developer/devspaces-gateway-plugin/releases/latest)
+
+### IntelliJ Plugin Verifier
+To check the plugin compatibility against the Gateway versions defined in the [gradle.properties](./gradle.properties) file.
+
+```console
+./gradlew runPluginVerifier
+```
 
 ## Release
 1. Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.

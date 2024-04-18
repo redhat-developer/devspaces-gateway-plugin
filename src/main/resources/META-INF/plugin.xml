@@ -5,6 +5,7 @@
     <vendor email="developers@redhat.com" url="https://www.redhat.com">Red-Hat</vendor>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends optional="true">com.jetbrains.gateway</depends>
 
     <resource-bundle>messages.DevSpacesBundle</resource-bundle>
 
