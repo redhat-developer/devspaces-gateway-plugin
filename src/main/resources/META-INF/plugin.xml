@@ -1,6 +1,6 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <id>com.github.devspaces.gateway</id>
+    <id>com.redhat.devtools.gateway</id>
     <name>OpenShift Dev Spaces</name>
     <vendor email="developers@redhat.com" url="https://www.redhat.com">Red-Hat</vendor>
 
@@ -10,7 +10,7 @@
     <resource-bundle>messages.DevSpacesBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.jetbrains">
-        <gatewayConnector implementation="com.github.devspaces.gateway.DevSpacesConnector"/>
-        <gatewayConnectionProvider implementation="com.github.devspaces.gateway.DevSpacesConnectionProvider"/>
+        <gatewayConnector implementation="com.redhat.devtools.gateway.DevSpacesConnector"/>
+        <gatewayConnectionProvider implementation="com.redhat.devtools.gateway.DevSpacesConnectionProvider"/>
     </extensions>
 </idea-plugin>

@@ -1,8 +1,8 @@
 # OpenShift Dev Spaces Gateway Plugin
 
 [![Build](https://github.com/redhat-developer/devspaces-gateway-plugin/workflows/Build/badge.svg)](https://github.com/redhat-developer/devspaces-gateway-plugin/actions/workflows/build.yml)
-[![Version](https://img.shields.io/jetbrains/plugin/v/com.github.devspaces.gateway.svg)](https://plugins.jetbrains.com/plugin/com.github.devspaces.gateway)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/com.github.devspaces.gateway.svg)](https://plugins.jetbrains.com/plugin/com.github.devspaces.gateway)
+[![Version](https://img.shields.io/jetbrains/plugin/v/com.redhat.devtools.gateway.svg)](https://plugins.jetbrains.com/plugin/com.redhat.devtools.gateway)
+[![Downloads](https://img.shields.io/jetbrains/plugin/d/com.redhat.devtools.gateway.svg)](https://plugins.jetbrains.com/plugin/com.redhat.devtools.gateway)
 
 <!-- Plugin description -->
 <!-- This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process. -->
