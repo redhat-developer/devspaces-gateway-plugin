@@ -48,6 +48,9 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
     private var listDWDataModel = DefaultListModel<DevWorkspace>()
     private var listDevWorkspaces = JBList(listDWDataModel)
 
+    // 'true' when there are DevWorkspaces come from multiple namespaces
+    private var multipleNamespaces = false
+
     private lateinit var stopDevWorkspaceButton: JButton
 
     override val component = panel {
@@ -125,16 +128,17 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
 
     private fun doRefreshAllDevWorkspaces() {
         val devWorkspaces = ArrayList<DevWorkspace>()
+        val projects = Projects(devSpacesContext.client).list()
 
-        Projects(devSpacesContext.client)
-            .list()
+        multipleNamespaces = projects.size > 1
+
+        projects
             .onEach { project ->
                 (Utils.getValue(project, arrayOf("metadata", "name")) as String)
                     .also {
                         devWorkspaces.addAll(DevWorkspaces(devSpacesContext.client).list(it))
                     }
             }
-
 
         val selectedIndex = listDevWorkspaces.selectedIndex
 
@@ -257,8 +261,9 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
         ): Component {
             return JBLabel(
                 String.format(
-                    "[%s] %s",
+                    "[%s] %s %s",
                     devWorkspace.status.phase,
+                    if (!multipleNamespaces) "" else (devWorkspace.metadata.namespace + " /"),
                     devWorkspace.metadata.name
                 )
             ).also {
