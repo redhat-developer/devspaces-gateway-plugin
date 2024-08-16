@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.5] - 2024-08-16
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...HEAD
+- Support Gateway 2024.2
+
 ## [0.0.4] - 2024-07-16
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.3...HEAD
 - Show namespace name when there are DevWorkspaces from multiple OpenShift projects by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/67
 
 ## [0.0.3] - 2024-04-25
@@ -26,7 +30,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.1...v0.0.2
