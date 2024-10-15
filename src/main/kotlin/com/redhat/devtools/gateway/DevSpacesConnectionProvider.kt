@@ -19,7 +19,6 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
-import com.jetbrains.rd.util.lifetime.Lifetime
 
 private const val DW_NAMESPACE = "dwNamespace"
 private const val DW_NAME = "dwName"
@@ -71,7 +70,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             }
         }
 
-        return DevSpacesConnectionHandle(Lifetime.Eternal.createNested(), thinClient, connectionFrameComponent, dwName)
+        return DevSpacesConnectionHandle(thinClient.lifetime, thinClient, connectionFrameComponent, dwName)
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {
