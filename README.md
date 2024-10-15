@@ -59,8 +59,9 @@ sudo lsof -i -P | grep LISTEN | grep 5990
 ## Release
 1. Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
 2. Edit the draft and use the `Publish release` button. The [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow will attach the built plugin artifact to the published release.
-3. Find the `Changelog update` PR, created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it.
-4. Update the `pluginVersion` in the [gradle.properties](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/gradle.properties) file.
+3. Upload the plugin artifact to Jet Brains Marketplace.
+4. Find the [`Changelog update` PR](https://github.com/redhat-developer/devspaces-gateway-plugin/pulls), created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it.
+5. Update the `pluginVersion` in the [gradle.properties](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/gradle.properties) file.
 
 ---
 Plugin based on the [IntelliJ Platform Plugin Template][template].
