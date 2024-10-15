@@ -50,6 +50,12 @@ To check the plugin compatibility against the Gateway versions defined in the [g
 ./gradlew runPluginVerifier
 ```
 
+### Troubleshooting
+To check the state of the port forwarding:
+```console
+sudo lsof -i -P | grep LISTEN | grep 5990
+```
+
 ## Release
 1. Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
 2. Edit the draft and use the `Publish release` button. The [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow will attach the built plugin artifact to the published release.
