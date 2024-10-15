@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.6] - 2024-10-15
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...HEAD
+- Closing the Jet Brains IDE window should stop the related Gateway process by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/85
+
 ## [0.0.5] - 2024-08-16
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...HEAD
 - Support Gateway 2024.2
 
 ## [0.0.4] - 2024-07-16
@@ -30,7 +34,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.2...v0.0.3
