@@ -51,10 +51,14 @@ To check the plugin compatibility against the Gateway versions defined in the [g
 ```
 
 ### Troubleshooting
-To check the state of the port forwarding:
+1. To check the state of the port forwarding:
 ```console
 sudo lsof -i -P | grep LISTEN | grep 5990
 ```
+
+2. Gateway and the plugin logs are stored in
+`/Users/<USER_NAME>/Library/Logs/JetBrains/JetBrainsGateway<VERSION>/idea.log`
+
 
 ## Release
 1. Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
