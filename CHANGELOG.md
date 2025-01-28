@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.7] - 2025-01-28
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...HEAD
+- Migrated to IntelliJ Gradle Plugin 2.0 to support Gateway 2024.3 by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/100
+
 ## [0.0.6] - 2024-10-15
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...HEAD
 - Closing the Jet Brains IDE window should stop the related Gateway process by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/85
 
 ## [0.0.5] - 2024-08-16
@@ -34,7 +38,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.3...v0.0.4
