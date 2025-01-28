@@ -18,7 +18,7 @@ jobs:
       pull-requests: write
     steps:
 
-      # Check out current repository
+      # Check out the current repository
       - name: Fetch Sources
         uses: actions/checkout@v4
         with:
@@ -33,9 +33,7 @@ jobs:
 
       # Setup Gradle
       - name: Setup Gradle
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-home-cache-cleanup: true
+        uses: gradle/actions/setup-gradle@v4
 
       # Set environment variables
       - name: Export Properties
@@ -51,7 +49,7 @@ jobs:
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # Update Unreleased section with the current release note
+      # Update the Unreleased section with the current release note
       - name: Patch Changelog
         if: ${{ steps.properties.outputs.changelog != '' }}
         env:
@@ -61,7 +59,6 @@ jobs:
 
       # Publish the plugin to JetBrains Marketplace
       # - name: Publish Plugin
-      #   continue-on-error: true # Artem: skip for testing
       #   env:
       #     PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
       #     CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
