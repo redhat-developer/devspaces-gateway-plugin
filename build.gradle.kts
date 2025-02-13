@@ -49,7 +49,7 @@ dependencies {
         testFramework(TestFrameworkType.JUnit5)
     }
 
-    implementation("io.kubernetes:client-java:18.0.1")
+    implementation("io.kubernetes:client-java:22.0.1-legacy")
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html
