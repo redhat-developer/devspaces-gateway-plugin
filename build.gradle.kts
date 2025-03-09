@@ -43,13 +43,12 @@ dependencies {
         // Plugin Dependencies. Uses `platformPlugins` property from the gradle.properties file for plugin from JetBrains Marketplace.
         plugins(providers.gradleProperty("platformPlugins").map { it.split(',') })
 
-        instrumentationTools()
         pluginVerifier()
         zipSigner()
         testFramework(TestFrameworkType.JUnit5)
     }
 
-    implementation("io.kubernetes:client-java:18.0.1")
+    implementation("io.kubernetes:client-java:23.0.0")
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html
