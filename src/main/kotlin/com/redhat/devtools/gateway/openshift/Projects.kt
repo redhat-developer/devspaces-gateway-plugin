@@ -22,18 +22,8 @@ class Projects(private val client: ApiClient) {
         val response = customApi.listClusterCustomObject(
             "project.openshift.io",
             "v1",
-            "projects",
-            "false",
-            false,
-            "",
-            "",
-            "",
-            -1,
-            "",
-            "",
-            -1,
-            false
-        ) as Map<*, *>
+            "projects"
+        ).execute() as Map<*, *>
 
         return response["items"] as List<*>
     }

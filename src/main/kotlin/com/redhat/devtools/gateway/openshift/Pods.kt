@@ -28,11 +28,10 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.channels.*
 
-
 class Pods(private val client: ApiClient) {
 
     // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/ExecExample.java
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/ExecExample.java
     @Throws(IOException::class)
     fun exec(pod: V1Pod, command: Array<String>, container: String): String {
         val output = ByteArrayOutputStream()
@@ -52,7 +51,7 @@ class Pods(private val client: ApiClient) {
     }
 
     // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
@@ -121,18 +120,9 @@ class Pods(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     private fun doList(namespace: String, labelSelector: String = ""): V1PodList {
-        return CoreV1Api(client).listNamespacedPod(
-            namespace,
-            "false",
-            false,
-            "",
-            "",
-            labelSelector,
-            -1,
-            "",
-            "",
-            -1,
-            false
-        )
+        return CoreV1Api(client)
+            .listNamespacedPod(namespace)
+            .labelSelector(labelSelector)
+            .execute();
     }
 }

@@ -12,9 +12,11 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.google.gson.reflect.TypeToken
+import io.kubernetes.client.custom.V1Patch
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
+import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -36,18 +38,8 @@ class DevWorkspaces(private val client: ApiClient) {
             "workspace.devfile.io",
             "v1alpha2",
             namespace,
-            "devworkspaces",
-            "false",
-            false,
-            "",
-            "",
-            "",
-            -1,
-            "",
-            "",
-            -1,
-            false
-        )
+            "devworkspaces"
+        ).execute()
 
         val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
         return dwItems
@@ -64,7 +56,7 @@ class DevWorkspaces(private val client: ApiClient) {
             namespace,
             "devworkspaces",
             name
-        )
+        ).execute()
         return DevWorkspace.from(dwObj)
     }
 
@@ -120,45 +112,43 @@ class DevWorkspaces(private val client: ApiClient) {
         return phaseIsDesiredState
     }
 
+    // Example:
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/PatchExample.java
     @Throws(ApiException::class)
     private fun doPatch(namespace: String, name: String, body: Any) {
         val customApi = CustomObjectsApi(client)
-        customApi.patchNamespacedCustomObject(
-            "workspace.devfile.io",
-            "v1alpha2",
-            namespace,
-            "devworkspaces",
-            name,
-            body,
-            null,
-            null,
-            null
+        PatchUtils.patch(
+            DevWorkspace.javaClass,
+            {
+                customApi.patchNamespacedCustomObject(
+                    "workspace.devfile.io",
+                    "v1alpha2",
+                    namespace,
+                    "devworkspaces",
+                    name,
+                    body
+                ).buildCall(null)
+            },
+            V1Patch.PATCH_FORMAT_JSON_PATCH,
+            customApi.apiClient
         )
     }
 
     // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-18/src/main/java/io/kubernetes/client/examples/WatchExample.java
+    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
     private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
         val customObjectsApi = CustomObjectsApi(client)
         return Watch.createWatch(
             client,
-            customObjectsApi.listNamespacedCustomObjectCall(
+            customObjectsApi.listNamespacedCustomObject(
                 "workspace.devfile.io",
                 "v1alpha2",
                 namespace,
-                "devworkspaces",
-                "false",
-                false,
-                "",
-                fieldSelector,
-                labelSelector,
-                -1,
-                "",
-                "",
-                0,
-                true,
-                null
-            ),
+                "devworkspaces"
+            ).fieldSelector(fieldSelector)
+                .labelSelector(labelSelector)
+                .watch(true)
+                .buildCall(null),
             object : TypeToken<Watch.Response<Any>>() {}.type
         )
     }
