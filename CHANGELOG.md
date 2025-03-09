@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.8] - 2025-03-09
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...HEAD
+- Update to `io.kubernetes:client-java:23` by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/111
+
 ## [0.0.7] - 2025-01-28
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...HEAD
 - Migrated to IntelliJ Gradle Plugin 2.0 to support Gateway 2024.3 by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/100
 
 ## [0.0.6] - 2024-10-15
@@ -38,7 +42,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...v0.0.5
