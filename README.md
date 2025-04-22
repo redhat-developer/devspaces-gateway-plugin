@@ -9,6 +9,8 @@
 Plugin for JetBrains Gateway enables local desktop development experience with the IntelliJ IDEs connected to OpenShift Dev Spaces.
 <!-- Plugin description end -->
 
+![image](https://github.com/user-attachments/assets/0fd641e6-880a-44af-8f64-581d81f03276)
+
 ## Development
 - To test the plugin quickly against the Gateway instance bundled with the plugin, run:
 
