@@ -4,9 +4,17 @@
 
 ## [Unreleased]
 
+## [0.0.9] - 2025-04-24
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...HEAD
+- Bump org.jetbrains.intellij.platform from 2.2.1 to 2.3.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/110
+- Bump org.jetbrains.kotlin.jvm from 2.1.10 to 2.1.20 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/114
+- Bump org.jetbrains.intellij.platform from 2.3.0 to 2.5.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/115
+- Bump org.gradle.toolchains.foojay-resolver-convention from 0.9.0 to 0.10.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/117
+- Gateway 2025.1 support  by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/118
+
 ## [0.0.8] - 2025-03-09
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...HEAD
 - Update to `io.kubernetes:client-java:23` by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/111
 
 ## [0.0.7] - 2025-01-28
@@ -42,7 +50,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...v0.0.6
