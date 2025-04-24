@@ -42,7 +42,7 @@ There're a couple of options to install the plugin:
 
 - Search for "OpenShift Dev Spaces".
 - Click the gear button <kbd>⚙️</kbd> and choose `Install Plugin from Disk...`. Then,
-  - choose the built plugin (zip) located at the `build/distributions` folder or
+  - choose the built plugin (zip) located at the `build/distributions` folder, or
   - download the plugin from the [latest release](https://github.com/redhat-developer/devspaces-gateway-plugin/releases/latest)
 
 ### IntelliJ Plugin Verifier
@@ -58,16 +58,18 @@ To check the plugin compatibility against the Gateway versions defined in the [g
 sudo lsof -i -P | grep LISTEN | grep 5990
 ```
 
-2. Gateway and the plugin logs are stored in
+2. The Gateway application and the Dev Spaces plugin logs are stored in
 `/Users/<USER_NAME>/Library/Logs/JetBrains/JetBrainsGateway<VERSION>/idea.log`
 
 
 ## Release
-1. Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
-2. Edit the draft and use the `Publish release` button. The [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow will attach the built plugin artifact to the published release.
-3. Upload the plugin artifact to Jet Brains Marketplace.
-4. Find the [`Changelog update` PR](https://github.com/redhat-developer/devspaces-gateway-plugin/pulls), created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it.
-5. Update the `pluginVersion` in the [gradle.properties](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/gradle.properties) file.
+- Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
+- Edit the draft:
+  - Click the `Generate release notes` button and edit the release notes if needed
+  - Click the `Publish release` button. The [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow will attach the built plugin artifact to the published release.
+- Upload the plugin artifact to [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/24234-openshift-dev-spaces/edit).
+- Find the [`Changelog update` PR](https://github.com/redhat-developer/devspaces-gateway-plugin/pulls), created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it.
+- Bump the `pluginVersion` in the [gradle.properties](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/gradle.properties) file.
 
 ---
 Plugin based on the [IntelliJ Platform Plugin Template][template].
