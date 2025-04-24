@@ -68,7 +68,7 @@ sudo lsof -i -P | grep LISTEN | grep 5990
   - Click the `Generate release notes` button and edit the release notes if needed
   - Click the `Publish release` button. The [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow will attach the built plugin artifact to the published release.
 - Upload the plugin artifact to [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/24234-openshift-dev-spaces/edit).
-- Find the [`Changelog update` PR](https://github.com/redhat-developer/devspaces-gateway-plugin/pulls), created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it.
+- Find the [`Changelog update - v0.0.x` PR](https://github.com/redhat-developer/devspaces-gateway-plugin/pulls), created automatically by the [Release](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/.github/workflows/release.yml) Workflow, and merge it. Note that currently, it requires closing and reopening the PR to trigger the PR checks. As, due to some issue, they are hanging in a waiting state forever.
 - Bump the `pluginVersion` in the [gradle.properties](https://github.com/redhat-developer/devspaces-gateway-plugin/blob/main/gradle.properties) file.
 
 ---
