@@ -59,7 +59,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 Lifetime.Eternal,
                 URI(projectStatus.joinLink),
                 "",
-                onConnected
+                onConnected,
+                false
             )
 
         val forwarder = Pods(devSpacesContext.client).forward(remoteServer.pod, 5990, 5990)
