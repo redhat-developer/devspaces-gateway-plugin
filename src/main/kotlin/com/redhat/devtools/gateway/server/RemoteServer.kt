@@ -42,6 +42,12 @@ class RemoteServer(private val devSpacesContext: DevSpacesContext) {
             .exec(
                 pod,
                 arrayOf(
+//                  remote-dev-server.sh writes to several sub-folders of HOME (.config, .cache, etc.)
+//                  When registry.access.redhat.com/ubi9 is used for running a user container,
+//                  HOME=/ which is read-only.
+//                  In this case, we point remote-dev-server.sh to a writable HOME.
+                    "env",
+                    "HOME=/tmp/user",
                     "/bin/sh",
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
