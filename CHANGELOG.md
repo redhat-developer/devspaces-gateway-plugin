@@ -4,9 +4,20 @@
 
 ## [Unreleased]
 
+## [0.0.10] - 2025-05-16
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...HEAD
+- Changelog update - `v0.0.9` by @github-actions in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/119
+- Bump org.jetbrains.qodana from 2024.3.4 to 2025.1.1 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/122
+- Bump JetBrains/qodana-action from 2024.3 to 2025.1 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/121
+- Support Gateway 2025.* by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/126
+- Support the UBI9-based user containers by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/125
+- Bump org.jetbrains.intellij.platform from 2.5.0 to 2.6.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/124
+- Bump org.jetbrains.kotlin.jvm from 2.1.20 to 2.1.21 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/123
+- Declare compatibility against GW 2025.2 by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/127
+
 ## [0.0.9] - 2025-04-24
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...HEAD
 - Bump org.jetbrains.intellij.platform from 2.2.1 to 2.3.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/110
 - Bump org.jetbrains.kotlin.jvm from 2.1.10 to 2.1.20 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/114
 - Bump org.jetbrains.intellij.platform from 2.3.0 to 2.5.0 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/115
@@ -50,7 +61,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...v0.0.7
