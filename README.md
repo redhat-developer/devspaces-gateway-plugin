@@ -11,6 +11,11 @@ Plugin for JetBrains Gateway enables local desktop development experience with t
 
 ![image](https://github.com/user-attachments/assets/0fd641e6-880a-44af-8f64-581d81f03276)
 
+## Feedback
+We love to hear from users and developers.
+
+You can ask questions, report bugs, and request features using [GitHub issues](https://github.com/eclipse/che/issues) in the Eclipse Che main repository.
+
 ## Development
 - To test the plugin quickly against the Gateway instance bundled with the plugin, run:
 
