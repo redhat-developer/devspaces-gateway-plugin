@@ -13,7 +13,7 @@ package com.redhat.devtools.gateway
 
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.Pods
-import com.redhat.devtools.gateway.server.RemoteServer
+import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
@@ -50,25 +50,25 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     ): ThinClientHandle {
         startAndWaitDevWorkspace()
 
-        val remoteServer = RemoteServer(devSpacesContext).also { it.waitProjectsReady() }
-        val projectStatus = remoteServer.getProjectStatus()
+        val remoteIdeServer = RemoteIDEServer(devSpacesContext).also { it.waitServerReady() }
+        val remoteIdeServerStatus = remoteIdeServer.getStatus()
 
         val client = LinkedClientManager
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
-                URI(projectStatus.joinLink),
+                URI(remoteIdeServerStatus.joinLink),
                 "",
                 onConnected,
                 false
             )
 
-        val forwarder = Pods(devSpacesContext.client).forward(remoteServer.pod, 5990, 5990)
+        val forwarder = Pods(devSpacesContext.client).forward(remoteIdeServer.pod, 5990, 5990)
 
         client.run {
             lifetime.onTermination { forwarder.close() }
             lifetime.onTermination {
-                if (remoteServer.waitProjectsTerminated())
+                if (remoteIdeServer.waitServerTerminated())
                     DevWorkspaces(devSpacesContext.client)
                         .stop(
                             devSpacesContext.devWorkspace.metadata.namespace,
