@@ -25,8 +25,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-
-class RemoteServer(private val devSpacesContext: DevSpacesContext) {
+/**
+ * Represent an IDE server running in a CDE.
+ */
+class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     var pod: V1Pod
     private var container: V1Container
     private var readyTimeout: Long = 60
@@ -37,7 +39,10 @@ class RemoteServer(private val devSpacesContext: DevSpacesContext) {
         container = findContainer()
     }
 
-    fun getProjectStatus(): ProjectStatus {
+    /**
+     * Asks the CDE for the remote IDE server status.
+     */
+    fun getStatus(): RemoteIDEServerStatus {
         Pods(devSpacesContext.client)
             .exec(
                 pod,
@@ -56,18 +61,18 @@ class RemoteServer(private val devSpacesContext: DevSpacesContext) {
             )
             .trim()
             .also {
-                return if (Strings.isNullOrEmpty(it)) ProjectStatus.empty()
-                else Gson().fromJson(it, ProjectStatus::class.java)
+                return if (Strings.isNullOrEmpty(it)) RemoteIDEServerStatus.empty()
+                else Gson().fromJson(it, RemoteIDEServerStatus::class.java)
             }
     }
 
     @Throws(IOException::class)
-    fun waitProjectsReady() {
-        doWaitProjectsState(true, readyTimeout)
+    fun waitServerReady() {
+        doWaitServerState(true, readyTimeout)
             .also {
                 if (!it) throw IOException(
                     String.format(
-                        "Projects are not ready after %d seconds.",
+                        "Remote IDE server is not ready after %d seconds.",
                         readyTimeout
                     )
                 )
@@ -75,25 +80,25 @@ class RemoteServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitProjectsTerminated(): Boolean {
-        return doWaitProjectsState(false, terminationTimeout)
+    fun waitServerTerminated(): Boolean {
+        return doWaitServerState(false, terminationTimeout)
     }
 
     @Throws(IOException::class)
-    fun doWaitProjectsState(isReadyState: Boolean, timeout: Long): Boolean {
+    fun doWaitServerState(isReadyState: Boolean, timeout: Long): Boolean {
         val projectsInDesiredState = AtomicBoolean()
         val executor = Executors.newSingleThreadScheduledExecutor()
         executor.scheduleAtFixedRate(
             {
                 try {
-                    getProjectStatus().also {
+                    getStatus().also {
                         if (isReadyState == !Arrays.isNullOrEmpty(it.projects)) {
                             projectsInDesiredState.set(true)
                             executor.shutdown()
                         }
                     }
                 } catch (e: Exception) {
-                    thisLogger().debug("Failed to check project status", e)
+                    thisLogger().debug("Failed to check remote IDE server state.", e)
                 }
             }, 0, 5, TimeUnit.SECONDS
         )
