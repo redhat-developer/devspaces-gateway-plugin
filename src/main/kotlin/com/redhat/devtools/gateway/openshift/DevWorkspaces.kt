@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -11,7 +11,9 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.custom.V1Patch
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
@@ -34,18 +36,35 @@ class DevWorkspaces(private val client: ApiClient) {
     @Throws(ApiException::class)
     fun list(namespace: String): List<DevWorkspace> {
         val customApi = CustomObjectsApi(client)
-        val response = customApi.listNamespacedCustomObject(
-            "workspace.devfile.io",
-            "v1alpha2",
-            namespace,
-            "devworkspaces"
-        ).execute()
+        try {
+            val response = customApi.listNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces"
+            ).execute()
 
-        val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
-        return dwItems
-            .stream()
-            .map { dwItem -> DevWorkspace.from(dwItem) }
-            .toList()
+            val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
+            return dwItems
+                .stream()
+                .map { dwItem -> DevWorkspace.from(dwItem) }
+                .toList()
+        } catch (e: ApiException) {
+            thisLogger().info(e.message)
+
+            val response = Gson().fromJson(e.responseBody, Map::class.java)
+            // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
+            // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, etc.
+            // It doesn't make sense to show an error to the user in such cases,
+            // so let's skip it silently.
+            if ((response["code"] as Double) == 403.0) {
+                return emptyList()
+            } else {
+                // The error will be shown in the Gateway UI.
+                thisLogger().error(e.message)
+                throw e
+            }
+        }
     }
 
     fun get(namespace: String, name: String): DevWorkspace {
