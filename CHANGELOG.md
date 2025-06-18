@@ -4,9 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.11] - 2025-06-18
+
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...HEAD
+- Don't fail when trying to list the devworkspaces in the namespace that the user is not allowed to read by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/134
+
 ## [0.0.10] - 2025-05-16
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...HEAD
 - Changelog update - `v0.0.9` by @github-actions in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/119
 - Bump org.jetbrains.qodana from 2024.3.4 to 2025.1.1 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/122
 - Bump JetBrains/qodana-action from 2024.3 to 2025.1 by @dependabot in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/121
@@ -61,7 +65,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...v0.0.8
