@@ -50,7 +50,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     ): ThinClientHandle {
         startAndWaitDevWorkspace()
 
-        val remoteIdeServer = RemoteIDEServer(devSpacesContext).also { it.waitServerReady() }
+        val remoteIdeServer = RemoteIDEServer(devSpacesContext)
         val remoteIdeServerStatus = remoteIdeServer.getStatus()
 
         val client = LinkedClientManager
