@@ -11,8 +11,6 @@
  */
 package com.redhat.devtools.gateway.openshift
 
-import io.ktor.utils.io.*
-import io.ktor.utils.io.jvm.nio.*
 import io.kubernetes.client.Exec
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
@@ -21,34 +19,81 @@ import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
 import io.kubernetes.client.util.Streams
-import kotlinx.coroutines.*
-import java.io.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.Closeable
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.channels.*
+import java.util.concurrent.TimeUnit
 
 class Pods(private val client: ApiClient) {
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
     @Throws(IOException::class)
-    fun exec(pod: V1Pod, command: Array<String>, container: String): String {
-        val output = ByteArrayOutputStream()
-
-        val process = Exec(client).exec(pod, command, container, false, false)
-        val copyOutThread =
-            Thread {
-                Streams.copy(process.inputStream, output)
+    fun exec(pod: V1Pod, command: Array<String>, container: String, timeout: Long): String {
+        return runBlocking {
+            val output = ByteArrayOutputStream()
+            val errorOutput = ByteArrayOutputStream()
+            val process: Process = try {
+                Exec(client).exec(pod, command, container, false, false)
+            } catch (e: ApiException) {
+                throw IOException("Failed to execute command in pod: ${e.code} - ${e.responseBody}", e)
+            } catch (e: IOException) {
+                throw IOException("Failed to execute command in pod: ${e.message}", e)
             }
-        copyOutThread.start()
 
-        process.waitFor()
-        copyOutThread.join()
-        process.destroy()
-
-        return output.toString()
+            var stdoutJob: Job? = null
+            var stderrJob: Job? = null
+            try {
+                stdoutJob = copyStream(process.inputStream, output)
+                stderrJob = copyStream(process.errorStream, errorOutput)
+                val exitCode = waitForProcess(process, timeout)
+                stdoutJob.join()
+                stderrJob.join()
+                if (exitCode != 0) {
+                    throw IOException(
+                        "Pod.exec() exited with code $exitCode.\nStderr: ${errorOutput.toString(Charsets.UTF_8)}"
+                    )
+                }
+                output.toString(Charsets.UTF_8)
+            } finally {
+                stdoutJob?.cancelAndJoin()
+                stderrJob?.cancelAndJoin()
+                process.destroy()
+            }
+        }
     }
+
+    private suspend fun waitForProcess(process: Process, timeout: Long): Int = withContext(Dispatchers.IO) {
+        val exited = process.waitFor(timeout, TimeUnit.SECONDS) // Wait up to 30 seconds
+        if (!exited) {
+            process.destroyForcibly()
+            throw RuntimeException("Command in pod timed out after 30 seconds.")
+        }
+        process.exitValue()
+    }
+
+    private fun CoroutineScope.copyStream(input: InputStream, output: ByteArrayOutputStream
+        ): Job = launch(Dispatchers.IO) {
+            input.copyTo(output)
+        }
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
@@ -102,13 +147,8 @@ class Pods(private val client: ApiClient) {
     }
 
     @Throws(IOException::class)
-    private suspend fun copyStreams(source: InputStream, destination: OutputStream) {
-        val buffer = ByteArray(Streams.BUFFER_SIZE)
-
-        var bytesRead = 0
-        while (runInterruptible { source.read(buffer).also { bytesRead = it } } >= 0) {
-            destination.run { write(buffer, 0, bytesRead) }
-        }
+    private fun copyStreams(source: InputStream, destination: OutputStream) {
+        source.copyTo(destination)
         destination.run { flush() }
     }
 
@@ -124,5 +164,15 @@ class Pods(private val client: ApiClient) {
             .listNamespacedPod(namespace)
             .labelSelector(labelSelector)
             .execute();
+    }
+
+    @Throws(IOException::class)
+    private fun copy(input: InputStream, out: OutputStream) {
+        val buffer = ByteArray(Streams.BUFFER_SIZE)
+        var bytesRead: Int
+        while ((input.read(buffer).also { bytesRead = it }) != -1) {
+            out.write(buffer, 0, bytesRead)
+        }
+        out.flush()
     }
 }

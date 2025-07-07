@@ -12,18 +12,15 @@
 
 package com.redhat.devtools.gateway.server
 
+import com.google.gson.Gson
+import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
-import com.google.common.base.Strings
-import com.google.gson.Gson
-import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
 import org.bouncycastle.util.Arrays
 import java.io.IOException
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Represent an IDE server running in a CDE.
@@ -32,7 +29,6 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     var pod: V1Pod
     private var container: V1Container
     private var readyTimeout: Long = 60
-    private var terminationTimeout: Long = 10
 
     init {
         pod = findPod()
@@ -57,18 +53,23 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
                 ),
-                container.name
+                container.name,
+                readyTimeout
             )
             .trim()
-            .also {
-                return if (Strings.isNullOrEmpty(it)) RemoteIDEServerStatus.empty()
-                else Gson().fromJson(it, RemoteIDEServerStatus::class.java)
+            .also { status ->
+                logger<RemoteIDEServer>().debug("remote server status: $status")
+                return if (status.isEmpty()) {
+                    RemoteIDEServerStatus.empty()
+                } else {
+                    Gson().fromJson(status, RemoteIDEServerStatus::class.java)
+                }
             }
     }
 
     @Throws(IOException::class)
     fun waitServerReady() {
-        doWaitServerState(true, readyTimeout)
+        doWaitServerState(true)
             .also {
                 if (!it) throw IOException(
                     String.format(
@@ -81,35 +82,18 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class)
     fun waitServerTerminated(): Boolean {
-        return doWaitServerState(false, terminationTimeout)
+        return doWaitServerState(false)
     }
 
     @Throws(IOException::class)
-    fun doWaitServerState(isReadyState: Boolean, timeout: Long): Boolean {
-        val projectsInDesiredState = AtomicBoolean()
-        val executor = Executors.newSingleThreadScheduledExecutor()
-        executor.scheduleAtFixedRate(
-            {
-                try {
-                    getStatus().also {
-                        if (isReadyState == !Arrays.isNullOrEmpty(it.projects)) {
-                            projectsInDesiredState.set(true)
-                            executor.shutdown()
-                        }
-                    }
-                } catch (e: Exception) {
-                    thisLogger().debug("Failed to check remote IDE server state.", e)
-                }
-            }, 0, 5, TimeUnit.SECONDS
-        )
-
-        try {
-            executor.awaitTermination(timeout, TimeUnit.SECONDS)
-        } finally {
-            executor.shutdown()
+    fun doWaitServerState(isReadyState: Boolean): Boolean {
+        return try {
+            val status = getStatus()
+            isReadyState == !Arrays.isNullOrEmpty(status.projects)
+        } catch (e: Exception) {
+            thisLogger().debug("Failed to check remote IDE server state.", e)
+            false
         }
-
-        return projectsInDesiredState.get()
     }
 
     @Throws(IOException::class)
