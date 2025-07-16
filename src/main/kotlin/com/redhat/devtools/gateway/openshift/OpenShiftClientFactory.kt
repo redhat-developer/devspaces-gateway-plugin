@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -11,10 +11,14 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.kube.InvalidKubeConfigException
+import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
+import java.io.StringReader
 
 class OpenShiftClientFactory() {
     private val userName = "openshift_user"
@@ -22,6 +26,18 @@ class OpenShiftClientFactory() {
     private val clusterName = "openshift_cluster"
 
     fun create(): ApiClient {
+        val envKubeConfig = System.getenv("KUBECONFIG")
+        if (envKubeConfig != null) {
+            try {
+                val effectiveConfigYaml = KubeConfigBuilder.buildEffectiveKubeConfig()
+                val reader = StringReader(effectiveConfigYaml)
+                val kubeConfig = KubeConfig.loadKubeConfig(reader)
+                return ClientBuilder.kubeconfig(kubeConfig).build()
+            } catch (err: InvalidKubeConfigException) {
+                thisLogger().debug("Failed to build an effective Kube config from `KUBECONFIG` due to error: ${err.message}. Falling back to the default ApiClient.")
+            }
+        }
+
         return ClientBuilder.defaultClient()
     }
 
