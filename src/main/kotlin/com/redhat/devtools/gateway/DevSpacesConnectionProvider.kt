@@ -19,6 +19,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
+import javax.swing.JComponent
 
 private const val DW_NAMESPACE = "dwNamespace"
 private const val DW_NAME = "dwName"
@@ -52,9 +53,22 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         ctx.client = OpenShiftClientFactory().create()
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
-        val thinClient = DevSpacesConnection(ctx).connect({}, {}, {})
+        val thinClient = DevSpacesConnection(ctx)
+            .connect({}, {}, {})
 
-        val connectionFrameComponent = panel {
+        return DevSpacesConnectionHandle(
+            thinClient.lifetime,
+            thinClient,
+            { createComponent(dwName) },
+            dwName)
+    }
+
+    override fun isApplicable(parameters: Map<String, String>): Boolean {
+        return parameters["type"] == "devspaces"
+    }
+
+    private fun createComponent(dwName: String): JComponent {
+        return panel {
             indent {
                 row {
                     resizableRow()
@@ -69,11 +83,5 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 }
             }
         }
-
-        return DevSpacesConnectionHandle(thinClient.lifetime, thinClient, connectionFrameComponent, dwName)
-    }
-
-    override fun isApplicable(parameters: Map<String, String>): Boolean {
-        return parameters["type"] == "devspaces"
     }
 }
