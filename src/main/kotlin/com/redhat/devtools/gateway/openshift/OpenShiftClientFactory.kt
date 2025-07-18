@@ -29,7 +29,7 @@ class OpenShiftClientFactory() {
         val envKubeConfig = System.getenv("KUBECONFIG")
         if (envKubeConfig != null) {
             try {
-                val effectiveConfigYaml = KubeConfigBuilder.buildEffectiveKubeConfig()
+                val effectiveConfigYaml = KubeConfigBuilder.fromEnvVar()
                 val reader = StringReader(effectiveConfigYaml)
                 val kubeConfig = KubeConfig.loadKubeConfig(reader)
                 return ClientBuilder.kubeconfig(kubeConfig).build()
