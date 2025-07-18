@@ -22,12 +22,12 @@ import javax.swing.JComponent
 class DevSpacesConnectionHandle(
     lifetime: Lifetime,
     clientHandle: ThinClientHandle,
-    private val connectionFrameComponent: JComponent,
+    private val componentProvider: () -> JComponent,
     private val wsName: String
 ) : GatewayConnectionHandle(lifetime, clientHandle) {
     override fun customComponentProvider(lifetime: Lifetime) = object : CustomConnectionFrameComponentProvider {
         override val closeConfirmationText = "Disconnect from DevWorkspace ${wsName}?"
-        override fun createComponent(context: CustomConnectionFrameContext) = connectionFrameComponent
+        override fun createComponent(context: CustomConnectionFrameContext) = componentProvider.invoke()
     }
 
     override fun getTitle(): String {
