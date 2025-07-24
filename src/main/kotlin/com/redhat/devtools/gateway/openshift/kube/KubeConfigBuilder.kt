@@ -15,15 +15,20 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
 import java.io.File
+import java.io.StringReader
+import java.nio.file.Paths
 
 class InvalidKubeConfigException(message: String) : Exception(message)
 
 object KubeConfigBuilder {
-    fun fromEnvVar(): String {
-        val files: List<File> = getKubeconfigPaths()
+    private val yamlMapper = ObjectMapper(YAMLFactory().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER))
 
-        val mapper = ObjectMapper(YAMLFactory().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER))
+    fun fromEnvVar(): String = fromConfigs(getKubeconfigEnvPaths())
 
+    fun fromDefault(): String = fromConfigs(getDefaultKubeconfigPath())
+
+    @Suppress("UNCHECKED_CAST")
+    fun fromConfigs(files: List<File>): String {
         var selectedContextName: String? = null
         val allClusters = mutableListOf<Map<String, Any>>()
         val allContexts = mutableListOf<Map<String, Any>>()
@@ -33,26 +38,23 @@ object KubeConfigBuilder {
         for (file in files) {
             if (!file.exists()) continue
 
-            @Suppress("UNCHECKED_CAST")
-            val config = mapper.readValue(file, Map::class.java) as? Map<String, Any> ?: continue
+            val config = yamlMapper.readValue(file, Map::class.java) as? Map<String, Any> ?: continue
 
             (config["clusters"] as? List<*>)?.filterIsInstance<Map<String, Any>>()?.let { allClusters.addAll(it) }
             (config["contexts"] as? List<*>)?.filterIsInstance<Map<String, Any>>()?.let { allContexts.addAll(it) }
             (config["users"] as? List<*>)?.filterIsInstance<Map<String, Any>>()?.let { allUsers.addAll(it) }
 
-            // Pick first encountered current-context
             if (selectedContextName == null) {
                 selectedContextName = config["current-context"] as? String
             }
 
             if (preferences == null) {
-                @Suppress("UNCHECKED_CAST")
                 preferences = config["preferences"] as? Map<String, Any>
             }
         }
 
         val finalConfig = createConfig(selectedContextName, allContexts, allClusters, allUsers, preferences)
-        return mapper.writeValueAsString(finalConfig)
+        return yamlMapper.writeValueAsString(finalConfig)
     }
 
     private fun createConfig(
@@ -66,7 +68,6 @@ object KubeConfigBuilder {
             throw InvalidKubeConfigException("No current-context found in provided kubeconfigs.")
         }
 
-        // Filter context
         val selectedContext = allContexts.find { it["name"] == selectedContextName }
             ?: throw InvalidKubeConfigException("current-context '$selectedContextName' not found in merged contexts")
 
@@ -98,13 +99,35 @@ object KubeConfigBuilder {
         return finalConfig
     }
 
-    private fun getKubeconfigPaths(): List<File> {
-        val kubeConfigEnv = System.getenv("KUBECONFIG") ?: return emptyList()
+    private fun getKubeconfigEnvPaths(): List<File> =
+        System.getenv("KUBECONFIG")
+            ?.split(File.pathSeparator)
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.map(::File)
+            ?: emptyList()
 
-        return kubeConfigEnv
-            .split(File.pathSeparator)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .map { File(it) }
+    private fun getDefaultKubeconfigPath(): List<File> =
+        listOfNotNull(
+            Paths.get(System.getProperty("user.home"), ".kube", "config")
+                .takeIf { it.toFile().exists() && it.toFile().isFile }
+                ?.toFile()
+        )
+
+    @Suppress("UNCHECKED_CAST")
+    fun isTokenAuthUsed(): Boolean = try {
+        val envKubeConfig = System.getenv("KUBECONFIG")
+        val kubeConfigYaml = if (envKubeConfig != null) fromEnvVar() else fromDefault()
+
+        val kubeConfigMap = yamlMapper.readValue(StringReader(kubeConfigYaml), Map::class.java) as? Map<String, Any> ?: return false
+        val users = kubeConfigMap["users"] as? List<Map<String, Any>> ?: return false
+        val firstUser = users.firstOrNull() ?: return false
+        val userDetails = firstUser["user"] as? Map<String, Any> ?: return false
+        val hasDirectToken = userDetails.containsKey("token")
+        val hasAuthProviderToken = (userDetails["auth-provider"] as? Map<String, Any>)?.containsKey("token") == true
+
+        hasDirectToken || hasAuthProviderToken
+    } catch (_: Exception) {
+        false
     }
 }
