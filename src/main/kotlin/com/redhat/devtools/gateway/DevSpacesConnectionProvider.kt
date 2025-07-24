@@ -21,6 +21,8 @@ import com.jetbrains.gateway.api.GatewayConnectionProvider
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
+import com.redhat.devtools.gateway.openshift.kube.isNotFound
+import com.redhat.devtools.gateway.openshift.kube.isUnauthorized
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -99,7 +101,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     }
 
     private suspend fun handleUnauthorizedError(err: ApiException): Boolean {
-        if (err.code != 401) return false
+        if (!err.isUnauthorized()) return false
 
         val tokenNote = if (KubeConfigBuilder.isTokenAuthUsed())
             "\n\nYou are using token-based authentication.\nUpdate your token in the kubeconfig file."
@@ -115,7 +117,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     }
 
     private suspend fun handleNotFoundError(err: ApiException): Boolean {
-        if (err.code != 404) return false
+        if (!err.isNotFound()) return false
 
         val message = """
             Workspace or DevWorkspace support not found.
