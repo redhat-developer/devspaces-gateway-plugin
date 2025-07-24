@@ -20,6 +20,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.Align.Companion.CENTER
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
@@ -34,8 +35,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
 import java.awt.Dimension
-import javax.swing.*
-import javax.swing.border.EmptyBorder
+import javax.swing.Action
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JPanel
+import javax.swing.JProgressBar
+import javax.swing.Timer
 
 private const val DW_NAMESPACE = "dwNamespace"
 private const val DW_NAME = "dwName"
@@ -71,40 +78,12 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 // Observe signals on thinClient to detect ready/error
                 val readyDeferred = CompletableDeferred<GatewayConnectionHandle?>()
 
-                thinClient.onClientPresenceChanged.advise(thinClient.lifetime) {
-                    ApplicationManager.getApplication().invokeLater {
-                        if (!readyDeferred.isCompleted) {
-                            indicator.setText("Remote IDE has started successfully")
-                            indicator.setText2("Opening project window…")
-                            Timer(3000) {
-                                indicator.close(DialogWrapper.OK_EXIT_CODE)
-                                readyDeferred.complete(handle)
-                            }.start()
-                        }
-                    }
-                }
-                thinClient.clientFailedToOpenProject.advise(thinClient.lifetime) { errorCode ->
-                    ApplicationManager.getApplication().invokeLater {
-                        if (!readyDeferred.isCompleted) {
-                            indicator.setText("Failed to open remote project (code: $errorCode)")
-                            Timer(2000) {
-                                indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                                readyDeferred.complete(null)
-                            }.start()
-                        }
-                    }
-                }
-                thinClient.clientClosed.advise(thinClient.lifetime) {
-                    ApplicationManager.getApplication().invokeLater {
-                        if (!readyDeferred.isCompleted) {
-                            indicator.setText("Remote IDE closed unexpectedly.")
-                            Timer(2000) {
-                                indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                                readyDeferred.complete(null)
-                            }.start()
-                        }
-                    }
-                }
+                thinClient.onClientPresenceChanged.advise(thinClient.lifetime,
+                    onClientPresenceChanged(readyDeferred, indicator, handle))
+                thinClient.clientFailedToOpenProject.advise(thinClient.lifetime,
+                    onClientFailedToOpenProject(readyDeferred, indicator))
+                thinClient.clientClosed.advise(thinClient.lifetime,
+                    onClientClosed(readyDeferred, indicator))
 
                 readyDeferred.await()
             } catch (err: ApiException) {
@@ -128,6 +107,53 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 ApplicationManager.getApplication().invokeLater {
                     if (indicator.isShowing) indicator.close(DialogWrapper.OK_EXIT_CODE)
                 }
+            }
+        }
+    }
+
+    private fun onClientPresenceChanged(
+        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: StartupProgressIndicator,
+        handle: GatewayConnectionHandle
+    ): (Unit) -> Unit = {
+        ApplicationManager.getApplication().invokeLater {
+            if (!readyDeferred.isCompleted) {
+                indicator.setText("Remote IDE has started successfully")
+                indicator.setText2("Opening project window…")
+                Timer(3000) {
+                    indicator.close(DialogWrapper.OK_EXIT_CODE)
+                    readyDeferred.complete(handle)
+                }.start()
+            }
+        }
+    }
+
+    private fun onClientFailedToOpenProject(
+        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: StartupProgressIndicator
+    ): (Int) -> Unit = { errorCode ->
+        ApplicationManager.getApplication().invokeLater {
+            if (!readyDeferred.isCompleted) {
+                indicator.setText("Failed to open remote project (code: $errorCode)")
+                Timer(2000) {
+                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
+                    readyDeferred.complete(null)
+                }.start()
+            }
+        }
+    }
+
+    private fun onClientClosed(
+        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: StartupProgressIndicator
+    ): (Unit) -> Unit = {
+        ApplicationManager.getApplication().invokeLater {
+            if (!readyDeferred.isCompleted) {
+                indicator.setText("Remote IDE closed unexpectedly.")
+                Timer(2000) {
+                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
+                    readyDeferred.complete(null)
+                }.start()
             }
         }
     }
@@ -222,98 +248,98 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
         return true
     }
-}
 
-// Common progress dialog to monitor the connection and the renote IDE readiness
-class StartupProgressIndicator (
-    initialTitle: String = "Progress Indicator"
-) : DialogWrapper(false), ProgressIndicator {
-    private val progressBar = JProgressBar().apply { isIndeterminate = true }
-    private val mainTextLabel = JLabel("Initializing...")
-    private val subTextLabel = JLabel("")
+    // Common progress dialog to monitor the connection and the renote IDE readiness
+    private class StartupProgressIndicator (
+        initialTitle: String = "Progress Indicator"
+    ) : DialogWrapper(false), ProgressIndicator {
+        private val progressBar = JProgressBar().apply { isIndeterminate = true }
+        private val mainTextLabel = JLabel("Initializing...")
+        private val subTextLabel = JLabel("")
 
-    @Volatile
-    private var canceled = false
+        @Volatile
+        private var canceled = false
 
-    init {
-        title = initialTitle
-        isModal = false
-        isResizable = true
-        init()
-    }
+        init {
+            title = initialTitle
+            isModal = false
+            isResizable = true
+            init()
+        }
 
-    fun setIndeterminateValue(indeterminate: Boolean) = ApplicationManager.getApplication().invokeLater {
-        progressBar.isIndeterminate = indeterminate
-    }
+        fun setIndeterminateValue(indeterminate: Boolean) = ApplicationManager.getApplication().invokeLater {
+            progressBar.isIndeterminate = indeterminate
+        }
 
-    fun setFractionValue(fraction: Double) = ApplicationManager.getApplication().invokeLater {
-        progressBar.isIndeterminate = false
-        progressBar.value = (fraction * 100).toInt()
-    }
+        fun setFractionValue(fraction: Double) = ApplicationManager.getApplication().invokeLater {
+            progressBar.isIndeterminate = false
+            progressBar.value = (fraction * 100).toInt()
+        }
 
-    override fun createCenterPanel(): JComponent = JPanel(BorderLayout(5, 5)).apply {
-        border = EmptyBorder(10, 10, 10, 10)
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(mainTextLabel)
-        add(Box.createVerticalStrut(4))
-        add(subTextLabel)
-        add(Box.createVerticalStrut(8))
-        add(progressBar)
-    }
+        override fun createCenterPanel(): JComponent = JPanel(BorderLayout(5, 5)).apply {
+            border = JBUI.Borders.empty(10)
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(mainTextLabel)
+            add(Box.createVerticalStrut(4))
+            add(subTextLabel)
+            add(Box.createVerticalStrut(8))
+            add(progressBar)
+        }
 
-    override fun createActions(): Array<Action> = emptyArray()
-    override fun getPreferredFocusedComponent() = mainTextLabel
-    override fun getPreferredSize(): Dimension = Dimension(400, 120)
-    override fun getText(): String = mainTextLabel.text
-    override fun getText2(): String = subTextLabel.text
+        override fun createActions(): Array<Action> = emptyArray()
+        override fun getPreferredFocusedComponent() = mainTextLabel
+        override fun getPreferredSize(): Dimension = Dimension(400, 120)
+        override fun getText(): String = mainTextLabel.text
+        override fun getText2(): String = subTextLabel.text
 
-    override fun setText(text: String?) = ApplicationManager.getApplication().invokeLater {
-        mainTextLabel.text = shortenMessage(text ?: "")
-        subTextLabel.text = ""
-    }
+        override fun setText(text: String?) = ApplicationManager.getApplication().invokeLater {
+            mainTextLabel.text = shortenMessage(text ?: "")
+            subTextLabel.text = ""
+        }
 
-    override fun setText2(text: String?) = ApplicationManager.getApplication().invokeLater {
-        subTextLabel.text = shortenMessage(text ?: "")
-    }
+        override fun setText2(text: String?) = ApplicationManager.getApplication().invokeLater {
+            subTextLabel.text = shortenMessage(text ?: "")
+        }
 
-    override fun setIndeterminate(indeterminate: Boolean) = setIndeterminateValue(indeterminate)
-    override fun isIndeterminate(): Boolean = progressBar.isIndeterminate
+        override fun setIndeterminate(indeterminate: Boolean) = setIndeterminateValue(indeterminate)
+        override fun isIndeterminate(): Boolean = progressBar.isIndeterminate
 
-    override fun setFraction(fraction: Double) = setFractionValue(fraction)
-    override fun getFraction(): Double = progressBar.value / 100.0
+        override fun setFraction(fraction: Double) = setFractionValue(fraction)
+        override fun getFraction(): Double = progressBar.value / 100.0
 
-    override fun cancel() {
-        canceled = true
-        close(CANCEL_EXIT_CODE)
-    }
+        override fun cancel() {
+            canceled = true
+            close(CANCEL_EXIT_CODE)
+        }
 
-    override fun isCanceled(): Boolean = canceled
+        override fun isCanceled(): Boolean = canceled
 
-    override fun start() {}
-    override fun stop() {}
-    override fun isRunning(): Boolean = isShowing
-    override fun pushState() {}
-    override fun popState() {}
+        override fun start() {}
+        override fun stop() {}
+        override fun isRunning(): Boolean = isShowing
+        override fun pushState() {}
+        override fun popState() {}
 
-    override fun getModalityState(): ModalityState {
-        return if (isShowing) ModalityState.current() else ModalityState.nonModal()
-    }
+        override fun getModalityState(): ModalityState {
+            return if (isShowing) ModalityState.current() else ModalityState.nonModal()
+        }
 
-    override fun setModalityProgress(progressIndicator: ProgressIndicator?) {}
+        override fun setModalityProgress(progressIndicator: ProgressIndicator?) {}
 
-    override fun checkCanceled() {
-        if (isCanceled) throw ProcessCanceledException()
-    }
+        override fun checkCanceled() {
+            if (isCanceled) throw ProcessCanceledException()
+        }
 
-    override fun isPopupWasShown(): Boolean {
-        return isShowing
-    }
+        override fun isPopupWasShown(): Boolean {
+            return isShowing
+        }
 
-    private fun shortenMessage(message: String, maxLength: Int = 100): String {
-        if (message.length <= maxLength) return message
+        private fun shortenMessage(message: String, maxLength: Int = 100): String {
+            if (message.length <= maxLength) return message
 
-        val head = message.take(maxLength / 2 - 3)
-        val tail = message.takeLast(maxLength / 2 - 3)
-        return "$head…$tail"
+            val head = message.take(maxLength / 2 - 3)
+            val tail = message.takeLast(maxLength / 2 - 3)
+            return "$head…$tail"
+        }
     }
 }
