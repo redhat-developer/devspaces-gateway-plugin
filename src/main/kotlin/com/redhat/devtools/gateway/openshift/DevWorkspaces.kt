@@ -21,16 +21,21 @@ import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
 import java.io.IOException
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+
 class DevWorkspaces(private val client: ApiClient) {
     companion object {
-        val FAILED: String = "Failed"
-        val RUNNING: String = "Running"
-        val STOPPED: String = "Stopped"
-        val STARTING: String = "Starting"
-        val RUNNING_TIMEOUT: Long = 300
+        const val FAILED: String = "Failed"
+        const val RUNNING: String = "Running"
+        const val STOPPED: String = "Stopped"
+        const val STARTING: String = "Starting"
+        const val RUNNING_TIMEOUT: Long = 600
+        const val INACTIVITY_TIMEOUT: Long = 150
     }
 
     @Throws(ApiException::class)
@@ -170,5 +175,62 @@ class DevWorkspaces(private val client: ApiClient) {
                 .buildCall(null),
             object : TypeToken<Watch.Response<Any>>() {}.type
         )
+    }
+
+    @Throws(ApiException::class, IOException::class, CancellationException::class)
+    fun waitForPhase(
+        namespace: String,
+        name: String,
+        desiredPhase: String,
+        maxWaitTimeSeconds: Long = RUNNING_TIMEOUT,
+        maxInactivitySeconds: Long = INACTIVITY_TIMEOUT,
+        onProgress: ((phase: String, message: String) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): Boolean {
+        var reached = false
+        var lastPhase = ""
+        var lastMessage = ""
+        var lastChangeTime = Instant.now()
+
+        val watcher = createWatcher(namespace, String.format("metadata.name=%s", name))
+        val deadline = Instant.now().plusSeconds(maxWaitTimeSeconds)
+
+        try {
+            for (event in watcher) {
+                if (isCancelled?.invoke() == true) {
+                    throw CancellationException("User cancelled the operation")
+                }
+
+                val devWorkspace = DevWorkspace.from(event.`object`)
+                val currentPhase = devWorkspace.status.phase ?: "Unknown"
+                val currentMessage = devWorkspace.status.message ?: ""
+
+                if (currentPhase != lastPhase || currentMessage != lastMessage) {
+                    onProgress?.invoke(currentPhase, currentMessage)
+                    lastPhase = currentPhase
+                    lastMessage = currentMessage
+                    lastChangeTime = Instant.now()
+                }
+
+                if (currentPhase == desiredPhase) {
+                    reached = true
+                    break
+                }
+
+                if (Duration.between(lastChangeTime, Instant.now()).seconds > maxInactivitySeconds) {
+                    onProgress?.invoke(currentPhase, "No progress in $maxInactivitySeconds seconds.")
+                    break
+                }
+
+                if (Instant.now().isAfter(deadline)) {
+                    onProgress?.invoke(currentPhase, "Timed out after $maxWaitTimeSeconds seconds.")
+                    break
+                }
+            }
+        } finally {
+            watcher.close()
+        }
+
+        return reached
     }
 }

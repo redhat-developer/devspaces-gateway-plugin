@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -77,14 +77,22 @@ data class DevWorkspaceSpec(
 }
 
 data class DevWorkspaceStatus(
-    val phase: String
+    val phase: String,
+    val message: String
 ) {
     companion object {
         fun from(map: Any) = object {
             val phase = Utils.getValue(map, arrayOf("phase")) ?: ""
 
+            val conditions = Utils.getValue(map, arrayOf("conditions")) as? List<Map<String, Any>>
+
+            val notReadyCondition = conditions
+                ?.firstOrNull { it["status"] == "False" }
+            val message = notReadyCondition?.get("message") as? String ?: ""
+
             val data = DevWorkspaceStatus(
-                phase as String
+                phase as String,
+                message
             )
         }.data
     }
