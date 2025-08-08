@@ -164,7 +164,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         parameters: Map<String, String>,
         requestor: ConnectionRequestor,
         indicator: ProgressIndicator? = null
-    ): GatewayConnectionHandle? {
+    ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
         indicator?.text2 = "Preparing connection environment…"

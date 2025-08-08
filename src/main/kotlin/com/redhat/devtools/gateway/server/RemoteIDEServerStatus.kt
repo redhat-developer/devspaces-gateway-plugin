@@ -13,7 +13,7 @@
 package com.redhat.devtools.gateway.server
 
 data class RemoteIDEServerStatus(
-    val joinLink: String,
+    val joinLink: String?,
     val httpLink: String,
     val gatewayLink: String,
     val appVersion: String,

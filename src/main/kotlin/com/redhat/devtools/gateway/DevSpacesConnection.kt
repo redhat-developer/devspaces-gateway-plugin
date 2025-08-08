@@ -32,8 +32,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         if (devSpacesContext.isConnected)
             throw IOException(String.format("Already connected to %s", devSpacesContext.devWorkspace.metadata.name))
 
-        devSpacesContext.isConnected = true
         try {
+            devSpacesContext.isConnected = true
             return doConnection(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
             devSpacesContext.isConnected = false
@@ -51,23 +51,25 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         startAndWaitDevWorkspace()
 
         val remoteIdeServer = RemoteIDEServer(devSpacesContext)
-        val remoteIdeServerStatus = remoteIdeServer.getStatus()
+        val joinLink = remoteIdeServer.getStatus().joinLink
+            ?: throw IOException("Could not connect: no join link present")
 
         val client = LinkedClientManager
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
-                URI(remoteIdeServerStatus.joinLink),
+                URI(joinLink),
                 "",
                 onConnected,
                 false
             )
 
-        val forwarder = Pods(devSpacesContext.client).forward(remoteIdeServer.pod, 5990, 5990)
+        val forwarder = Pods(devSpacesContext.client)
+            .forward(remoteIdeServer.pod, 5990, 5990)
 
         client.run {
-            lifetime.onTermination { forwarder.close() }
             lifetime.onTermination {
+                forwarder.close()
                 if (remoteIdeServer.waitServerTerminated())
                     DevWorkspaces(devSpacesContext.client)
                         .stop(
@@ -75,9 +77,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                             devSpacesContext.devWorkspace.metadata.name
                         )
                         .also { onDevWorkspaceStopped() }
+                devSpacesContext.isConnected = false
+                onDisconnected.invoke()
             }
-            lifetime.onTermination { devSpacesContext.isConnected = false }
-            lifetime.onTermination(onDisconnected)
         }
 
         return client
