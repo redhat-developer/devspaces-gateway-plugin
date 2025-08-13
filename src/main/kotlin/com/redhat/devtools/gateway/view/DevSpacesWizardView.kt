@@ -94,6 +94,38 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
             previousButton.text = previousActionText
             onInit()
         }
+
+        refreshNextButtonState()
+
+        // If this is the RemoteServerConnection step, watch for changes
+        val remoteStep = steps[currentStep]
+        if (remoteStep is DevSpacesRemoteServerConnectionStepView) {
+            val listField = remoteStep.javaClass.getDeclaredField("listDevWorkspaces")
+            listField.isAccessible = true
+            val list = listField.get(remoteStep) as javax.swing.JList<*>
+
+            list.addListSelectionListener {
+                refreshNextButtonState()
+            }
+        }
+    }
+
+    private fun refreshNextButtonState() {
+        val step = steps[currentStep]
+        nextButton.isEnabled = when (step) {
+            is DevSpacesRemoteServerConnectionStepView -> {
+                val listField = step.javaClass.getDeclaredField("listDevWorkspaces")
+                listField.isAccessible = true
+                val list = listField.get(step) as javax.swing.JList<*>
+                // Enable if text does NOT match, OR list is NOT empty
+                step.nextActionText == com.redhat.devtools.gateway.DevSpacesBundle
+                    .message("connector.wizard_step.remote_server_connection.button.next") &&
+                        !list.isSelectionEmpty
+            }
+            else -> {
+                true
+            }
+        }
     }
 
     private fun isFirstStep(): Boolean {
