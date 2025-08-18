@@ -38,6 +38,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -99,16 +100,15 @@ class Pods(private val client: ApiClient) {
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
-        val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
-
+        val serverSocket = ServerSocket()
+        serverSocket.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), localPort))
         val scope = CoroutineScope(Dispatchers.IO)
         scope.launch {
             supervisorScope {
                 launch {
                     val clientSocket = serverSocket.accept()
-                    val forwardResult = PortForward(client).forward(pod, listOf(remotePort))
-
                     try {
+                        val forwardResult = PortForward(client).forward(pod, listOf(remotePort))
                         copyStreams(clientSocket, forwardResult, remotePort)
                     } catch (e: IOException) {
                         if (coroutineContext.isActive) throw e
