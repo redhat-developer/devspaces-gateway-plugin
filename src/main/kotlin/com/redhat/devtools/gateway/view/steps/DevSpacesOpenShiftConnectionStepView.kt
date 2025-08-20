@@ -11,12 +11,6 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
-import com.redhat.devtools.gateway.DevSpacesBundle
-import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import com.redhat.devtools.gateway.openshift.Projects
-import com.redhat.devtools.gateway.settings.DevSpacesSettings
-import com.redhat.devtools.gateway.view.InformationDialog
 import com.google.gson.Gson
 import com.intellij.openapi.components.service
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -25,14 +19,30 @@ import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.redhat.devtools.gateway.DevSpacesBundle
+import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
+import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
+import com.redhat.devtools.gateway.settings.DevSpacesSettings
+import com.redhat.devtools.gateway.view.InformationDialog
+import com.redhat.devtools.gateway.view.ui.FilteringComboBox
+import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
+import javax.swing.JComboBox
+import javax.swing.JTextField
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
-    private var tfServer = JBTextField("")
+
+    private val allServers = KubeConfigBuilder.getServers()
     private var tfToken = JBTextField()
+        .apply { PasteClipboardMenu.addTo(this) }
+    private var tfServer: JComboBox<String> = FilteringComboBox.create(allServers) { server ->
+        tfToken.text = KubeConfigBuilder.getTokenForServer(server) ?: ""
+    }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
 
     private var settingsAreLoaded = false
     private val settings = service<DevSpacesSettings>()
@@ -66,12 +76,14 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
     }
 
     override fun onNext(): Boolean {
-        val client = OpenShiftClientFactory().create(tfServer.text, tfToken.text.toCharArray())
+        val server = tfServer.selectedItem?.toString().orEmpty()
+        val token = tfToken.text.toCharArray()
+
+        val client = OpenShiftClientFactory().create(server, token)
         testConnection(client)
 
         saveOpenShiftConnectionSettings()
         devSpacesContext.client = client
-
         return true
     }
 
@@ -84,27 +96,26 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
                 val response = Gson().fromJson(e.responseBody, Map::class.java)
                 errorMsg = String.format("Reason: %s", String.format(response["message"] as String))
             }
-
             InformationDialog("Connection failed", errorMsg, component).show()
             throw e
         }
     }
 
     private fun loadOpenShiftConnectionSettings() {
-        // load from kubeconfig first
+        tfServer.removeAllItems()
+        allServers.forEach { tfServer.addItem(it) }
+
         try {
             val config = Config.defaultClient()
-            tfServer.text = config.basePath
-
+            tfServer.selectedItem = config.basePath
             val auth = config.authentications["BearerToken"]
             if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
         } catch (e: Exception) {
             // Do nothing
         }
 
-        // then from settings
-        if (tfServer.text.isEmpty() || tfToken.text.isEmpty()) {
-            tfServer.text = settings.state.server.orEmpty()
+        if (tfServer.selectedItem == null || tfToken.text.isEmpty()) {
+            tfServer.selectedItem = settings.state.server.orEmpty()
             tfToken.text = settings.state.token.orEmpty()
             settingsAreLoaded = true
         }
@@ -112,7 +123,7 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
 
     private fun saveOpenShiftConnectionSettings() {
         if (settingsAreLoaded) {
-            settings.state.server = tfServer.text
+            settings.state.server = tfServer.selectedItem?.toString()
             settings.state.token = tfToken.text
         }
     }
