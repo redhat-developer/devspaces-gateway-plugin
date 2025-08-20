@@ -15,24 +15,23 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
 import java.io.File
-import java.io.StringReader
 import java.nio.file.Paths
 
 class InvalidKubeConfigException(message: String) : Exception(message)
 
 object KubeConfigBuilder {
     private val yamlMapper = ObjectMapper(YAMLFactory().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER))
+    private val allClusters = mutableListOf<Map<String, Any>>()
+    private val allContexts = mutableListOf<Map<String, Any>>()
+    private val allUsers = mutableListOf<Map<String, Any>>()
 
     fun fromEnvVar(): String = fromConfigs(getKubeconfigEnvPaths())
 
-    fun fromDefault(): String = fromConfigs(getDefaultKubeconfigPath())
+    private fun fromDefault(): String = fromConfigs(getDefaultKubeconfigPath())
 
     @Suppress("UNCHECKED_CAST")
-    fun fromConfigs(files: List<File>): String {
+    private fun fromConfigs(files: List<File>): String {
         var selectedContextName: String? = null
-        val allClusters = mutableListOf<Map<String, Any>>()
-        val allContexts = mutableListOf<Map<String, Any>>()
-        val allUsers = mutableListOf<Map<String, Any>>()
         var preferences: Map<String, Any>? = null
 
         for (file in files) {
@@ -53,15 +52,12 @@ object KubeConfigBuilder {
             }
         }
 
-        val finalConfig = createConfig(selectedContextName, allContexts, allClusters, allUsers, preferences)
+        val finalConfig = createConfig(selectedContextName, preferences)
         return yamlMapper.writeValueAsString(finalConfig)
     }
 
     private fun createConfig(
         selectedContextName: String?,
-        allContexts: MutableList<Map<String, Any>>,
-        allClusters: MutableList<Map<String, Any>>,
-        allUsers: MutableList<Map<String, Any>>,
         preferences: Map<String, Any>?
     ): MutableMap<String, Any> {
         if (selectedContextName == null) {
@@ -115,19 +111,47 @@ object KubeConfigBuilder {
         )
 
     @Suppress("UNCHECKED_CAST")
-    fun isTokenAuthUsed(): Boolean = try {
+    fun isTokenAuthUsed(): Boolean {
+        return try {
+            val users = allUsers as? List<Map<String, Any>> ?: return false
+            val firstUser = users.firstOrNull() ?: return false
+            val userDetails = firstUser["user"] as? Map<String, Any> ?: return false
+            val hasDirectToken = userDetails.containsKey("token")
+            val hasAuthProviderToken = (userDetails["auth-provider"] as? Map<String, Any>)?.containsKey("token") == true
+
+            hasDirectToken || hasAuthProviderToken
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    init {
         val envKubeConfig = System.getenv("KUBECONFIG")
-        val kubeConfigYaml = if (envKubeConfig != null) fromEnvVar() else fromDefault()
+        if (envKubeConfig != null) fromEnvVar() else fromDefault()
+    }
 
-        val kubeConfigMap = yamlMapper.readValue(StringReader(kubeConfigYaml), Map::class.java) as? Map<String, Any> ?: return false
-        val users = kubeConfigMap["users"] as? List<Map<String, Any>> ?: return false
-        val firstUser = users.firstOrNull() ?: return false
-        val userDetails = firstUser["user"] as? Map<String, Any> ?: return false
-        val hasDirectToken = userDetails.containsKey("token")
-        val hasAuthProviderToken = (userDetails["auth-provider"] as? Map<String, Any>)?.containsKey("token") == true
+    fun getServers(): List<String> =
+        allClusters.mapNotNull { cluster ->
+            val clusterDetails = cluster["cluster"] as? Map<*, *>
+            clusterDetails?.get("server") as? String
+        }
 
-        hasDirectToken || hasAuthProviderToken
-    } catch (_: Exception) {
-        false
+    fun getTokenForServer(server: String): String? {
+        // Find cluster name for this server
+        val clusterName = allClusters.find { cluster ->
+            val clusterDetails = cluster["cluster"] as? Map<*, *>
+            clusterDetails?.get("server") == server
+        }?.get("name") as? String ?: return null
+
+        // Find context using this cluster
+        val userName = allContexts.find { ctx ->
+            val contextMap = ctx["context"] as? Map<*, *>
+            contextMap?.get("cluster") == clusterName
+        }?.get("context")?.let { it as? Map<*, *> }?.get("user") as? String ?: return null
+
+        // Find token for that user
+        val token = allUsers.find { user -> user["name"] == userName }?.get("user")?.let { it as? Map<*, *> }?.get("token") as? String
+
+        return token
     }
 }
