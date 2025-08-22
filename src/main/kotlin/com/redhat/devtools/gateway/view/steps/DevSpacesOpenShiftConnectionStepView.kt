@@ -21,9 +21,9 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.help.KubeConfigHelper
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.view.InformationDialog
 import io.kubernetes.client.openapi.ApiClient
@@ -41,13 +41,12 @@ import javax.swing.event.PopupMenuListener
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
 
-    private val kubeHelper = KubeConfigHelper()
     private var tfServer = JComboBox<String>()
     private var tfToken = JBTextField()
 
     private var settingsAreLoaded = false
     private val settings = service<DevSpacesSettings>()
-    private val allServers = kubeHelper.getServers()
+    private val allServers = KubeConfigBuilder.getServers()
 
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
@@ -75,7 +74,7 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
         tfServer.model = DefaultComboBoxModel(allServers.toTypedArray())
 
         fun updateTokenForCurrentText(text: String) {
-            tfToken.text = kubeHelper.getTokenForServer(text) ?: ""
+            tfToken.text = KubeConfigBuilder.getTokenForServer(text) ?: ""
         }
 
         fun filterComboBox(currentText: String) {
