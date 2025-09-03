@@ -15,10 +15,11 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
 import java.awt.Component
+import java.awt.Dimension
 import javax.swing.Action
 import javax.swing.JComponent
-
 class InformationDialog(title: String, private var text: String, parent: Component) : DialogWrapper(parent, false) {
     init {
         super.init()
@@ -36,4 +37,21 @@ class InformationDialog(title: String, private var text: String, parent: Compone
             }
         }
     }
+
+    override fun getInitialSize(): Dimension {
+        // Get FontMetrics for the title bar font (uses Label font as a proxy)
+        val fontMetrics = JBLabel().getFontMetrics(JBUI.Fonts.label())
+
+        // Measure title string width in pixels
+        val titleWidth = fontMetrics.stringWidth(title)
+
+        // Get the preferred height from the center panel
+        val contentSize = createCenterPanel().preferredSize
+
+        // Add some padding for window borders and buttons
+        val extraWidth = JBUI.scale(100)
+
+        return Dimension(titleWidth + extraWidth, contentSize.height + extraWidth)
+    }
+
 }
