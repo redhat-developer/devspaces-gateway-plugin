@@ -35,14 +35,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
 import java.awt.Dimension
-import javax.swing.Action
-import javax.swing.Box
-import javax.swing.BoxLayout
-import javax.swing.JComponent
-import javax.swing.JLabel
-import javax.swing.JPanel
-import javax.swing.JProgressBar
-import javax.swing.Timer
+import java.util.concurrent.CancellationException
+import javax.swing.*
 
 private const val DW_NAMESPACE = "dwNamespace"
 private const val DW_NAME = "dwName"
@@ -97,6 +91,12 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 } else {
                     throw err
                 }
+            } catch (e: CancellationException) {
+                indicator.setText("${e.message}")
+                Timer(2000) {
+                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
+                }.start()
+                null
             } catch (e: Exception) {
                 indicator.setText("Unexpected error: ${e.message}")
                 Timer(2000) {
@@ -189,7 +189,13 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
         indicator?.text2 = "Establishing remote IDE connection…"
-        val thinClient = DevSpacesConnection(ctx).connect({}, {}, {})
+        val thinClient = DevSpacesConnection(ctx).connect({}, {}, {},
+            onProgress = { message ->
+                if (!message.isEmpty()) {
+                    indicator?.text2 = message
+                }
+            },
+            isCancelled = { indicator?.isShowing == false })
 
         indicator?.text2 = "Connection established successfully."
         return DevSpacesConnectionHandle(thinClient.lifetime, thinClient, { createComponent(dwName) }, dwName)
