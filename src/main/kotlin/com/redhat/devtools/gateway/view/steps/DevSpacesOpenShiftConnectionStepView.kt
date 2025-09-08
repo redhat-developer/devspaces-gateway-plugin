@@ -12,7 +12,10 @@
 package com.redhat.devtools.gateway.view.steps
 
 import com.google.gson.Gson
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
@@ -28,7 +31,6 @@ import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.view.InformationDialog
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
-import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
@@ -76,29 +78,55 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
     }
 
     override fun onNext(): Boolean {
-        val server = tfServer.selectedItem?.toString().orEmpty()
-        val token = tfToken.text.toCharArray()
+        val server = (tfServer.editor.editorComponent as JTextField).text
+        val token = tfToken.text
+        val client = OpenShiftClientFactory().create(server, token.toCharArray())
+        var success = false
 
-        val client = OpenShiftClientFactory().create(server, token)
-        testConnection(client)
+        // Run test connection in background with loading indicator
+        object : Task.Modal(null, "Checking Connection...", false) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.isIndeterminate = true
+                try {
+                    Projects(client).list()
+                    success = true
+                } catch (e: Exception) {
+                    var errorMsg = e.message.orEmpty()
+                    if (e is ApiException) {
+                        val response = Gson().fromJson(e.responseBody, Map::class.java)
+                        val msg = try {
+                            response["message"]?.toString()
+                        } catch (ex: Exception) {
+                            e.rootMessage()
+                        }
+                        errorMsg = String.format("Reason: %s", msg)
+                    }
+                    // Let the UI thread handle the error
+                    ApplicationManager.getApplication().invokeLater {
+                        InformationDialog("Connection failed", errorMsg, component).show()
+                    }
+                    throw e
+                }
+            }
+        }.queue()
 
-        saveOpenShiftConnectionSettings()
-        devSpacesContext.client = client
-        return true
+        if (success) {
+            saveOpenShiftConnectionSettings()
+            devSpacesContext.client = client
+        }
+
+        return success
     }
 
-    private fun testConnection(client: ApiClient) {
-        try {
-            Projects(client).list()
-        } catch (e: Exception) {
-            var errorMsg = e.message.orEmpty()
-            if (e is ApiException) {
-                val response = Gson().fromJson(e.responseBody, Map::class.java)
-                errorMsg = String.format("Reason: %s", String.format(response["message"] as String))
-            }
-            InformationDialog("Connection failed", errorMsg, component).show()
-            throw e
+    private fun Throwable.rootMessage(): String {
+        // Walk down to the root cause
+        var cause: Throwable? = this
+        while (cause?.cause != null) {
+            cause = cause.cause
         }
+        return cause?.message?.trim()
+            ?: this.message?.substringAfter(":")?.trim()
+            ?: "Unknown error"
     }
 
     private fun loadOpenShiftConnectionSettings() {
