@@ -28,6 +28,7 @@ import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
+import com.redhat.devtools.gateway.util.rootMessage
 import com.redhat.devtools.gateway.view.InformationDialog
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
@@ -116,17 +117,6 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
         }
 
         return success
-    }
-
-    private fun Throwable.rootMessage(): String {
-        // Walk down to the root cause
-        var cause: Throwable? = this
-        while (cause?.cause != null) {
-            cause = cause.cause
-        }
-        return cause?.message?.trim()
-            ?: this.message?.substringAfter(":")?.trim()
-            ?: "Unknown error"
     }
 
     private fun loadOpenShiftConnectionSettings() {
