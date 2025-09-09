@@ -14,8 +14,7 @@ package com.redhat.devtools.gateway.view.steps
 import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.Task
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
@@ -37,6 +36,7 @@ import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
 import javax.swing.JComboBox
 import javax.swing.JTextField
+
 
 class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
 
@@ -84,32 +84,24 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
         val client = OpenShiftClientFactory().create(server, token.toCharArray())
         var success = false
 
-        // Run test connection in background with loading indicator
-        object : Task.Modal(null, "Checking Connection...", false) {
-            override fun run(indicator: ProgressIndicator) {
-                indicator.isIndeterminate = true
+
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
                 try {
                     Projects(client).list()
                     success = true
                 } catch (e: Exception) {
-                    var errorMsg = e.message.orEmpty()
-                    if (e is ApiException) {
-                        val response = Gson().fromJson(e.responseBody, Map::class.java)
-                        val msg = try {
-                            response["message"]?.toString()
-                        } catch (ex: Exception) {
-                            e.rootMessage()
-                        }
-                        errorMsg = String.format("Reason: %s", msg)
-                    }
-                    // Let the UI thread handle the error
+                    val errorMsg = getMessage(e)
                     ApplicationManager.getApplication().invokeLater {
                         InformationDialog("Connection failed", errorMsg, component).show()
                     }
                     throw e
                 }
-            }
-        }.queue()
+            },
+            "Checking Connection...",
+            true,
+            null
+        )
 
         if (success) {
             saveOpenShiftConnectionSettings()
@@ -117,6 +109,24 @@ class DevSpacesOpenShiftConnectionStepView(private var devSpacesContext: DevSpac
         }
 
         return success
+    }
+
+    private fun getMessage(e: Exception): String {
+        return if (e is ApiException) {
+            getMessage(e)
+        } else {
+            e.message.orEmpty()
+        }
+    }
+
+    private fun getMessage(e: ApiException): String {
+        val response = Gson().fromJson(e.responseBody, Map::class.java)
+        val msg = try {
+            response["message"]?.toString()
+        } catch (e: Exception) {
+            e.rootMessage()
+        }
+        return String.format("Reason: %s", msg)
     }
 
     private fun loadOpenShiftConnectionSettings() {
