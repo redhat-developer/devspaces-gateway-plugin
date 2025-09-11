@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -19,7 +19,6 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
-import org.bouncycastle.util.Arrays
 import java.io.IOException
 
 /**
@@ -68,8 +67,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitServerReady() {
-        doWaitServerState(true)
+    fun waitRemoteIDEServerReady() {
+        doWaitForRemoteIdeServerState(true)
             .also {
                 if (!it) throw IOException(
                     String.format(
@@ -80,20 +79,30 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             }
     }
 
-    @Throws(IOException::class)
-    fun waitServerTerminated(): Boolean {
-        return doWaitServerState(false)
-    }
-
-    @Throws(IOException::class)
-    fun doWaitServerState(isReadyState: Boolean): Boolean {
+    fun isRemoteIdeServerState(isReadyState: Boolean): Boolean {
         return try {
-            val status = getStatus()
-            isReadyState == !Arrays.isNullOrEmpty(status.projects)
+            (getStatus().isReady == isReadyState)
         } catch (e: Exception) {
             thisLogger().debug("Failed to check remote IDE server state.", e)
             false
         }
+    }
+
+    fun doWaitForRemoteIdeServerState(
+        isReadyState: Boolean,
+        timeout: Long = readyTimeout,
+    ): Boolean {
+        var delayMillis = 1000L
+        val maxDelayMillis = 8000L
+        val deadline = System.currentTimeMillis() + timeout * 1000
+        while (System.currentTimeMillis() < deadline) {
+            if (isRemoteIdeServerState(isReadyState)) {
+                return true
+            }
+            Thread.sleep(delayMillis)
+            delayMillis = (delayMillis * 2).coerceAtMost(maxDelayMillis)
+        }
+        return false // Timeout
     }
 
     @Throws(IOException::class)
