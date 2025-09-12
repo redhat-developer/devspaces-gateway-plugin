@@ -12,16 +12,11 @@
 package com.redhat.devtools.gateway
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.EDT
-import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.ui.dsl.builder.Align.Companion.CENTER
 import com.intellij.ui.dsl.builder.panel
-import com.intellij.util.ui.JBUI
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
@@ -34,18 +29,12 @@ import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.awt.BorderLayout
-import java.awt.Dimension
-import javax.swing.Action
-import javax.swing.Box
-import javax.swing.BoxLayout
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import javax.swing.JComponent
-import javax.swing.JLabel
-import javax.swing.JPanel
-import javax.swing.JProgressBar
 import javax.swing.Timer
+import kotlin.coroutines.resume
 
 private const val DW_NAMESPACE = "dwNamespace"
 private const val DW_NAME = "dwName"
@@ -57,107 +46,115 @@ private const val DW_NAME = "dwName"
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("UnstableApiUsage")
     override suspend fun connect(
         parameters: Map<String, String>,
         requestor: ConnectionRequestor
     ): GatewayConnectionHandle? {
-        val indicator = StartupProgressIndicator("Connecting to Remote IDE...")
-        ApplicationManager.getApplication().invokeAndWait { indicator.show() }
+        return suspendCancellableCoroutine { cont ->
+            ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                {
+                    val indicator = ProgressManager.getInstance().progressIndicator
+                    try {
+                        indicator.isIndeterminate = true
+                        indicator.text = "Connecting to DevSpace..."
 
-        return withContext(Dispatchers.IO) {
-            try {
-                indicator.setText("Connecting to DevSpace...")
-                indicator.setIndeterminate(true)
+                        val handle = doConnect(parameters, indicator)
+                        val thinClient = handle.clientHandle
+                            ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
-                val handle = doConnect(parameters, indicator)
+                        indicator.text = "Waiting for remote IDE to start..."
 
-                val thinClient = handle.clientHandle
-                    ?: throw RuntimeException("Failed to obtain ThinClientHandle")
+                        val ready = CompletableDeferred<GatewayConnectionHandle?>()
 
-                indicator.setText("Waiting for remote IDE to start...")
-                indicator.setText2("Launching environment and initializing IDE window…")
+                        thinClient.onClientPresenceChanged.advise(thinClient.lifetime,
+                            onClientPresenceChanged(ready, indicator, handle)
+                        )
+                        thinClient.clientFailedToOpenProject.advise(thinClient.lifetime,
+                            onClientFailedToOpenProject(ready, indicator)
+                        )
+                        thinClient.clientClosed.advise(thinClient.lifetime,
+                            onClientClosed(ready, indicator)
+                        )
+                        ready.invokeOnCompletion { error ->
+                            if (error == null) {
+                                cont.resume(ready.getCompleted())
+                            } else {
+                                cont.resumeWith(Result.failure(error))
+                            }
+                        }
+                    } catch (e: ApiException) {
+                        indicator.text = "Connection failed"
+                        runDelayed(2000, { indicator.stop() })
+                        if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
+                            // Dialogs.error is suspend — use a blocking non-suspending dialog instead
+                            Dialogs.error(
+                                e.messageWithoutPrefix() ?: "Could not connect to workspace.",
+                                "Connection Error"
+                            )
+                        }
 
-                // Observe signals on thinClient to detect ready/error
-                val readyDeferred = CompletableDeferred<GatewayConnectionHandle?>()
-
-                thinClient.onClientPresenceChanged.advise(thinClient.lifetime,
-                    onClientPresenceChanged(readyDeferred, indicator, handle))
-                thinClient.clientFailedToOpenProject.advise(thinClient.lifetime,
-                    onClientFailedToOpenProject(readyDeferred, indicator))
-                thinClient.clientClosed.advise(thinClient.lifetime,
-                    onClientClosed(readyDeferred, indicator))
-
-                readyDeferred.await()
-            } catch (e: ApiException) {
-                indicator.setText("Connection failed")
-                delayedClose(indicator)
-                if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
-                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace.", "Connection Error")
-                }
+                        if (cont.isActive) cont.resume(null)
+                    } catch (e: Exception) {
+                        runDelayed(2000) { indicator.stop() }
+                        Dialogs.error(
+                            e.message ?: "Could not connect to workspace.",
+                            "Connection Error"
+                        )
+                        cont.resume(null)
+                    }
+                },
+                "Connecting to Remote IDE...",
+                true,
                 null
-            } catch (e: Exception) {
-                indicator.setText("Unexpected error: ${e.message}")
-                delayedClose(indicator)
-                Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace.", "Connection Error")
-                null
-            } finally {
-                withContext(Dispatchers.EDT) {
-                    if (indicator.isShowing) indicator.close(DialogWrapper.OK_EXIT_CODE)
-                }
-            }
+            )
         }
     }
 
-    private fun delayedClose(indicator: StartupProgressIndicator) {
-        Timer(2000) {
-            indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-        }.start()
-    }
-
     private fun onClientPresenceChanged(
-        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: StartupProgressIndicator,
+        ready: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: ProgressIndicator,
         handle: GatewayConnectionHandle
     ): (Unit) -> Unit = {
         ApplicationManager.getApplication().invokeLater {
-            if (!readyDeferred.isCompleted) {
-                indicator.setText("Remote IDE has started successfully")
-                indicator.setText2("Opening project window…")
-                Timer(3000) {
-                    indicator.close(DialogWrapper.OK_EXIT_CODE)
-                    readyDeferred.complete(handle)
-                }.start()
+            if (!ready.isCompleted) {
+                indicator.text = "Remote IDE has started successfully"
+                indicator.text2 = "Opening project window…"
+                runDelayed(3000) {
+                    indicator.stop()
+                    ready.complete(handle)
+                }
             }
         }
     }
 
     private fun onClientFailedToOpenProject(
-        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: StartupProgressIndicator
+        ready: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: ProgressIndicator
     ): (Int) -> Unit = { errorCode ->
         ApplicationManager.getApplication().invokeLater {
-            if (!readyDeferred.isCompleted) {
-                indicator.setText("Failed to open remote project (code: $errorCode)")
-                Timer(2000) {
-                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                    readyDeferred.complete(null)
-                }.start()
+            if (!ready.isCompleted) {
+                indicator.text = "Failed to open remote project (code: $errorCode)"
+                runDelayed(2000) {
+                    indicator.stop()
+                    ready.complete(null)
+                }
             }
         }
     }
 
     private fun onClientClosed(
-        readyDeferred: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: StartupProgressIndicator
+        ready: CompletableDeferred<GatewayConnectionHandle?>,
+        indicator: ProgressIndicator
     ): (Unit) -> Unit = {
         ApplicationManager.getApplication().invokeLater {
-            if (!readyDeferred.isCompleted) {
-                indicator.setText("Remote IDE closed unexpectedly.")
-                Timer(2000) {
-                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                    readyDeferred.complete(null)
-                }.start()
+            if (!ready.isCompleted) {
+                indicator.text = "Remote IDE closed unexpectedly."
+                runDelayed(2000) {
+                    indicator.stop()
+                    ready.complete(null)
+                }
             }
         }
     }
@@ -166,11 +163,11 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     @Throws(IllegalArgumentException::class)
     private fun doConnect(
         parameters: Map<String, String>,
-        indicator: ProgressIndicator? = null
+        indicator: ProgressIndicator
     ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
-        indicator?.text2 = "Preparing connection environment…"
+        indicator.text2 = "Preparing connection environment…"
 
         val dwNamespace = parameters[DW_NAMESPACE]
         if (dwNamespace.isNullOrBlank()) {
@@ -184,18 +181,24 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
         }
 
-        indicator?.text2 = "Initializing Kubernetes connection…"
         val ctx = DevSpacesContext()
+
+        indicator.text2 = "Initializing Kubernetes connection…"
         ctx.client = OpenShiftClientFactory().create()
 
-        indicator?.text2 = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…"
+        indicator.text2 = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…"
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
-        indicator?.text2 = "Establishing remote IDE connection…"
-        val thinClient = DevSpacesConnection(ctx).connect({}, {}, {})
+        indicator.text2 = "Establishing remote IDE connection…"
+        val thinClient = DevSpacesConnection(ctx)
+            .connect({}, {}, {})
 
-        indicator?.text2 = "Connection established successfully."
-        return DevSpacesConnectionHandle(thinClient.lifetime, thinClient, { createComponent(dwName) }, dwName)
+        indicator.text2 = "Connection established successfully."
+        return DevSpacesConnectionHandle(
+            thinClient.lifetime,
+            thinClient,
+            { createComponent(dwName) },
+            dwName)
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {
@@ -220,7 +223,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
     }
 
-    private suspend fun handleUnauthorizedError(err: ApiException): Boolean {
+    private fun handleUnauthorizedError(err: ApiException): Boolean {
         if (!err.isUnauthorized()) return false
 
         val tokenNote = if (KubeConfigBuilder.isTokenAuthUsed())
@@ -234,7 +237,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         return true
     }
 
-    private suspend fun handleNotFoundError(err: ApiException): Boolean {
+    private fun handleNotFoundError(err: ApiException): Boolean {
         if (!err.isNotFound()) return false
 
         val message = """
@@ -248,97 +251,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         return true
     }
 
-    // Common progress dialog to monitor the connection and the renote IDE readiness
-    private class StartupProgressIndicator (
-        initialTitle: String = "Progress Indicator"
-    ) : DialogWrapper(false), ProgressIndicator {
-        private val progressBar = JProgressBar().apply { isIndeterminate = true }
-        private val mainTextLabel = JLabel("Initializing...")
-        private val subTextLabel = JLabel("")
-
-        @Volatile
-        private var canceled = false
-
-        init {
-            title = initialTitle
-            isModal = false
-            isResizable = true
-            init()
-        }
-
-        fun setIndeterminateValue(indeterminate: Boolean) = ApplicationManager.getApplication().invokeLater {
-            progressBar.isIndeterminate = indeterminate
-        }
-
-        fun setFractionValue(fraction: Double) = ApplicationManager.getApplication().invokeLater {
-            progressBar.isIndeterminate = false
-            progressBar.value = (fraction * 100).toInt()
-        }
-
-        override fun createCenterPanel(): JComponent = JPanel(BorderLayout(5, 5)).apply {
-            border = JBUI.Borders.empty(10)
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            add(mainTextLabel)
-            add(Box.createVerticalStrut(4))
-            add(subTextLabel)
-            add(Box.createVerticalStrut(8))
-            add(progressBar)
-        }
-
-        override fun createActions(): Array<Action> = emptyArray()
-        override fun getPreferredFocusedComponent() = mainTextLabel
-        override fun getPreferredSize(): Dimension = Dimension(400, 120)
-        override fun getText(): String = mainTextLabel.text
-        override fun getText2(): String = subTextLabel.text
-
-        override fun setText(text: String?) = ApplicationManager.getApplication().invokeLater {
-            mainTextLabel.text = shortenMessage(text ?: "")
-            subTextLabel.text = ""
-        }
-
-        override fun setText2(text: String?) = ApplicationManager.getApplication().invokeLater {
-            subTextLabel.text = shortenMessage(text ?: "")
-        }
-
-        override fun setIndeterminate(indeterminate: Boolean) = setIndeterminateValue(indeterminate)
-        override fun isIndeterminate(): Boolean = progressBar.isIndeterminate
-
-        override fun setFraction(fraction: Double) = setFractionValue(fraction)
-        override fun getFraction(): Double = progressBar.value / 100.0
-
-        override fun cancel() {
-            canceled = true
-            close(CANCEL_EXIT_CODE)
-        }
-
-        override fun isCanceled(): Boolean = canceled
-
-        override fun start() {}
-        override fun stop() {}
-        override fun isRunning(): Boolean = isShowing
-        override fun pushState() {}
-        override fun popState() {}
-
-        override fun getModalityState(): ModalityState {
-            return if (isShowing) ModalityState.current() else ModalityState.nonModal()
-        }
-
-        override fun setModalityProgress(progressIndicator: ProgressIndicator?) {}
-
-        override fun checkCanceled() {
-            if (isCanceled) throw ProcessCanceledException()
-        }
-
-        override fun isPopupWasShown(): Boolean {
-            return isShowing
-        }
-
-        private fun shortenMessage(message: String, maxLength: Int = 100): String {
-            if (message.length <= maxLength) return message
-
-            val head = message.take(maxLength / 2 - 3)
-            val tail = message.takeLast(maxLength / 2 - 3)
-            return "$head…$tail"
-        }
+    private fun runDelayed(delay: Int, runnable: () -> Unit) {
+        Timer(delay) {
+            runnable.invoke()
+        }.start()
     }
+
 }

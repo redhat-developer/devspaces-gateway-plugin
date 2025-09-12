@@ -34,7 +34,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
         devSpacesContext.isConnected = true
         try {
-            return doConnection(onConnected, onDevWorkspaceStopped, onDisconnected)
+            return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
             devSpacesContext.isConnected = false
             throw e
@@ -43,7 +43,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
-    private fun doConnection(
+    private fun doConnect(
         onConnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit
@@ -102,11 +102,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                     DevWorkspaces.RUNNING_TIMEOUT
                 )
         ) throw IOException(
-            String.format(
-                "DevWorkspace '%s' is not running after %d seconds",
-                devSpacesContext.devWorkspace.metadata.name,
-                DevWorkspaces.RUNNING_TIMEOUT
-            )
+            "DevWorkspace '${devSpacesContext.devWorkspace.metadata.name}' is not running after ${DevWorkspaces.RUNNING_TIMEOUT} seconds"
         )
     }
 }
