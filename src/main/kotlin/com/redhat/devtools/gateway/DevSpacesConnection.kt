@@ -11,12 +11,12 @@
  */
 package com.redhat.devtools.gateway
 
-import com.redhat.devtools.gateway.openshift.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.Pods
-import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
+import com.redhat.devtools.gateway.openshift.DevWorkspaces
+import com.redhat.devtools.gateway.openshift.Pods
+import com.redhat.devtools.gateway.server.RemoteIDEServer
 import io.kubernetes.client.openapi.ApiException
 import java.io.IOException
 import java.net.URI
@@ -52,12 +52,13 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
         val remoteIdeServer = RemoteIDEServer(devSpacesContext)
         val remoteIdeServerStatus = remoteIdeServer.getStatus()
-
+        val joinLink = remoteIdeServerStatus.joinLink
+            ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
         val client = LinkedClientManager
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
-                URI(remoteIdeServerStatus.joinLink),
+                URI(joinLink),
                 "",
                 onConnected,
                 false

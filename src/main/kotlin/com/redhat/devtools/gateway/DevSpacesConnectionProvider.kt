@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProcessCanceledException
@@ -29,6 +30,8 @@ import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.openshift.kube.isNotFound
 import com.redhat.devtools.gateway.openshift.kube.isUnauthorized
+import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -67,9 +70,9 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 indicator.setText("Connecting to DevSpace...")
                 indicator.setIndeterminate(true)
 
-                val handle = doConnect(parameters, requestor, indicator) // suspend function assumed
+                val handle = doConnect(parameters, indicator)
 
-                val thinClient = handle?.clientHandle
+                val thinClient = handle.clientHandle
                     ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
                 indicator.setText("Waiting for remote IDE to start...")
@@ -86,29 +89,30 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                     onClientClosed(readyDeferred, indicator))
 
                 readyDeferred.await()
-            } catch (err: ApiException) {
+            } catch (e: ApiException) {
                 indicator.setText("Connection failed")
-                Timer(2000) {
-                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                }.start()
-
-                if (handleUnauthorizedError(err) || handleNotFoundError(err)) {
-                    null
-                } else {
-                    throw err
+                delayedClose(indicator)
+                if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
+                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace.", "Connection Error")
                 }
+                null
             } catch (e: Exception) {
                 indicator.setText("Unexpected error: ${e.message}")
-                Timer(2000) {
-                    indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
-                }.start()
-                throw e
+                delayedClose(indicator)
+                Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace.", "Connection Error")
+                null
             } finally {
-                ApplicationManager.getApplication().invokeLater {
+                withContext(Dispatchers.EDT) {
                     if (indicator.isShowing) indicator.close(DialogWrapper.OK_EXIT_CODE)
                 }
             }
         }
+    }
+
+    private fun delayedClose(indicator: StartupProgressIndicator) {
+        Timer(2000) {
+            indicator.close(DialogWrapper.CANCEL_EXIT_CODE)
+        }.start()
     }
 
     private fun onClientPresenceChanged(
@@ -162,9 +166,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     @Throws(IllegalArgumentException::class)
     private fun doConnect(
         parameters: Map<String, String>,
-        requestor: ConnectionRequestor,
         indicator: ProgressIndicator? = null
-    ): GatewayConnectionHandle? {
+    ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
         indicator?.text2 = "Preparing connection environment…"
@@ -224,12 +227,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             "\n\nYou are using token-based authentication.\nUpdate your token in the kubeconfig file."
         else ""
 
-        withContext(Dispatchers.Main) {
-            Messages.showErrorDialog(
-                "Your session has expired.\nPlease log in again to continue.$tokenNote",
-                "Authentication Required"
-            )
-        }
+        Dialogs.error(
+            "Your session has expired.\nPlease log in again to continue.$tokenNote",
+            "Authentication Required"
+        )
         return true
     }
 
@@ -243,9 +244,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             Please verify your Kubernetes context, namespace, and that the DevWorkspace Operator is installed and running.
         """.trimIndent()
 
-        withContext(Dispatchers.Main) {
-            Messages.showErrorDialog(message, "Resource Not Found")
-        }
+        Dialogs.error(message, "Resource Not Found")
         return true
     }
 
