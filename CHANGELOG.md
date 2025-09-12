@@ -4,9 +4,51 @@
 
 ## [Unreleased]
 
+## [0.0.12] - 2025-09-12
+
+### ✨ New Features and Enhancements
+
+- It's possible to choose a cluster, stored in the local kubeconfig file, from the dropdown box by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/158
+- The `KUBECONFIG` environment variable is respected when reading the local kube config by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/141
+- It's possible to cancel the ongoing connection attempts by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/166
+- When connecting to a cluster, added a progress bar to show the connection process by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/162
+- More meaningful error messages on the login step when the OpenShift token has expired or no DevSpaces operator is installed in the cluster #23487 by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/144
+- The `Connect` button is now disabled when no workspace is selected by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/153
+- A progress indicator is added to unblock the UI at the connection step and to track the connection process #23471 by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/145
+
+### 🐛 Bug Fixes
+
+- fix: avoid deadlock when reading remote server status by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/139
+- fix: dont freeze when creating the connection by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/140
+
+### 🛠️ Code Improvements
+
+- move Throwable.rootMessage() to helper class by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/165
+
+### ⬆️ Dependency Updates
+
+- updated io.kubernetes:client-java:24 by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/137
+- Bump org.jetbrains.kotlin.jvm from 2.1.21 to 2.2.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/136
+- Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.17.1 to 2.19.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/143
+- Bump com.fasterxml.jackson.core:jackson-databind from 2.17.1 to 2.19.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/142
+- Bump org.jetbrains.changelog from 2.2.1 to 2.3.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/146
+- Bump org.jetbrains.intellij.platform from 2.6.0 to 2.7.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/147
+- Bump actions/checkout from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/151
+- Bump org.jetbrains.changelog from 2.3.0 to 2.4.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/149
+- Bump org.jetbrains.intellij.platform from 2.7.0 to 2.7.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/152
+- Bump org.jetbrains.qodana from 2025.1.1 to 2025.2.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/155
+- Bump JetBrains/qodana-action from 2025.1 to 2025.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/154
+- Bump org.jetbrains.intellij.platform from 2.7.1 to 2.7.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/157
+- Bump org.jetbrains.kotlin.jvm from 2.2.0 to 2.2.10 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/156
+- Bump actions/setup-java from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/159
+- Bump com.fasterxml.jackson.core:jackson-databind from 2.19.2 to 2.20.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/161
+- Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.19.2 to 2.20.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/160
+- Bump org.jetbrains.intellij.platform from 2.7.2 to 2.8.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/163
+- Bump org.jetbrains.intellij.platform from 2.8.0 to 2.9.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/164
+- Bump org.jetbrains.kotlin.jvm from 2.2.10 to 2.2.20 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/167
+
 ## [0.0.11] - 2025-06-18
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...HEAD
 - Don't fail when trying to list the devworkspaces in the namespace that the user is not allowed to read by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/134
 
 ## [0.0.10] - 2025-05-16
@@ -65,7 +107,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...v0.0.9
