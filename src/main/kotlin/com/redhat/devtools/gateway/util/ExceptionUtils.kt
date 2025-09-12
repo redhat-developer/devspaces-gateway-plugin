@@ -11,12 +11,18 @@
  */
 package com.redhat.devtools.gateway.util
 
+
 fun Throwable.rootMessage(): String {
     var cause: Throwable? = this
     while (cause?.cause != null) {
         cause = cause.cause
     }
     return cause?.message?.trim()
-        ?: this.message?.substringAfter(":")?.trim()
+        ?: messageWithoutPrefix()
         ?: "Unknown error"
+}
+
+fun Throwable.messageWithoutPrefix(): String? {
+    return message?.trim()
+        ?: message?.substringAfter(":")?.trim()
 }

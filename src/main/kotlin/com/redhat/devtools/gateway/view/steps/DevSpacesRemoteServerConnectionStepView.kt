@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.notification.Notifications
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
@@ -31,6 +32,13 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.ui.Dialogs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import okhttp3.internal.notify
+import org.jetbrains.concurrency.runAsync
 import java.awt.Component
 import java.awt.EventQueue
 import javax.swing.DefaultListModel
@@ -200,7 +208,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
             )
         ApplicationManager.getApplication().invokeLaterOnWriteThread { loaderDialog.show() }
 
-        Thread {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 DevSpacesConnection(devSpacesContext).connect(
                     {
@@ -231,8 +239,9 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                 )
                 refreshStopButton()
                 thisLogger().error("Remote server connection failed.", e)
+                Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace", "Connection Error")
             }
-        }.start()
+        }
     }
 
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
