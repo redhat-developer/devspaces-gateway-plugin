@@ -11,18 +11,8 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
-import com.intellij.notification.Notifications
-import com.redhat.devtools.gateway.DevSpacesBundle
-import com.redhat.devtools.gateway.DevSpacesConnection
-import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.openshift.DevWorkspace
-import com.redhat.devtools.gateway.openshift.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.Projects
-import com.redhat.devtools.gateway.openshift.Utils
-import com.redhat.devtools.gateway.view.InformationDialog
-import com.redhat.devtools.gateway.view.LoaderDialog
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
@@ -32,15 +22,17 @@ import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.redhat.devtools.gateway.DevSpacesBundle
+import com.redhat.devtools.gateway.DevSpacesConnection
+import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.openshift.DevWorkspace
+import com.redhat.devtools.gateway.openshift.DevWorkspaces
+import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.InformationDialog
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import okhttp3.internal.notify
-import org.jetbrains.concurrency.runAsync
 import java.awt.Component
-import java.awt.EventQueue
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JList
@@ -81,7 +73,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                 DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.refresh")
             ) {
                 refreshAllDevWorkspaces()
-                refreshStopButton()
+                enableStopButton()
             }.gap(RightGap.SMALL).align(AlignX.RIGHT)
         }
     }.apply {
@@ -94,7 +86,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
         refreshAllDevWorkspaces()
-        refreshStopButton()
+        enableStopButton()
     }
 
     override fun onPrevious(): Boolean {
@@ -109,19 +101,18 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
     }
 
     private fun refreshAllDevWorkspaces() {
-        val d = LoaderDialog(
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                try {
+                    doRefreshAllDevWorkspaces()
+                } catch (e: Exception) {
+                    Dialogs.error("Could not refresh workspaces: " + e.messageWithoutPrefix(), "Error Refreshing")
+                }
+            },
             DevSpacesBundle.message("connector.loader.devspaces.fetching.text"),
-            component
+            true,
+            null
         )
-        ApplicationManager.getApplication().invokeLaterOnWriteThread { d.show() }
-
-        Thread {
-            try {
-                doRefreshAllDevWorkspaces()
-            } finally {
-                EventQueue.invokeLater { d.hide() }
-            }
-        }.start()
     }
 
     private fun refreshDevWorkspace(namespace: String, name: String) {
@@ -168,16 +159,20 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                             it.metadata.namespace,
                             it.metadata.name
                         )
-
-                    Thread {
-                        if (waitDevWorkspaceStopped(it)) {
-                            refreshDevWorkspace(
-                                it.metadata.namespace,
-                                it.metadata.name
-                            )
-                            refreshStopButton()
-                        }
-                    }.start()
+                    ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                        {
+                            if (waitDevWorkspaceStopped(it)) {
+                                refreshDevWorkspace(
+                                    it.metadata.namespace,
+                                    it.metadata.name
+                                )
+                                enableStopButton()
+                            }
+                        },
+                        "Refreshing Workspace",
+                        true,
+                        null
+                    )
                 }
         }
     }
@@ -201,47 +196,42 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                 devSpacesContext.devWorkspace = it
             }
 
-        val loaderDialog =
-            LoaderDialog(
-                DevSpacesBundle.message("connector.loader.devspaces.connecting.text"),
-                component
-            )
-        ApplicationManager.getApplication().invokeLaterOnWriteThread { loaderDialog.show() }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                DevSpacesConnection(devSpacesContext).connect(
-                    {
-                        EventQueue.invokeLater { loaderDialog.hide() }
-                        refreshDevWorkspace(
-                            devSpacesContext.devWorkspace.metadata.namespace,
-                            devSpacesContext.devWorkspace.metadata.name
-                        )
-                        refreshStopButton()
-                    },
-                    {
-                    },
-                    {
-                        if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                try {
+                    DevSpacesConnection(devSpacesContext).connect(
+                        {
                             refreshDevWorkspace(
                                 devSpacesContext.devWorkspace.metadata.namespace,
                                 devSpacesContext.devWorkspace.metadata.name
                             )
-                            refreshStopButton()
+                            enableStopButton()
+                        },
+                        {},
+                        {
+                            if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
+                                refreshDevWorkspace(
+                                    devSpacesContext.devWorkspace.metadata.namespace,
+                                    devSpacesContext.devWorkspace.metadata.name
+                                )
+                                enableStopButton()
+                            }
                         }
-                    }
-                )
-            } catch (e: Exception) {
-                EventQueue.invokeLater { loaderDialog.hide() }
-                refreshDevWorkspace(
-                    devSpacesContext.devWorkspace.metadata.namespace,
-                    devSpacesContext.devWorkspace.metadata.name
-                )
-                refreshStopButton()
-                thisLogger().error("Remote server connection failed.", e)
-                Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace", "Connection Error")
-            }
-        }
+                    )
+                } catch (e: Exception) {
+                    refreshDevWorkspace(
+                        devSpacesContext.devWorkspace.metadata.namespace,
+                        devSpacesContext.devWorkspace.metadata.name
+                    )
+                    enableStopButton()
+                    thisLogger().error("Remote server connection failed.", e)
+                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace", "Connection Error")
+                }
+            },
+            DevSpacesBundle.message("connector.loader.devspaces.connecting.text"),
+            true,
+            null
+        )
     }
 
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
@@ -254,7 +244,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
             )
     }
 
-    private fun refreshStopButton() {
+    private fun enableStopButton() {
         stopDevWorkspaceButton.isEnabled =
             !listDevWorkspaces.isSelectionEmpty
                     && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).spec.started
@@ -283,7 +273,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
 
     inner class DevWorkspaceSelection : ListSelectionListener {
         override fun valueChanged(e: ListSelectionEvent) {
-            refreshStopButton()
+            enableStopButton()
         }
     }
 }
