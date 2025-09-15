@@ -101,17 +101,17 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         val selector =
             String.format(
                 "controller.devfile.io/devworkspace_name=%s",
-                devSpacesContext.devWorkspace.metadata.name
+                devSpacesContext.devWorkspace.name
             )
 
         return Pods(devSpacesContext.client)
             .findFirst(
-                devSpacesContext.devWorkspace.metadata.namespace,
+                devSpacesContext.devWorkspace.namespace,
                 selector
             ) ?: throw IOException(
             String.format(
                 "DevWorkspace '%s' is not running.",
-                devSpacesContext.devWorkspace.metadata.name
+                devSpacesContext.devWorkspace.name
             )
         )
     }

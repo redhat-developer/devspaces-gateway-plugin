@@ -107,7 +107,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 try {
                     for (item in watcher) {
                         val devWorkspace = DevWorkspace.from(item.`object`)
-                        if (desiredPhase == devWorkspace.status.phase) {
+                        if (desiredPhase == devWorkspace.phase) {
                             phaseIsDesiredState = true
                             break
                         }

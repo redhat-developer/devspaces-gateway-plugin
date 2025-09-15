@@ -30,7 +30,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
     ): ThinClientHandle {
         if (devSpacesContext.isConnected)
-            throw IOException(String.format("Already connected to %s", devSpacesContext.devWorkspace.metadata.name))
+            throw IOException(String.format("Already connected to %s", devSpacesContext.devWorkspace.name))
 
         devSpacesContext.isConnected = true
         try {
@@ -72,8 +72,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 if (remoteIdeServer.waitServerTerminated())
                     DevWorkspaces(devSpacesContext.client)
                         .stop(
-                            devSpacesContext.devWorkspace.metadata.namespace,
-                            devSpacesContext.devWorkspace.metadata.name
+                            devSpacesContext.devWorkspace.namespace,
+                            devSpacesContext.devWorkspace.name
                         )
                         .also { onDevWorkspaceStopped() }
             }
@@ -86,23 +86,23 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class, ApiException::class)
     private fun startAndWaitDevWorkspace() {
-        if (!devSpacesContext.devWorkspace.spec.started) {
+        if (!devSpacesContext.devWorkspace.started) {
             DevWorkspaces(devSpacesContext.client)
                 .start(
-                    devSpacesContext.devWorkspace.metadata.namespace,
-                    devSpacesContext.devWorkspace.metadata.name
+                    devSpacesContext.devWorkspace.namespace,
+                    devSpacesContext.devWorkspace.name
                 )
         }
 
         if (!DevWorkspaces(devSpacesContext.client)
                 .waitPhase(
-                    devSpacesContext.devWorkspace.metadata.namespace,
-                    devSpacesContext.devWorkspace.metadata.name,
+                    devSpacesContext.devWorkspace.namespace,
+                    devSpacesContext.devWorkspace.name,
                     DevWorkspaces.RUNNING,
                     DevWorkspaces.RUNNING_TIMEOUT
                 )
         ) throw IOException(
-            "DevWorkspace '${devSpacesContext.devWorkspace.metadata.name}' is not running after ${DevWorkspaces.RUNNING_TIMEOUT} seconds"
+            "DevWorkspace '${devSpacesContext.devWorkspace.name}' is not running after ${DevWorkspaces.RUNNING_TIMEOUT} seconds"
         )
     }
 }
