@@ -72,10 +72,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         doWaitServerState(true)
             .also {
                 if (!it) throw IOException(
-                    String.format(
-                        "Remote IDE server is not ready after %d seconds.",
-                        readyTimeout
-                    )
+                    "Remote IDE server is not ready after $readyTimeout seconds.",
                 )
             }
     }
@@ -98,21 +95,14 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
-        val selector =
-            String.format(
-                "controller.devfile.io/devworkspace_name=%s",
-                devSpacesContext.devWorkspace.name
-            )
+        val selector = "controller.devfile.io/devworkspace_name=${devSpacesContext.devWorkspace.name}"
 
         return Pods(devSpacesContext.client)
             .findFirst(
                 devSpacesContext.devWorkspace.namespace,
                 selector
             ) ?: throw IOException(
-            String.format(
-                "DevWorkspace '%s' is not running.",
-                devSpacesContext.devWorkspace.name
-            )
+            "DevWorkspace '${devSpacesContext.devWorkspace.name}' is not running.",
         )
     }
 
@@ -120,9 +110,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     private fun findContainer(): V1Container {
         return pod.spec!!.containers.find { container -> container.ports?.any { port -> port.name == "idea-server" } != null }
             ?: throw IOException(
-                String.format(
-                    "Remote server container not found in the Pod: %s", pod.metadata?.name
-                )
+                "Remote server container not found in the Pod: ${pod.metadata?.name}"
             )
     }
 }
