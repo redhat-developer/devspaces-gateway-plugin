@@ -14,10 +14,31 @@ package com.redhat.devtools.gateway.openshift
 import java.util.Collections.emptyMap
 
 data class DevWorkspace(
-    val metadata: DevWorkspaceObjectMeta,
-    val spec: DevWorkspaceSpec,
-    val status: DevWorkspaceStatus
+    private val metadata: DevWorkspaceObjectMeta,
+    private val spec: DevWorkspaceSpec,
+    private val status: DevWorkspaceStatus
 ) {
+    val namespace: String
+        get() {
+            return metadata.namespace
+        }
+
+    val name: String
+        get() {
+            return metadata.name
+        }
+
+    val started: Boolean
+        get() {
+            return spec.started
+        }
+
+    val phase: String
+        get() {
+            return status.phase
+        }
+
+
     companion object {
         fun from(map: Any?) = object {
             val metadata = Utils.getValue(map, arrayOf("metadata")) ?: emptyMap<String, Any>()
@@ -42,6 +63,13 @@ data class DevWorkspace(
         if (metadata.namespace != other.metadata.namespace) return false
 
         return true
+    }
+
+    override fun hashCode(): Int {
+        var result = metadata.hashCode()
+        result = 31 * result + spec.hashCode()
+        result = 31 * result + status.hashCode()
+        return result
     }
 }
 

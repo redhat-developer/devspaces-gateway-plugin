@@ -156,15 +156,15 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                 .also {
                     DevWorkspaces(devSpacesContext.client)
                         .stop(
-                            it.metadata.namespace,
-                            it.metadata.name
+                            it.namespace,
+                            it.name
                         )
                     ProgressManager.getInstance().runProcessWithProgressSynchronously(
                         {
                             if (waitDevWorkspaceStopped(it)) {
                                 refreshDevWorkspace(
-                                    it.metadata.namespace,
-                                    it.metadata.name
+                                    it.namespace,
+                                    it.name
                                 )
                                 enableStopButton()
                             }
@@ -183,7 +183,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                 "Connection failed",
                 String.format(
                     "Already connected to %s",
-                    devSpacesContext.devWorkspace.metadata.name
+                    devSpacesContext.devWorkspace.name
                 ),
                 component
             ).show()
@@ -202,8 +202,8 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                     DevSpacesConnection(devSpacesContext).connect(
                         {
                             refreshDevWorkspace(
-                                devSpacesContext.devWorkspace.metadata.namespace,
-                                devSpacesContext.devWorkspace.metadata.name
+                                devSpacesContext.devWorkspace.namespace,
+                                devSpacesContext.devWorkspace.name
                             )
                             enableStopButton()
                         },
@@ -211,8 +211,8 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                         {
                             if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
                                 refreshDevWorkspace(
-                                    devSpacesContext.devWorkspace.metadata.namespace,
-                                    devSpacesContext.devWorkspace.metadata.name
+                                    devSpacesContext.devWorkspace.namespace,
+                                    devSpacesContext.devWorkspace.name
                                 )
                                 enableStopButton()
                             }
@@ -220,8 +220,8 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
                     )
                 } catch (e: Exception) {
                     refreshDevWorkspace(
-                        devSpacesContext.devWorkspace.metadata.namespace,
-                        devSpacesContext.devWorkspace.metadata.name
+                        devSpacesContext.devWorkspace.namespace,
+                        devSpacesContext.devWorkspace.name
                     )
                     enableStopButton()
                     thisLogger().error("Remote server connection failed.", e)
@@ -237,8 +237,8 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
         return DevWorkspaces(devSpacesContext.client)
             .waitPhase(
-                devWorkspace.metadata.namespace,
-                devWorkspace.metadata.name,
+                devWorkspace.namespace,
+                devWorkspace.name,
                 DevWorkspaces.STOPPED,
                 30
             )
@@ -247,7 +247,7 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
     private fun enableStopButton() {
         stopDevWorkspaceButton.isEnabled =
             !listDevWorkspaces.isSelectionEmpty
-                    && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).spec.started
+                    && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).started
     }
 
     inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {
@@ -261,9 +261,9 @@ class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevS
             return JBLabel(
                 String.format(
                     "[%s] %s %s",
-                    devWorkspace.status.phase,
-                    if (!multipleNamespaces) "" else (devWorkspace.metadata.namespace + " /"),
-                    devWorkspace.metadata.name
+                    devWorkspace.phase,
+                    if (!multipleNamespaces) "" else (devWorkspace.namespace + " /"),
+                    devWorkspace.name
                 )
             ).also {
                 it.font = JBFont.h4().asPlain()
