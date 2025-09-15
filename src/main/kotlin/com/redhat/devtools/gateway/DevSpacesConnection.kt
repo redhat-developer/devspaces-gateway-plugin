@@ -30,7 +30,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
     ): ThinClientHandle {
         if (devSpacesContext.isConnected)
-            throw IOException(String.format("Already connected to %s", devSpacesContext.devWorkspace.name))
+            throw IOException("Already connected to ${devSpacesContext.devWorkspace.name}")
 
         devSpacesContext.isConnected = true
         try {
