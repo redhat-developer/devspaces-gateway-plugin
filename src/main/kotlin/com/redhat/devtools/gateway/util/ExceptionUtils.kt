@@ -11,6 +11,9 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.google.gson.Gson
+import io.kubernetes.client.openapi.ApiException
+
 
 fun Throwable.rootMessage(): String {
     var cause: Throwable? = this
@@ -26,3 +29,22 @@ fun Throwable.messageWithoutPrefix(): String? {
     return message?.trim()
         ?: message?.substringAfter(":")?.trim()
 }
+
+fun Throwable.message(): String {
+    return if (this is ApiException) {
+        message()
+    } else {
+        message.orEmpty()
+    }
+}
+
+fun ApiException.message(): String {
+    val response = Gson().fromJson(responseBody, Map::class.java)
+    val msg = try {
+        response["message"]?.toString()
+    } catch (e: Exception) {
+        e.rootMessage()
+    }
+    return "Reason: $msg"
+}
+
