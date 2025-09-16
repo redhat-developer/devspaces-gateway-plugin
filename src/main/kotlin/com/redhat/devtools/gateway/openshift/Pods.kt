@@ -29,7 +29,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
@@ -104,32 +103,32 @@ class Pods(private val client: ApiClient) {
 
         val scope = CoroutineScope(Dispatchers.IO)
         scope.launch {
-            supervisorScope {
-                launch {
-                    val clientSocket = serverSocket.accept()
-                    try {
-                        copyStreams(clientSocket, forwardResult, remotePort)
-                    } catch (e: IOException) {
-                        if (coroutineContext.isActive) throw e
-                    } finally {
-                        clientSocket.close()
-                    }
-                }
+            val clientSocket = serverSocket.accept()
+            try {
+                copyStreams(clientSocket, forwardResult, remotePort)
+            } catch (e: IOException) {
+                if (coroutineContext.isActive) throw e
+            } finally {
+                clientSocket.close()
             }
         }
 
         return Closeable {
-            scope.cancel()
-            runBlocking {
-                scope.coroutineContext.job.join()
-            }
-
-            serverSocket.close()
             try {
-                forwardResult.getInputStream(remotePort).close()
-                forwardResult.getOutboundStream(remotePort).close()
+                scope.cancel()
+                runBlocking {
+                    scope.coroutineContext.job.join()
+                }
+
+                serverSocket.close()
+                try {
+                    forwardResult.getInputStream(remotePort).close()
+                    forwardResult.getOutboundStream(remotePort).close()
+                } catch (_: Exception) {
+                    // Ignore errors when closing streams
+                }
             } catch (_: Exception) {
-                // Ignore errors when closing streams
+                // Ignore cleanup errors
             }
         }
     }
