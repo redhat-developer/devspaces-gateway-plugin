@@ -12,8 +12,8 @@
 package com.redhat.devtools.gateway.view
 
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.view.steps.DevSpacesRemoteServerConnectionStepView
-import com.redhat.devtools.gateway.view.steps.DevSpacesOpenShiftConnectionStepView
+import com.redhat.devtools.gateway.view.steps.DevSpacesWorkspacesStepView
+import com.redhat.devtools.gateway.view.steps.DevSpacesServerStepView
 import com.redhat.devtools.gateway.view.steps.DevSpacesWizardStep
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -34,8 +34,8 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     private var nextButton = JButton()
 
     init {
-        steps.add(DevSpacesOpenShiftConnectionStepView(devSpacesContext))
-        steps.add(DevSpacesRemoteServerConnectionStepView(devSpacesContext))
+        steps.add(DevSpacesServerStepView(devSpacesContext))
+        steps.add(DevSpacesWorkspacesStepView(devSpacesContext))
 
         addToBottom(createButtons())
         applyStep(0)
@@ -99,7 +99,7 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
 
         // If this is the RemoteServerConnection step, watch for changes
         val remoteStep = steps[currentStep]
-        if (remoteStep is DevSpacesRemoteServerConnectionStepView) {
+        if (remoteStep is DevSpacesWorkspacesStepView) {
             val listField = remoteStep.javaClass.getDeclaredField("listDevWorkspaces")
             listField.isAccessible = true
             val list = listField.get(remoteStep) as javax.swing.JList<*>
@@ -113,7 +113,7 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     private fun refreshNextButtonState() {
         val step = steps[currentStep]
         nextButton.isEnabled = when (step) {
-            is DevSpacesRemoteServerConnectionStepView -> {
+            is DevSpacesWorkspacesStepView -> {
                 val listField = step.javaClass.getDeclaredField("listDevWorkspaces")
                 listField.isAccessible = true
                 val list = listField.get(step) as javax.swing.JList<*>
