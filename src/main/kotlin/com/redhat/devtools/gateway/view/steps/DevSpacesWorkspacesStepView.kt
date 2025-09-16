@@ -30,7 +30,6 @@ import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
-import com.redhat.devtools.gateway.view.InformationDialog
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import java.awt.Component
 import javax.swing.DefaultListModel
@@ -179,14 +178,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
 
     private fun connect() {
         if (devSpacesContext.isConnected) {
-            InformationDialog(
-                "Connection failed",
-                String.format(
-                    "Already connected to %s",
-                    devSpacesContext.devWorkspace.name
-                ),
-                component
-            ).show()
+            Dialogs.error("Already connected to ${devSpacesContext.devWorkspace.name}", "Connection failed")
             return
         }
 

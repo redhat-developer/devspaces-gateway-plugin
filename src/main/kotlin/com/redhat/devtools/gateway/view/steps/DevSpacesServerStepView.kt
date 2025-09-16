@@ -11,8 +11,6 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
-import com.google.gson.Gson
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -27,11 +25,10 @@ import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
-import com.redhat.devtools.gateway.util.rootMessage
-import com.redhat.devtools.gateway.view.InformationDialog
+import com.redhat.devtools.gateway.util.message
+import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
-import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
 import javax.swing.JComboBox
@@ -91,10 +88,7 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
                     Projects(client).list()
                     success = true
                 } catch (e: Exception) {
-                    val errorMsg = getMessage(e)
-                    ApplicationManager.getApplication().invokeLater {
-                        InformationDialog("Connection failed", errorMsg, component).show()
-                    }
+                    Dialogs.error(e.message(), "Connection failed")
                     throw e
                 }
             },
@@ -109,24 +103,6 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
         }
 
         return success
-    }
-
-    private fun getMessage(e: Exception): String {
-        return if (e is ApiException) {
-            getMessage(e)
-        } else {
-            e.message.orEmpty()
-        }
-    }
-
-    private fun getMessage(e: ApiException): String {
-        val response = Gson().fromJson(e.responseBody, Map::class.java)
-        val msg = try {
-            response["message"]?.toString()
-        } catch (e: Exception) {
-            e.rootMessage()
-        }
-        return String.format("Reason: %s", msg)
     }
 
     private fun loadOpenShiftConnectionSettings() {
