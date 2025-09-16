@@ -40,7 +40,7 @@ import javax.swing.ListCellRenderer
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
 
-class DevSpacesRemoteServerConnectionStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
+class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.previous")
