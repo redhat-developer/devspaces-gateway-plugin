@@ -70,7 +70,13 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             )
 
         client.run {
-            lifetime.onTermination { forwarder.close() }
+            lifetime.onTermination {
+                try {
+                    forwarder.close()
+                } catch (_: Exception) {
+                    // Ignore cleanup errors
+                }
+            }
             lifetime.onTermination {
                 if (remoteIdeServer.waitServerTerminated())
                     DevWorkspaces(devSpacesContext.client)
