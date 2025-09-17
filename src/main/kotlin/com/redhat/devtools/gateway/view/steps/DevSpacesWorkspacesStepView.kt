@@ -31,6 +31,7 @@ import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
+import com.redhat.devtools.gateway.view.ui.onDoubleClick
 import java.awt.Component
 import javax.swing.DefaultListModel
 import javax.swing.JButton
@@ -82,6 +83,11 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
 
     override fun onInit() {
         listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
+        listDevWorkspaces.onDoubleClick { 
+            if (!listDevWorkspaces.isSelectionEmpty) {
+                connect()
+            }
+        }
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
         refreshAllDevWorkspaces()
