@@ -21,6 +21,6 @@ class DevSpacesMainView : GatewayConnectorView {
 
     override val component: JComponent
         get() = Wrapper(DevSpacesWizardView(DevSpacesContext())).apply {
-            border = JBUI.Borders.empty()
+            border = JBUI.Borders.empty(10, 20, 6, 20)
         }
 }
