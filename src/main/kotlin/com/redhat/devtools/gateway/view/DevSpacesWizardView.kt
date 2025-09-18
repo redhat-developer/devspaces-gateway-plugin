@@ -96,18 +96,6 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
         }
 
         refreshNextButtonState()
-
-        // If this is the RemoteServerConnection step, watch for changes
-        val remoteStep = steps[currentStep]
-        if (remoteStep is DevSpacesWorkspacesStepView) {
-            val listField = remoteStep.javaClass.getDeclaredField("listDevWorkspaces")
-            listField.isAccessible = true
-            val list = listField.get(remoteStep) as javax.swing.JList<*>
-
-            list.addListSelectionListener {
-                refreshNextButtonState()
-            }
-        }
     }
 
     private fun refreshNextButtonState() {

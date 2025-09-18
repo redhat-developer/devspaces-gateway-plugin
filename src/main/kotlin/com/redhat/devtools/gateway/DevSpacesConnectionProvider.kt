@@ -88,7 +88,6 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         indicator.text = "Connection failed"
                         runDelayed(2000, { indicator.stop() })
                         if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
-                            // Dialogs.error is suspend — use a blocking non-suspending dialog instead
                             Dialogs.error(
                                 e.messageWithoutPrefix() ?: "Could not connect to workspace.",
                                 "Connection Error"
