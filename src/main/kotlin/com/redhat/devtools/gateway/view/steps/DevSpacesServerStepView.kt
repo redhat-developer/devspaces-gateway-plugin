@@ -23,6 +23,7 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.kube.Cluster
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.message
@@ -37,15 +38,39 @@ import javax.swing.JTextField
 
 class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
 
-    private val allServers = KubeConfigBuilder.getServers()
+    private val allServers = KubeConfigBuilder.getClusters()
     private var tfToken = JBTextField()
         .apply { PasteClipboardMenu.addTo(this) }
-    private var tfServer: JComboBox<String> = FilteringComboBox.create(allServers) { server ->
-        tfToken.text = KubeConfigBuilder.getTokenForServer(server) ?: ""
-    }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
+    private var tfServer: JComboBox<Cluster> =
+        FilteringComboBox.create(
+            allServers,
+            Cluster::toString,
+            Cluster::fromString,
+            Cluster::class.java
+        ) { cluster ->
+            if (cluster != null) {
+                val token = KubeConfigBuilder.getTokenForCluster(cluster.name) ?: ""
+                tfToken.text = token
+            }
+        }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
 
     private var settingsAreLoaded = false
     private val settings = service<DevSpacesSettings>()
+
+    /**
+     * Checks if both server and token fields have content
+     */
+    private fun areServerAndTokenValid(): Boolean {
+        if (tfServer.selectedItem == null) {
+            return false
+        }
+
+        return !tfToken.text.isNullOrBlank()
+    }
+
+    override fun isNextEnabled(): Boolean {
+        return areServerAndTokenValid()
+    }
 
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
@@ -76,11 +101,11 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
     }
 
     override fun onNext(): Boolean {
-        val server = (tfServer.editor.editorComponent as JTextField).text
+        val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
+        val server = selectedCluster.url
         val token = tfToken.text
         val client = OpenShiftClientFactory().create(server, token.toCharArray())
         var success = false
-
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
@@ -111,15 +136,21 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
 
         try {
             val config = Config.defaultClient()
-            tfServer.selectedItem = config.basePath
+            val matchingCluster = allServers.find { it.url == config.basePath }
+            if (matchingCluster != null) {
+                tfServer.selectedItem = matchingCluster
+            }
             val auth = config.authentications["BearerToken"]
             if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Do nothing
         }
 
         if (tfServer.selectedItem == null || tfToken.text.isEmpty()) {
-            tfServer.selectedItem = settings.state.server.orEmpty()
+            val matchingCluster = allServers.find { it.url == settings.state.server.orEmpty() }
+            if (matchingCluster != null) {
+                tfServer.selectedItem = matchingCluster
+            }
             tfToken.text = settings.state.token.orEmpty()
             settingsAreLoaded = true
         }
@@ -127,7 +158,8 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
 
     private fun saveOpenShiftConnectionSettings() {
         if (settingsAreLoaded) {
-            settings.state.server = tfServer.selectedItem?.toString()
+            val selectedCluster = tfServer.selectedItem as Cluster
+            settings.state.server = selectedCluster.url
             settings.state.token = tfToken.text
         }
     }
