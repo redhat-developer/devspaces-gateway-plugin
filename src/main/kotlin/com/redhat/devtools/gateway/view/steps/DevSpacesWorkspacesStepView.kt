@@ -25,6 +25,7 @@ import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.DevSpacesIcons
 import com.redhat.devtools.gateway.openshift.DevWorkspace
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.Projects
@@ -256,15 +257,15 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
             isSelected: Boolean,
             cellHasFocus: Boolean
         ): Component {
-            return JBLabel(
-                String.format(
-                    "[%s] %s %s",
-                    devWorkspace.phase,
-                    if (!multipleNamespaces) "" else (devWorkspace.namespace + " /"),
-                    devWorkspace.name
-                )
-            ).also {
-                it.font = JBFont.h4().asPlain()
+            val icon = DevSpacesIcons.getWorkspacePhaseIcon(devWorkspace.phase)
+            return JBLabel().apply {
+                font = JBFont.h4().asPlain()
+                border = JBUI.Borders.emptyLeft(6)
+                icon?.let { 
+                    setIcon(it)
+                    horizontalTextPosition = JBLabel.TRAILING
+                }
+                text = "${if (!multipleNamespaces) "" else (devWorkspace.namespace + " /")} ${devWorkspace.name}"
             }
         }
     }
