@@ -119,8 +119,9 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
                 val list = listField.get(step) as javax.swing.JList<*>
                 // Enable if text does NOT match, OR list is NOT empty
                 step.nextActionText == com.redhat.devtools.gateway.DevSpacesBundle
-                    .message("connector.wizard_step.remote_server_connection.button.next") &&
-                        !list.isSelectionEmpty
+                    .message("connector.wizard_step.remote_server_connection.button.next")
+                        && !list.isSelectionEmpty
+                        && step.isNextButtonEnabled()
             }
             else -> {
                 true
