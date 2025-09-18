@@ -18,6 +18,10 @@ sealed interface DevSpacesWizardStep {
     val previousActionText: String
     val component: DialogPanel
 
+    fun isNextEnabled(): Boolean {
+        return true
+    }
+
     fun onInit()
 
     fun onPrevious(): Boolean

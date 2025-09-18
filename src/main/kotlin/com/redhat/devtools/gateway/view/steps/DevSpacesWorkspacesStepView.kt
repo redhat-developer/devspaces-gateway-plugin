@@ -249,6 +249,11 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                     && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).started
     }
 
+    override fun isNextEnabled(): Boolean {
+        return !listDevWorkspaces.isSelectionEmpty
+                && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).started
+    }
+
     inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {
         override fun getListCellRendererComponent(
             list: JList<out DevWorkspace>?,

@@ -112,20 +112,7 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
 
     private fun refreshNextButtonState() {
         val step = steps[currentStep]
-        nextButton.isEnabled = when (step) {
-            is DevSpacesWorkspacesStepView -> {
-                val listField = step.javaClass.getDeclaredField("listDevWorkspaces")
-                listField.isAccessible = true
-                val list = listField.get(step) as javax.swing.JList<*>
-                // Enable if text does NOT match, OR list is NOT empty
-                step.nextActionText == com.redhat.devtools.gateway.DevSpacesBundle
-                    .message("connector.wizard_step.remote_server_connection.button.next") &&
-                        !list.isSelectionEmpty
-            }
-            else -> {
-                true
-            }
-        }
+        nextButton.isEnabled = step.isNextEnabled()
     }
 
     private fun isFirstStep(): Boolean {
