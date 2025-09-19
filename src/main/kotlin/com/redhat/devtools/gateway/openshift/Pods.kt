@@ -18,7 +18,6 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
-import io.kubernetes.client.util.Streams
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,7 +29,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
@@ -99,33 +97,39 @@ class Pods(private val client: ApiClient) {
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
+        val portForward = PortForward(client)
+        val forwardResult = portForward.forward(pod, listOf(remotePort))
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
 
         val scope = CoroutineScope(Dispatchers.IO)
         scope.launch {
-            supervisorScope {
-                launch {
-                    val clientSocket = serverSocket.accept()
-                    val forwardResult = PortForward(client).forward(pod, listOf(remotePort))
-
-                    try {
-                        copyStreams(clientSocket, forwardResult, remotePort)
-                    } catch (e: IOException) {
-                        if (coroutineContext.isActive) throw e
-                    } finally {
-                        clientSocket.close()
-                    }
-                }
+            val clientSocket = serverSocket.accept()
+            try {
+                copyStreams(clientSocket, forwardResult, remotePort)
+            } catch (e: IOException) {
+                if (coroutineContext.isActive) throw e
+            } finally {
+                clientSocket.close()
             }
         }
 
         return Closeable {
-            scope.cancel()
-            runBlocking {
-                scope.coroutineContext.job.join()
-            }
+            try {
+                scope.cancel()
+                runBlocking {
+                    scope.coroutineContext.job.join()
+                }
 
-            serverSocket.close()
+                serverSocket.close()
+                try {
+                    forwardResult.getInputStream(remotePort).close()
+                    forwardResult.getOutboundStream(remotePort).close()
+                } catch (_: Exception) {
+                    // Ignore errors when closing streams
+                }
+            } catch (_: Exception) {
+                // Ignore cleanup errors
+            }
         }
     }
 
@@ -152,6 +156,32 @@ class Pods(private val client: ApiClient) {
         destination.run { flush() }
     }
 
+    @Throws(IOException::class)
+    fun waitForForwardReady(port: Int) {
+        val maxRetries = 30
+        val retryDelay = 100L
+
+        repeat(maxRetries) { attempt ->
+            try {
+                val testSocket = ServerSocket()
+                testSocket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                testSocket.close()
+                // If we can bind to the port, it means port forwarding is not ready yet
+                Thread.sleep(retryDelay)
+            } catch (_: java.net.BindException) {
+                // Port is already in use, which means port forwarding is ready
+                return
+            } catch (e: Exception) {
+                if (attempt == maxRetries - 1) {
+                    throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms", e)
+                }
+                Thread.sleep(retryDelay)
+            }
+        }
+
+        throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms")
+    }
+
     @Throws(ApiException::class)
     fun findFirst(namespace: String, labelSelector: String): V1Pod? {
         val pods = doList(namespace, labelSelector)
@@ -164,15 +194,5 @@ class Pods(private val client: ApiClient) {
             .listNamespacedPod(namespace)
             .labelSelector(labelSelector)
             .execute();
-    }
-
-    @Throws(IOException::class)
-    private fun copy(input: InputStream, out: OutputStream) {
-        val buffer = ByteArray(Streams.BUFFER_SIZE)
-        var bytesRead: Int
-        while ((input.read(buffer).also { bytesRead = it }) != -1) {
-            out.write(buffer, 0, bytesRead)
-        }
-        out.flush()
     }
 }

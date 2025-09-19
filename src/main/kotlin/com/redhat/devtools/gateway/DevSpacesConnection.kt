@@ -54,6 +54,11 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         val remoteIdeServerStatus = remoteIdeServer.getStatus()
         val joinLink = remoteIdeServerStatus.joinLink
             ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
+
+        val pods = Pods(devSpacesContext.client)
+        val forwarder = pods.forward(remoteIdeServer.pod, 5990, 5990)
+        pods.waitForForwardReady(5990)
+        
         val client = LinkedClientManager
             .getInstance()
             .startNewClient(
@@ -64,10 +69,14 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 false
             )
 
-        val forwarder = Pods(devSpacesContext.client).forward(remoteIdeServer.pod, 5990, 5990)
-
         client.run {
-            lifetime.onTermination { forwarder.close() }
+            lifetime.onTermination {
+                try {
+                    forwarder.close()
+                } catch (_: Exception) {
+                    // Ignore cleanup errors
+                }
+            }
             lifetime.onTermination {
                 if (remoteIdeServer.waitServerTerminated())
                     DevWorkspaces(devSpacesContext.client)
