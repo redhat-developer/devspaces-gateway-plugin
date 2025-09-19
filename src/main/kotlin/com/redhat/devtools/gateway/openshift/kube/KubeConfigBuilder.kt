@@ -130,27 +130,23 @@ object KubeConfigBuilder {
         if (envKubeConfig != null) fromEnvVar() else fromDefault()
     }
 
-    fun getServers(): List<String> =
-        allClusters.mapNotNull { cluster ->
+    fun getClusters(): List<Cluster> {
+        return allClusters.mapNotNull { cluster ->
+            val clusterName = cluster["name"] as? String ?: return@mapNotNull null
             val clusterDetails = cluster["cluster"] as? Map<*, *>
-            clusterDetails?.get("server") as? String
+            val serverUrl = clusterDetails?.get("server") as? String ?: return@mapNotNull null
+            Cluster(clusterName, serverUrl)
         }
+    }
 
-    fun getTokenForServer(server: String): String? {
-        // Find cluster name for this server
-        val clusterName = allClusters.find { cluster ->
-            val clusterDetails = cluster["cluster"] as? Map<*, *>
-            clusterDetails?.get("server") == server
-        }?.get("name") as? String ?: return null
-
-        // Find context using this cluster
+    fun getTokenForCluster(name: String): String? {
         val userName = allContexts.find { ctx ->
-            val contextMap = ctx["context"] as? Map<*, *>
-            contextMap?.get("cluster") == clusterName
+            val context = ctx["context"] as? Map<*, *>
+            context?.get("cluster") == name
         }?.get("context")?.let { it as? Map<*, *> }?.get("user") as? String ?: return null
 
-        // Find token for that user
-        val token = allUsers.find { user -> user["name"] == userName }?.get("user")?.let { it as? Map<*, *> }?.get("token") as? String
+        val token = allUsers.find { user -> user["name"] == userName }?.get("user")
+            ?.let { it as? Map<*, *> }?.get("token") as? String
 
         return token
     }
