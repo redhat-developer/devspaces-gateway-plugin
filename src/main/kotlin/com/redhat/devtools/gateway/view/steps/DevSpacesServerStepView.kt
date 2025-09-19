@@ -23,6 +23,7 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.kube.Cluster
 import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.message
@@ -37,11 +38,13 @@ import javax.swing.JTextField
 
 class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
 
-    private val allServers = KubeConfigBuilder.getServers()
+    private val allServers = KubeConfigBuilder.getClusters()
     private var tfToken = JBTextField()
         .apply { PasteClipboardMenu.addTo(this) }
-    private var tfServer: JComboBox<String> = FilteringComboBox.create(allServers) { server ->
-        tfToken.text = KubeConfigBuilder.getTokenForServer(server) ?: ""
+    private var tfServer: JComboBox<Cluster> =
+        FilteringComboBox.create(allServers, { "${it.name} (${it.url})" }) { cluster ->
+        val token = KubeConfigBuilder.getTokenForCluster(cluster.name) ?: ""
+        tfToken.text = token
     }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
 
     private var settingsAreLoaded = false
@@ -111,7 +114,11 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
 
         try {
             val config = Config.defaultClient()
-            tfServer.selectedItem = config.basePath
+            // Find cluster that matches the config base path
+            val matchingCluster = allServers.find { it.url == config.basePath }
+            if (matchingCluster != null) {
+                tfServer.selectedItem = matchingCluster
+            }
             val auth = config.authentications["BearerToken"]
             if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
         } catch (e: Exception) {
@@ -119,7 +126,11 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
         }
 
         if (tfServer.selectedItem == null || tfToken.text.isEmpty()) {
-            tfServer.selectedItem = settings.state.server.orEmpty()
+            // Find cluster that matches the saved server URL
+            val matchingCluster = allServers.find { it.url == settings.state.server.orEmpty() }
+            if (matchingCluster != null) {
+                tfServer.selectedItem = matchingCluster
+            }
             tfToken.text = settings.state.token.orEmpty()
             settingsAreLoaded = true
         }
@@ -127,7 +138,8 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
 
     private fun saveOpenShiftConnectionSettings() {
         if (settingsAreLoaded) {
-            settings.state.server = tfServer.selectedItem?.toString()
+            val selectedCluster = tfServer.selectedItem as? Cluster
+            settings.state.server = selectedCluster?.url
             settings.state.token = tfToken.text
         }
     }
