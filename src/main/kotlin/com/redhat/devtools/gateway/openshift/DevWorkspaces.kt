@@ -100,7 +100,7 @@ class DevWorkspaces(private val client: ApiClient) {
     ): Boolean {
         var phaseIsDesiredState = false
 
-        val watcher = createWatcher(namespace, String.format("metadata.name=%s", name))
+        val watcher = createWatcher(namespace, "metadata.name=$name")
         val executor = Executors.newSingleThreadScheduledExecutor()
         executor.schedule(
             {

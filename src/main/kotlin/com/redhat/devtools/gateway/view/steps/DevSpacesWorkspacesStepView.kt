@@ -251,12 +251,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
             cellHasFocus: Boolean
         ): Component {
             return JBLabel(
-                String.format(
-                    "[%s] %s %s",
-                    devWorkspace.phase,
-                    if (!multipleNamespaces) "" else (devWorkspace.namespace + " /"),
-                    devWorkspace.name
-                )
+                "[${devWorkspace.phase}] ${if (!multipleNamespaces) "" else "${devWorkspace.namespace} /"} ${devWorkspace.name}"
             ).also {
                 it.font = JBFont.h4().asPlain()
             }
