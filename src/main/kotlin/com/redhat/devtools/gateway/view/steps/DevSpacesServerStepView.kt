@@ -13,6 +13,9 @@ package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.ui.ComponentValidator
+import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
@@ -32,6 +35,9 @@ import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
+import java.net.URI
+import java.net.URISyntaxException
+import java.util.regex.Pattern
 import javax.swing.JComboBox
 import javax.swing.JTextField
 
@@ -57,21 +63,6 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
     private var settingsAreLoaded = false
     private val settings = service<DevSpacesSettings>()
 
-    /**
-     * Checks if both server and token fields have content
-     */
-    private fun areServerAndTokenValid(): Boolean {
-        if (tfServer.selectedItem == null) {
-            return false
-        }
-
-        return !tfToken.text.isNullOrBlank()
-    }
-
-    override fun isNextEnabled(): Boolean {
-        return areServerAndTokenValid()
-    }
-
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
@@ -94,6 +85,55 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
 
     override fun onInit() {
         loadOpenShiftConnectionSettings()
+        createServerValidation()
+    }
+    
+    private fun createServerValidation() {
+        val editorComponent = tfServer.editor.editorComponent as JTextField
+        
+        val validatorDisposable = Disposer.newDisposable()
+        
+        ComponentValidator(validatorDisposable)
+            .withValidator {
+                val serverInput = editorComponent.text
+                
+                // Don't show validation errors for empty input initially
+                if (serverInput.isBlank()) {
+                    return@withValidator null
+                }
+                
+                val validationMessage = ServerValidator.getValidationMessage(serverInput)
+                
+                if (validationMessage.isNotEmpty()) {
+                    ValidationInfo(validationMessage, tfServer)
+                } else {
+                    null
+                }
+            }
+            .installOn(tfServer)
+            .andRegisterOnDocumentListener(editorComponent)
+    }
+
+    override fun isNextEnabled(): Boolean {
+        return isServerValid()
+                && isTokenValid()
+    }
+
+    private fun isServerValid(): Boolean {
+        val editorComponent = tfServer.editor.editorComponent as JTextField
+        val serverInput = editorComponent.text
+
+        // selected cluster item is always valid
+        if (tfServer.selectedItem != null
+            && serverInput.isBlank()) {
+            return true
+        }
+
+        return ServerValidator.isValid(serverInput)
+    }
+
+    private fun isTokenValid(): Boolean {
+        return !tfToken.text.isNullOrBlank()
     }
 
     override fun onPrevious(): Boolean {
@@ -101,6 +141,15 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
     }
 
     override fun onNext(): Boolean {
+        val editorComponent = tfServer.editor.editorComponent as JTextField
+        val serverInput = editorComponent.text
+        val validationMessage = ServerValidator.getValidationMessage(serverInput)
+        
+        if (validationMessage.isNotEmpty()) {
+            Dialogs.error(validationMessage, "Invalid Server Format")
+            return false
+        }
+        
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
         val server = selectedCluster.url
         val token = tfToken.text
@@ -163,4 +212,62 @@ class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : 
             settings.state.token = tfToken.text
         }
     }
+
+    /**
+     * Validates server input. Accepts either:
+     * 1. Valid URL
+     * 2. Cluster name pattern: "<cluster name> (<cluster url>)"
+     * 3. Valid cluster name (alphanumeric, dots, hyphens, max 253 chars)
+     */
+    private object ServerValidator {
+        private val CLUSTER_NAME_PATTERN = Pattern.compile("^[a-z0-9.-]+$")
+        private const val MAX_CLUSTER_NAME_LENGTH = 253
+
+        fun isValid(input: String?): Boolean {
+            if (input.isNullOrBlank()) return false
+            val trimmed = input.trim()
+            if (trimmed.isEmpty()) return false
+            if (isValidUrl(trimmed)) return true
+            if (isClusterNameWithUrlPattern(trimmed)) return true
+            return isValidClusterName(trimmed)
+        }
+
+        fun isValidUrl(input: String): Boolean {
+            return try {
+                val uri = URI(input)
+                uri.scheme != null && (uri.scheme == "http" || uri.scheme == "https")
+            } catch (e: URISyntaxException) {
+                false
+            }
+        }
+
+        fun isClusterNameWithUrlPattern(input: String): Boolean {
+            val regex = Regex("""^(.+?)\s*\((.+?)\)$""")
+            val matchResult = regex.find(input)
+            if (matchResult != null) {
+                val clusterName = matchResult.groupValues[1].trim()
+                val clusterUrl = matchResult.groupValues[2].trim()
+                return isValidClusterName(clusterName) && isValidUrl(clusterUrl)
+            }
+            return false
+        }
+
+        fun isValidClusterName(name: String): Boolean {
+            if (name.length >= MAX_CLUSTER_NAME_LENGTH) return false
+            if (name.startsWith("-") || name.endsWith("-")) return false
+            if (name.startsWith(".") || name.endsWith(".")) return false
+            return CLUSTER_NAME_PATTERN.matcher(name).matches()
+        }
+
+        fun getValidationMessage(input: String?): String {
+            if (input.isNullOrBlank()) return "Server field cannot be empty"
+            val trimmed = input.trim()
+            if (trimmed.isEmpty()) return "Server field cannot be empty"
+            if (isValidUrl(trimmed)) return ""
+            if (isClusterNameWithUrlPattern(trimmed)) return ""
+            if (isValidClusterName(trimmed)) return ""
+            return "Invalid server format. Must be a valid URL or cluster name pattern '<cluster name> (<cluster url>)'"
+        }
+    }
+
 }
