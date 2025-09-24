@@ -17,13 +17,22 @@ import javax.swing.Icon
 object DevSpacesIcons {
 
     val LOGO = IconLoader.getIcon("/icons/dev-spaces-logo.svg", javaClass)
-    val STARTED = IconLoader.getIcon("/icons/started.svg", javaClass)
-    val STOPPED = IconLoader.getIcon("/icons/stopped.svg", javaClass)
+
+    private val WORKSPACE_STARTING = IconLoader.getIcon("/icons/starting.svg", javaClass)
+    private val WORKSPACE_STARTED = IconLoader.getIcon("/icons/started.svg", javaClass)
+    private val WORKSPACE_STOPPED = IconLoader.getIcon("/icons/stopped.svg", javaClass)
+    private val WORKSPACE_FAILED = IconLoader.getIcon("/icons/failed.svg", javaClass)
 
     fun getWorkspacePhaseIcon(phase: String): Icon? {
+        /*
+         * mimics what the web frontend is displaying.
+         * @see [getStatusIcon.tsx](https://github.com/eclipse-che/che-dashboard/blob/main/packages/dashboard-frontend/src/components/Workspace/Status/getStatusIcon.tsx)
+         */
         return when (phase) {
-            "Running" -> DevSpacesIcons.STARTED
-            "Stopped" -> DevSpacesIcons.STOPPED
+            "Starting" -> WORKSPACE_STARTING
+            "Running" -> WORKSPACE_STARTED
+            "Stopped" -> WORKSPACE_STOPPED
+            "Failed", "Failing", "Error" -> WORKSPACE_FAILED
             else -> null
         }
     }
