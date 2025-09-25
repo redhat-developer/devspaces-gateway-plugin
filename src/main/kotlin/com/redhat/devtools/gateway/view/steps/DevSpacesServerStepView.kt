@@ -36,7 +36,9 @@ import javax.swing.JComboBox
 import javax.swing.JTextField
 
 
-class DevSpacesServerStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
+class DevSpacesServerStepView(
+    private var devSpacesContext: DevSpacesContext
+) : DevSpacesWizardStep {
 
     private val allServers = KubeConfigBuilder.getClusters()
     private var tfToken = JBTextField()
