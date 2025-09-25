@@ -15,6 +15,7 @@ import com.intellij.openapi.util.IconLoader
 import javax.swing.Icon
 
 object DevSpacesIcons {
+
     val LOGO = IconLoader.getIcon("/icons/dev-spaces-logo.svg", javaClass)
     val STARTED = IconLoader.getIcon("/icons/started.svg", javaClass)
     val STOPPED = IconLoader.getIcon("/icons/stopped.svg", javaClass)
