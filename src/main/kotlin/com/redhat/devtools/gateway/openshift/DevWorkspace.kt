@@ -38,6 +38,10 @@ data class DevWorkspace(
             return status.phase
         }
 
+    val running: Boolean
+        get() {
+            return status.running
+        }
 
     companion object {
         fun from(map: Any?) = object {
@@ -116,5 +120,11 @@ data class DevWorkspaceStatus(
             )
         }.data
     }
+
+    val running: Boolean
+        get() {
+            return phase == "Running"
+        }
+
 }
 
