@@ -22,7 +22,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
-import com.intellij.ui.icons.EMPTY_ICON
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -250,7 +249,7 @@ class DevSpacesWorkspacesStepView(
 
     private fun enableButtons() {
         runInEdt {
-            val selectedWorkspaceStarted = getSelectedWorkspace()?.started ?: false
+            val selectedWorkspaceStarted = isRunning(getSelectedWorkspace())
 
             stopDevWorkspaceButton.isEnabled = selectedWorkspaceStarted
             refreshNextButton()
@@ -266,7 +265,11 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun isNextEnabled(): Boolean {
-        return getSelectedWorkspace()?.started ?: false
+        return isRunning(getSelectedWorkspace())
+    }
+
+    private fun isRunning(workspace: DevWorkspace?): Boolean {
+        return workspace?.running ?: false
     }
 
     inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {
