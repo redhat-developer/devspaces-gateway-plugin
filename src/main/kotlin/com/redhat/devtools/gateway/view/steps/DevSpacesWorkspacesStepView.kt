@@ -89,7 +89,7 @@ class DevSpacesWorkspacesStepView(
     override fun onInit() {
         listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
         listDevWorkspaces.onDoubleClick { 
-            if (!listDevWorkspaces.isSelectionEmpty) {
+            if (isRunning(getSelectedWorkspace())) {
                 connect()
             }
         }
