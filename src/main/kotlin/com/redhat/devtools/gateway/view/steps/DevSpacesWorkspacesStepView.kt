@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -41,7 +42,10 @@ import javax.swing.ListCellRenderer
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
 
-class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext) : DevSpacesWizardStep {
+class DevSpacesWorkspacesStepView(
+    private var devSpacesContext: DevSpacesContext,
+    private val enableNextButton: (() -> Unit)?
+) : DevSpacesWizardStep {
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.previous")
@@ -74,7 +78,6 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                 DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.refresh")
             ) {
                 refreshAllDevWorkspaces()
-                enableStopButton()
             }.gap(RightGap.SMALL).align(AlignX.RIGHT)
         }
     }.apply {
@@ -92,7 +95,6 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
         refreshAllDevWorkspaces()
-        enableStopButton()
     }
 
     override fun onPrevious(): Boolean {
@@ -111,6 +113,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
             {
                 try {
                     doRefreshAllDevWorkspaces()
+                    enableButtons()
                 } catch (e: Exception) {
                     Dialogs.error("Could not refresh workspaces: " + e.messageWithoutPrefix(), "Error Refreshing")
                 }
@@ -172,7 +175,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                                     it.namespace,
                                     it.name
                                 )
-                                enableStopButton()
+                                enableButtons()
                             }
                         },
                         "Refreshing Workspace",
@@ -189,11 +192,10 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
             return
         }
 
-        listDWDataModel
-            .get(listDevWorkspaces.selectedIndex)
-            .also {
-                devSpacesContext.devWorkspace = it
-            }
+        val selectedWorkspace = getSelectedWorkspace()
+        if (selectedWorkspace != null) {
+            devSpacesContext.devWorkspace = selectedWorkspace
+        }
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
@@ -204,7 +206,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                                 devSpacesContext.devWorkspace.namespace,
                                 devSpacesContext.devWorkspace.name
                             )
-                            enableStopButton()
+                            enableButtons()
                         },
                         {},
                         {
@@ -213,7 +215,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                                     devSpacesContext.devWorkspace.namespace,
                                     devSpacesContext.devWorkspace.name
                                 )
-                                enableStopButton()
+                                enableButtons()
                             }
                         }
                     )
@@ -222,7 +224,7 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
                         devSpacesContext.devWorkspace.namespace,
                         devSpacesContext.devWorkspace.name
                     )
-                    enableStopButton()
+                    enableButtons()
                     thisLogger().error("Remote server connection failed.", e)
                     Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace", "Connection Error")
                 }
@@ -243,15 +245,25 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
             )
     }
 
-    private fun enableStopButton() {
-        stopDevWorkspaceButton.isEnabled =
-            !listDevWorkspaces.isSelectionEmpty
-                    && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).started
+    private fun enableButtons() {
+        runInEdt {
+            val selectedWorkspaceStarted = getSelectedWorkspace()?.started ?: false
+
+            stopDevWorkspaceButton.isEnabled = selectedWorkspaceStarted
+            refreshNextButton()
+        }
+    }
+
+    private fun getSelectedWorkspace(): DevWorkspace? {
+        return if (listDevWorkspaces.minSelectionIndex >= 0) {
+            listDWDataModel.get(listDevWorkspaces.minSelectionIndex)
+        } else {
+            null
+        }
     }
 
     override fun isNextEnabled(): Boolean {
-        return !listDevWorkspaces.isSelectionEmpty
-                && listDWDataModel.get(listDevWorkspaces.minSelectionIndex).started
+        return getSelectedWorkspace()?.started ?: false
     }
 
     inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {
@@ -275,9 +287,14 @@ class DevSpacesWorkspacesStepView(private var devSpacesContext: DevSpacesContext
         }
     }
 
+    fun refreshNextButton() {
+        enableNextButton?.invoke()
+    }
+
     inner class DevWorkspaceSelection : ListSelectionListener {
         override fun valueChanged(e: ListSelectionEvent) {
-            enableStopButton()
+            enableButtons()
+            refreshNextButton()
         }
     }
 }

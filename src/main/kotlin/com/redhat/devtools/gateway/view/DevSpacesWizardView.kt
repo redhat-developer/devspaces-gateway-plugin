@@ -35,7 +35,7 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
 
     init {
         steps.add(DevSpacesServerStepView(devSpacesContext))
-        steps.add(DevSpacesWorkspacesStepView(devSpacesContext))
+        steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNextButton() })
 
         addToBottom(createButtons())
         applyStep(0)
@@ -95,10 +95,10 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
             onInit()
         }
 
-        refreshNextButtonState()
+        enableNextButton()
     }
 
-    private fun refreshNextButtonState() {
+    private fun enableNextButton() {
         val step = steps[currentStep]
         nextButton.isEnabled = step.isNextEnabled()
     }
