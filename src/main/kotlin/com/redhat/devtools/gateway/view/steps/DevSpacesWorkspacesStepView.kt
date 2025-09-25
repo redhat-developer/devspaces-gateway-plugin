@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
@@ -21,6 +22,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.RightGap
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.icons.EMPTY_ICON
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -192,9 +194,10 @@ class DevSpacesWorkspacesStepView(
             return
         }
 
-        val selectedWorkspace = getSelectedWorkspace()
-        if (selectedWorkspace != null) {
-            devSpacesContext.devWorkspace = selectedWorkspace
+        getSelectedWorkspace().apply {
+            if (this != null) {
+                devSpacesContext.devWorkspace = this
+            }
         }
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
@@ -275,10 +278,11 @@ class DevSpacesWorkspacesStepView(
             cellHasFocus: Boolean
         ): Component {
             val icon = DevSpacesIcons.getWorkspacePhaseIcon(devWorkspace.phase)
+                ?: AllIcons.Empty
             return JBLabel().apply {
                 font = JBFont.h4().asPlain()
                 border = JBUI.Borders.emptyLeft(6)
-                icon?.let { 
+                icon.let {
                     setIcon(it)
                     horizontalTextPosition = JBLabel.TRAILING
                 }
