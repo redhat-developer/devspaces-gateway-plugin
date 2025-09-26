@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.ui
 
+import com.intellij.openapi.util.Key
 import java.awt.event.ActionListener
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -18,6 +19,7 @@ import java.awt.event.KeyEvent
 import javax.swing.ComboBoxEditor
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JTextField
 import javax.swing.ListCellRenderer
@@ -27,7 +29,10 @@ import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.text.JTextComponent
 
+
 object FilteringComboBox {
+
+    private val popupOpened = PopupOpened()
 
     fun <T> create(
         allItems: List<T>,
@@ -39,11 +44,12 @@ object FilteringComboBox {
         val comboBox = JComboBox<T>()
         comboBox.isEditable = true
         comboBox.editor = UnsettableComboBoxEditor(allItems, toString, toType)
+        popupOpened.reset(comboBox)
 
         val model = DefaultComboBoxModel<T>()
         allItems.forEach { model.addElement(it) }
         comboBox.model = model
-        comboBox.setRenderer(onListItemRendered<T>(toString, ))
+        comboBox.setRenderer(onListItemRendered<T>(toString))
 
         comboBox.addPopupMenuListener(onPopupVisible(allItems, comboBox, toString))
 
@@ -51,7 +57,6 @@ object FilteringComboBox {
         editor?.addKeyListener(onKeyPressed(editor, comboBox, allItems, toString))
 
         comboBox.addItemListener(onItemSelected(editor, onItemUpdated, toString, type))
-
         return comboBox
     }
 
@@ -63,7 +68,7 @@ object FilteringComboBox {
         override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
             val editorText = getEditor(comboBox)?.text ?: ""
             val model = DefaultComboBoxModel<T>()
-            val items = if (editorText.isNotEmpty()) {
+            val items = if (popupOpened.isProgrammatic(comboBox)) {
                 filterItems(editorText, allItems, toString)
             } else {
                 allItems
@@ -71,6 +76,7 @@ object FilteringComboBox {
             items.forEach { model.addElement(it) }
             comboBox.model = model
             comboBox.selectedIndex = -1 // prevent item selection
+            popupOpened.reset(comboBox)
         }
 
         override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) {}
@@ -108,6 +114,10 @@ object FilteringComboBox {
                     if (selectedItem != null) {
                         onItemUpdated.invoke(selectedItem)
                         editorComponent?.text = toString(selectedItem) // circumvent ComboboxEditor
+                        SwingUtilities.invokeLater {
+                            editorComponent?.requestFocusInWindow()
+                            editorComponent?.selectAll()
+                        }
                     }
                 } catch(_: ClassCastException) {
                     // item is not of type T
@@ -136,27 +146,27 @@ object FilteringComboBox {
         comboBox: JComboBox<T>,
         items: List<T>
     ) {
+        popupOpened.setProgrammatic(true, comboBox)
         val editor = getEditor(comboBox)
         val selection = Selection(comboBox.editor.editorComponent as? JTextComponent).backup()
 
-        SwingUtilities.invokeLater {
-            val currentTextInEditor = editor?.text ?: ""
-            val model = DefaultComboBoxModel<T>()
-            items.forEach { model.addElement(it) }
+        val currentTextInEditor = editor?.text ?: ""
+        val model = DefaultComboBoxModel<T>()
+        items.forEach { model.addElement(it) }
 
-            comboBox.model = model
-            editor?.text = currentTextInEditor
+        comboBox.model = model
+        editor?.text = currentTextInEditor
 
-            // Restore the selection after the model and text are set
-            selection.restore()
-            comboBox.selectedIndex = -1 // prevent pre-selection
+        // Restore the selection after the model and text are set
+        selection.restore()
+        comboBox.selectedIndex = -1 // prevent pre-selection
 
-            if (items.isNotEmpty() && !comboBox.isPopupVisible) {
-                comboBox.showPopup()
-            } else if (items.isEmpty() && comboBox.isPopupVisible) {
-                comboBox.hidePopup()
-            }
+        if (items.isNotEmpty() && !comboBox.isPopupVisible) {
+            comboBox.showPopup()
+        } else if (items.isEmpty() && comboBox.isPopupVisible) {
+            comboBox.hidePopup()
         }
+        popupOpened.reset(comboBox)
     }
 
     private fun <T> filterItems(
@@ -251,4 +261,23 @@ object FilteringComboBox {
             }
         }
     }
+
+    class PopupOpened() {
+
+        private val key = Key.create<Boolean>("isPopupProgrammatic")
+
+        fun isProgrammatic(component: JComponent): Boolean {
+            val property = component.getClientProperty(key)
+            return property as? Boolean ?: false
+        }
+
+        fun setProgrammatic(value: Boolean, component: JComponent) {
+            component.putClientProperty(key, value)
+        }
+
+        fun reset(component: JComponent) {
+            setProgrammatic(false, component)
+        }
+    }
 }
+
