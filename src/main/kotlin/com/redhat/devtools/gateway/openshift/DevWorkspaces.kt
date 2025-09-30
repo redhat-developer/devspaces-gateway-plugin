@@ -48,6 +48,11 @@ class DevWorkspaces(private val client: ApiClient) {
             return dwItems
                 .stream()
                 .map { dwItem -> DevWorkspace.from(dwItem) }
+                .filter {
+                    val parts = it.editor.split("/")
+                    val segment = parts.getOrNull(1) ?: return@filter false
+                    Regex("che-.*-server").matches(segment)
+                }
                 .toList()
         } catch (e: ApiException) {
             thisLogger().info(e.message)

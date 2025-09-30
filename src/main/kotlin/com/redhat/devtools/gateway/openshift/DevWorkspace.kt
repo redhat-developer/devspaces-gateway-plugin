@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -43,6 +43,11 @@ data class DevWorkspace(
             return status.running
         }
 
+    val editor: String
+        get() {
+            return metadata.editor
+        }
+
     companion object {
         fun from(map: Any?) = object {
             val metadata = Utils.getValue(map, arrayOf("metadata")) ?: emptyMap<String, Any>()
@@ -65,6 +70,7 @@ data class DevWorkspace(
 
         if (metadata.name != other.metadata.name) return false
         if (metadata.namespace != other.metadata.namespace) return false
+        if (metadata.editor != other.metadata.editor) return false
 
         return true
     }
@@ -79,16 +85,19 @@ data class DevWorkspace(
 
 data class DevWorkspaceObjectMeta(
     val name: String,
-    val namespace: String
+    val namespace: String,
+    val editor: String
 ) {
     companion object {
         fun from(map: Any) = object {
             val name = Utils.getValue(map, arrayOf("name"))
             val namespace = Utils.getValue(map, arrayOf("namespace"))
+            val editor = Utils.getValue(map, arrayOf("annotations", "che.eclipse.org/che-editor")) ?: "unknown"
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
-                namespace as String
+                namespace as String,
+                editor as String
             )
         }.data
     }
