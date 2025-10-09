@@ -19,6 +19,7 @@ import com.redhat.devtools.gateway.openshift.Pods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import io.kubernetes.client.openapi.ApiException
 import java.io.IOException
+import java.net.ServerSocket
 import java.net.URI
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
@@ -29,10 +30,6 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDisconnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
     ): ThinClientHandle {
-        if (devSpacesContext.isConnected)
-            throw IOException("Already connected to ${devSpacesContext.devWorkspace.name}")
-
-        devSpacesContext.isConnected = true
         try {
             return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
@@ -56,14 +53,17 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
 
         val pods = Pods(devSpacesContext.client)
-        val forwarder = pods.forward(remoteIdeServer.pod, 5990, 5990)
-        pods.waitForForwardReady(5990)
+        // ✅ Dynamically find a free local port
+        val localPort = findFreePort()
+        val forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
+        pods.waitForForwardReady(localPort)
+        val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
         
         val client = LinkedClientManager
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
-                URI(joinLink),
+                URI(effectiveJoinLink),
                 "",
                 onConnected,
                 false
@@ -91,6 +91,13 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         }
 
         return client
+    }
+
+    private fun findFreePort(): Int {
+        ServerSocket(0).use { socket ->
+            socket.reuseAddress = true
+            return socket.localPort
+        }
     }
 
     @Throws(IOException::class, ApiException::class)

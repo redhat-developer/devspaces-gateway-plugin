@@ -188,11 +188,6 @@ class DevSpacesWorkspacesStepView(
     }
 
     private fun connect() {
-        if (devSpacesContext.isConnected) {
-            Dialogs.error("Already connected to ${devSpacesContext.devWorkspace.name}", "Connection failed")
-            return
-        }
-
         getSelectedWorkspace().apply {
             if (this != null) {
                 devSpacesContext.devWorkspace = this
