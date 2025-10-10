@@ -30,8 +30,8 @@ import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
 import kotlin.coroutines.resume
@@ -86,7 +86,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         }
                     } catch (e: ApiException) {
                         indicator.text = "Connection failed"
-                        runDelayed(2000, { indicator.stop() })
+                        runDelayed(2000, { if (indicator.isRunning) indicator.stop() })
                         if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
                             Dialogs.error(
                                 e.messageWithoutPrefix() ?: "Could not connect to workspace.",
@@ -96,11 +96,16 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
                         if (cont.isActive) cont.resume(null)
                     } catch (e: Exception) {
-                        runDelayed(2000) { indicator.stop() }
-                        Dialogs.error(
-                            e.message ?: "Could not connect to workspace.",
-                            "Connection Error"
-                        )
+                        if (indicator.isCanceled) {
+                            indicator.text2 = "Error: ${e.message}"
+                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
+                        } else {
+                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
+                            Dialogs.error(
+                                e.message ?: "Could not connect to workspace.",
+                                "Connection Error"
+                            )
+                        }
                         cont.resume(null)
                     }
                 },
@@ -121,8 +126,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 indicator.text = "Remote IDE has started successfully"
                 indicator.text2 = "Opening project window…"
                 runDelayed(3000) {
-                    indicator.stop()
-                    ready.complete(handle)
+                    if (indicator.isRunning) indicator.stop()
+                    if (ready.isActive) ready.complete(handle)
                 }
             }
         }
@@ -136,8 +141,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             if (!ready.isCompleted) {
                 indicator.text = "Failed to open remote project (code: $errorCode)"
                 runDelayed(2000) {
-                    indicator.stop()
-                    ready.complete(null)
+                    if (indicator.isRunning) indicator.stop()
+                    if (ready.isActive) ready.complete(null)
                 }
             }
         }
@@ -151,8 +156,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             if (!ready.isCompleted) {
                 indicator.text = "Remote IDE closed unexpectedly."
                 runDelayed(2000) {
-                    indicator.stop()
-                    ready.complete(null)
+                    if (indicator.isRunning) indicator.stop()
+                    if (ready.isActive) ready.complete(null)
                 }
             }
         }
@@ -190,7 +195,18 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
         indicator.text2 = "Establishing remote IDE connection…"
         val thinClient = DevSpacesConnection(ctx)
-            .connect({}, {}, {})
+            .connect({}, {}, {},
+                onProgress = { message ->
+                    if (!message.isEmpty()) {
+                        indicator.text2 = message
+                    }
+                },
+                checkCancelled = {
+                    if (indicator.isCanceled) {
+                        throw CancellationException("User cancelled the operation")
+                    }
+                }
+            )
 
         indicator.text2 = "Connection established successfully."
         return DevSpacesConnectionHandle(
