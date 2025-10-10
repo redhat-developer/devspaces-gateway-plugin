@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -13,7 +13,6 @@
 package com.redhat.devtools.gateway.server
 
 import com.google.gson.Gson
-import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
@@ -22,6 +21,7 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import java.util.concurrent.CancellationException
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -70,13 +70,24 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    suspend fun waitServerReady() {
-        doWaitServerProjectExists(true)
+    suspend fun waitServerReady(
+        checkCancelled: (() -> Unit)? = null
+    ) {
+        doWaitServerState(true, readyTimeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
                     "Remote IDE server is not ready after $readyTimeout seconds.",
                 )
             }
+    }
+
+    fun isServerState(isReadyState: Boolean): Boolean {
+        return try {
+            (getStatus().isReady == isReadyState)
+        } catch (e: Exception) {
+            thisLogger().debug("Failed to check remote IDE server state.", e)
+            false
+        }
     }
 
     @Throws(IOException::class)
@@ -91,14 +102,17 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
      * @param expected True if projects are expected, False otherwise,
      * @return True if the expected state is achieved within the timeout, False otherwise.
      */
-    private suspend fun doWaitServerProjectExists(expected: Boolean): Boolean {
+    @Throws(CancellationException::class)
+    private suspend fun doWaitServerProjectExists(expected: Boolean,
+            checkCancelled: (() -> Unit)? = null): Boolean {
         val timeout = 10.seconds
 
         return withTimeoutOrNull(timeout) {
             while (true) {
+                checkCancelled?.invoke() // Throws CancellationException
                 val hasProjects = try {
                     val status = getStatus()
-                    status.projects.isNotEmpty()
+                    status.projects?.isNotEmpty()
                 } catch (e: Exception) {
                     thisLogger().debug("Failed to check remote IDE server state.", e)
                     null
@@ -113,6 +127,27 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             @Suppress("UNREACHABLE_CODE")
             null
         } ?: false
+    }
+
+    @Throws(IOException::class, CancellationException::class)
+    private  suspend fun doWaitServerState(
+        isReadyState: Boolean,
+        timeout: Long = readyTimeout,
+        checkCancelled: (() -> Unit)? = null
+    ): Boolean {
+        return withTimeoutOrNull(timeout * 1000) { // convert seconds to ms
+            while (true) {
+                checkCancelled?.invoke() // Throws CancellationException if needed
+
+                if (isServerState(isReadyState)) {
+                    return@withTimeoutOrNull true
+                }
+
+                delay(500L)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            null
+        } ?: false // false if timeout occurred
     }
 
     @Throws(IOException::class)

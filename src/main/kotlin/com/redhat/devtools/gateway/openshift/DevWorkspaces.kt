@@ -20,9 +20,12 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
-import java.util.concurrent.Executors
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.seconds
 
 
 class DevWorkspaces(private val client: ApiClient) {
@@ -142,86 +145,71 @@ class DevWorkspaces(private val client: ApiClient) {
         doPatch(namespace, name, patch)
     }
 
-    @Throws(ApiException::class, IOException::class)
-    fun waitPhase(
+    @Throws(ApiException::class, IOException::class, CancellationException::class)
+    suspend fun waitPhase(
         namespace: String,
         name: String,
         desiredPhase: String,
-        timeout: Long
+        timeout: Long,
+        checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        var phaseIsDesiredState = false
-
-        val watcher = createWatcher(namespace, "metadata.name=$name")
-        val executor = Executors.newSingleThreadScheduledExecutor()
-        executor.schedule(
-            {
+        return withTimeoutOrNull(timeout.seconds) {
+            while (true) {
+                checkCancelled?.invoke()
+                val watcher = createWatcher(namespace, "metadata.name=$name")
                 try {
-                    for (item in watcher) {
-                        val devWorkspace = DevWorkspace.from(item.`object`)
-                        if (desiredPhase == devWorkspace.phase) {
-                            phaseIsDesiredState = true
-                            break
+                    for (event in watcher) {
+                        checkCancelled?.invoke()
+                        val workspace = DevWorkspace.from(event.`object`)
+                        if (workspace.phase == desiredPhase) {
+                            return@withTimeoutOrNull true
                         }
                     }
                 } finally {
                     watcher.close()
-                    executor.shutdown()
                 }
-            },
-            0,
-            TimeUnit.SECONDS
-        )
 
-        try {
-            executor.awaitTermination(timeout, TimeUnit.SECONDS)
-        } finally {
-            watcher.close()
-            executor.shutdown()
-        }
+                // Watch ended because server closed the stream → retry a new watch
+                delay(200)
+            }
 
-        return phaseIsDesiredState
+            @Suppress("UNREACHABLE_CODE")
+            false
+        } ?: false
     }
 
     // Waits until the DevWorkspace goes out of any the given phases
-    @Throws(ApiException::class, IOException::class)
-    fun waitPhaseChanges(
+    @Throws(ApiException::class, IOException::class, CancellationException::class)
+    suspend fun waitPhaseChanges(
         namespace: String,
         name: String,
         currentPhases: Collection<String>,
-        timeout: Long
+        timeout: Long,              // in seconds
+        checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        var phaseChanged = false
-
-        val watcher = createWatcher(namespace, "metadata.name=$name")
-        val executor = Executors.newSingleThreadScheduledExecutor()
-
-        executor.schedule (
-            {
+        return withTimeoutOrNull(timeout.seconds) {
+            while (true) {
+                checkCancelled?.invoke()
+                val watcher = createWatcher(namespace, "metadata.name=$name")
                 try {
-                    for (item in watcher) {
-                        val devWorkspace = DevWorkspace.from(item.`object`)
-                        if (devWorkspace.phase !in currentPhases) {
-                            phaseChanged = true
-                            break
+                    for (event in watcher) {
+                        checkCancelled?.invoke()
+                        val workspace = DevWorkspace.from(event.`object`)
+                        if (workspace.phase !in currentPhases) {
+                            return@withTimeoutOrNull true // phase changed out of the given set
                         }
                     }
                 } finally {
                     watcher.close()
-                    executor.shutdown()
                 }
-            },
-            0,
-            TimeUnit.SECONDS
-        )
 
-        try {
-            executor.awaitTermination(timeout, TimeUnit.SECONDS)
-        } finally {
-            watcher.close()
-            executor.shutdownNow()
-        }
+                // Watch ended because server closed the stream → retry a new watch
+                delay(200)
+            }
 
-        return phaseChanged
+            @Suppress("UNREACHABLE_CODE")
+            false
+        } ?: false
     }
 
     // Example:
