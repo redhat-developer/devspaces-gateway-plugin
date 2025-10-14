@@ -28,6 +28,11 @@ data class DevWorkspace(
             return metadata.name
         }
 
+    val uid: String
+        get() {
+            return metadata.uid
+        }
+
     val started: Boolean
         get() {
             return spec.started
@@ -43,9 +48,9 @@ data class DevWorkspace(
             return status.running
         }
 
-    val editor: String
+    val cheEditor: String?
         get() {
-            return metadata.editor
+            return metadata.cheEditor
         }
 
     companion object {
@@ -70,7 +75,7 @@ data class DevWorkspace(
 
         if (metadata.name != other.metadata.name) return false
         if (metadata.namespace != other.metadata.namespace) return false
-        if (metadata.editor != other.metadata.editor) return false
+        if (metadata.cheEditor != other.metadata.cheEditor) return false
 
         return true
     }
@@ -86,18 +91,21 @@ data class DevWorkspace(
 data class DevWorkspaceObjectMeta(
     val name: String,
     val namespace: String,
-    val editor: String
+    val uid: String,
+    val cheEditor: String?
 ) {
     companion object {
         fun from(map: Any) = object {
             val name = Utils.getValue(map, arrayOf("name"))
             val namespace = Utils.getValue(map, arrayOf("namespace"))
-            val editor = Utils.getValue(map, arrayOf("annotations", "che.eclipse.org/che-editor")) ?: "unknown"
+            val uid = Utils.getValue(map, arrayOf("uid"))
+            val cheEditor = Utils.getValue(map, arrayOf("annotations", "che.eclipse.org/che-editor"))
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
                 namespace as String,
-                editor as String
+                uid as String,
+                cheEditor as String?
             )
         }.data
     }
