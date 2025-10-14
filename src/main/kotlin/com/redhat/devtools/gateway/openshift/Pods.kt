@@ -11,6 +11,8 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.intellij.openapi.diagnostic.logger
+import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.Exec
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
@@ -21,12 +23,14 @@ import io.kubernetes.client.openapi.models.V1PodList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -35,12 +39,21 @@ import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.BindException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.TimeUnit
 
 class Pods(private val client: ApiClient) {
+
+    companion object {
+        private const val CONNECT_ATTEMPTS = 5
+        private const val RECONNECT_DELAY: Long = 1000
+    }
+
+    private val logger = logger<Pods>()
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
@@ -89,47 +102,103 @@ class Pods(private val client: ApiClient) {
     }
 
     private fun CoroutineScope.copyStream(input: InputStream, output: ByteArrayOutputStream
-        ): Job = launch(Dispatchers.IO) {
-            input.copyTo(output)
-        }
+    ): Job = launch(Dispatchers.IO) {
+        input.copyTo(output)
+    }
 
-    // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/PortForwardExample.java
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
-        val portForward = PortForward(client)
-        val forwardResult = portForward.forward(pod, listOf(remotePort))
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
+        val scope = CoroutineScope(
+            // dont cancel if child coroutine fails + use blocking I/O scope
+            SupervisorJob() + Dispatchers.IO
+        )
 
-        val scope = CoroutineScope(Dispatchers.IO)
-        scope.launch {
-            val clientSocket = serverSocket.accept()
-            try {
-                copyStreams(clientSocket, forwardResult, remotePort)
-            } catch (e: IOException) {
-                if (coroutineContext.isActive) throw e
-            } finally {
-                clientSocket.close()
-            }
-        }
+        scope.acceptConnections(serverSocket, pod, localPort, remotePort)
 
         return Closeable {
-            try {
-                scope.cancel()
-                runBlocking {
-                    scope.coroutineContext.job.join()
-                }
+            runCatching { serverSocket.close() }
+            scope.cancel()
+        }
+    }
 
-                serverSocket.close()
-                try {
-                    forwardResult.getInputStream(remotePort).close()
-                    forwardResult.getOutboundStream(remotePort).close()
-                } catch (_: Exception) {
-                    // Ignore errors when closing streams
+    private fun CoroutineScope.acceptConnections(
+        serverSocket: ServerSocket,
+        pod: V1Pod,
+        localPort: Int,
+        remotePort: Int
+    ) {
+        launch {
+            logger.info("Starting port forward on local port $localPort...")
+
+            while (isActive) {
+                val clientSocket = createClientSocket(serverSocket) ?: break
+
+                launch {
+                    handleConnection(
+                        clientSocket,
+                        pod,
+                        localPort,
+                        remotePort
+                    )
                 }
-            } catch (_: Exception) {
-                // Ignore cleanup errors
             }
+        }
+    }
+
+    private suspend fun createClientSocket(serverSocket: ServerSocket): Socket? {
+        return try {
+            withContext(NonCancellable) {
+                // block until connection is accepted
+                serverSocket.accept()
+            }
+        } catch (_: Exception) {
+            logger.info("Server socket stopped accepting connections.")
+            null
+        }
+    }
+
+    private suspend fun CoroutineScope.handleConnection(
+        clientSocket: Socket,
+        pod: V1Pod,
+        localPort: Int,
+        remotePort: Int
+    ) {
+        try {
+            repeat(CONNECT_ATTEMPTS) { attempt ->
+                if (!isActive) return@repeat
+
+                var forwardResult: PortForward.PortForwardResult? = null
+                try {
+                    logger.info("Attempt #${attempt + 1}: Connecting $localPort -> $remotePort...")
+                    val portForward = PortForward(client)
+                    forwardResult = portForward.forward(pod, listOf(remotePort))
+                    copyStreams(clientSocket, forwardResult, remotePort)
+                    return
+                } catch (e: IOException) {
+                    logger.info(
+                        "Could not port forward $localPort -> $remotePort: ${e.message}. " +
+                                "Retrying in ${RECONNECT_DELAY}ms..."
+                    )
+                    if (isActive) {
+                        delay(RECONNECT_DELAY)
+                    }
+                } finally {
+                    runCatching {
+                        forwardResult?.getInputStream(remotePort)?.close()
+                        forwardResult?.getOutboundStream(remotePort)?.close()
+                    }
+                }
+            }
+        } catch(e: Exception) {
+            logger.info(
+                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
+                e)
+            Dialogs.error(
+                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort: ${e.message}",
+                "Port Forward Error")
+        } finally {
+            runCatching { clientSocket.close() }
         }
     }
 
@@ -142,18 +211,22 @@ class Pods(private val client: ApiClient) {
         coroutineScope {
             ensureActive()
             launch {
-                copyStreams(forwardResult.getInputStream(remotePort), clientSocket.getOutputStream())
+                clientSocket.getInputStream().copyToAndHandleExceptions(forwardResult.getOutboundStream(remotePort))
             }
             launch {
-                copyStreams(clientSocket.getInputStream(), forwardResult.getOutboundStream(remotePort))
+                forwardResult.getInputStream(remotePort).copyToAndHandleExceptions(clientSocket.getOutputStream())
             }
         }
     }
 
-    @Throws(IOException::class)
-    private fun copyStreams(source: InputStream, destination: OutputStream) {
-        source.copyTo(destination)
-        destination.run { flush() }
+    private fun InputStream.copyToAndHandleExceptions(destination: OutputStream) {
+        try {
+            this.copyTo(destination)
+            destination.flush()
+        } catch (e: IOException) {
+            logger.info("IOException during stream copy: ${e.message}")
+            throw e
+        }
     }
 
     @Throws(IOException::class)
@@ -164,11 +237,11 @@ class Pods(private val client: ApiClient) {
         repeat(maxRetries) { attempt ->
             try {
                 val testSocket = ServerSocket()
-                testSocket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                testSocket.bind(InetSocketAddress("127.0.0.1", port))
                 testSocket.close()
                 // If we can bind to the port, it means port forwarding is not ready yet
                 Thread.sleep(retryDelay)
-            } catch (_: java.net.BindException) {
+            } catch (_: BindException) {
                 // Port is already in use, which means port forwarding is ready
                 return
             } catch (e: Exception) {
