@@ -31,7 +31,11 @@ repositories {
 
 // Dependencies are managed with Gradle version catalog - read more: https://docs.gradle.org/current/userguide/platforms.html#sub:version-catalog
 dependencies {
-    testImplementation(libs.junit)
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")
+    testImplementation("org.junit.platform:junit-platform-launcher:1.11.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
+    testImplementation("org.assertj:assertj-core:3.23.1")
+    testImplementation("io.mockk:mockk:1.14.6")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
@@ -135,6 +139,11 @@ tasks {
 
     publishPlugin {
         dependsOn(patchChangelog)
+    }
+
+    withType<Test> {
+        useJUnitPlatform()
+        jvmArgs("-Dnet.bytebuddy.experimental=true", "-Dmockk.agent.global=false")
     }
 }
 

@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
-import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.Exec
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
@@ -113,9 +112,7 @@ class Pods(private val client: ApiClient) {
             // dont cancel if child coroutine fails + use blocking I/O scope
             SupervisorJob() + Dispatchers.IO
         )
-
         scope.acceptConnections(serverSocket, pod, localPort, remotePort)
-
         return Closeable {
             runCatching { serverSocket.close() }
             scope.cancel()
@@ -191,12 +188,9 @@ class Pods(private val client: ApiClient) {
                 }
             }
         } catch(e: Exception) {
-            logger.info(
+            logger.warn(
                 "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
                 e)
-            Dialogs.error(
-                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort: ${e.message}",
-                "Port Forward Error")
         } finally {
             runCatching { clientSocket.close() }
         }
