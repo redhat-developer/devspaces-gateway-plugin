@@ -31,9 +31,9 @@ repositories {
 
 // Dependencies are managed with Gradle version catalog - read more: https://docs.gradle.org/current/userguide/platforms.html#sub:version-catalog
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:6.0.0")
     testImplementation("org.junit.platform:junit-platform-launcher:1.11.0")
-    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:6.0.0")
     testImplementation("org.assertj:assertj-core:3.27.6")
     testImplementation("io.mockk:mockk:1.14.6")
 
