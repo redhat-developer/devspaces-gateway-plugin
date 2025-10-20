@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+## [0.0.13] - 2025-10-20
+
+### ✨ New Features and Enhancements
+
+- Multi-connection support by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/188
+- Double-click on a workspace to connect to it (#23544) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/175
+- Icons are used to display a workspace phase by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/178
+- Only the workspaces with JetBraisn IDE are listed by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/185
+- The progress bar dialogs are consistent across the plugin (#23547) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/171
+- Increased wizard borders for nicer looks by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/176
+- feature: cluster combobox displays '<cluster name> (<cluster url>)' (#23561) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/179
+- disable the 'Connect' button when a stopped workspace is selected (#23566) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/177
+- Auto-reconnecting a local IDE to workspace after losing/restoring the network connection by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/190
+- avoid connection issues: implemented proper wait for port forwarding by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/173
+
+### 🐛 Bug Fixes
+
+- fix: don't connect if no joinLink, show error (#23549) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/168
+- fix: enable/disable connect button upon ws-selection change (#23581) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/182
+- fix: don't allow double-click on non-running ws (#23581) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/183
+
+### 🛠️ Code Improvements
+
+- replaced String.format() by kotlin string templates by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/172
+
+### ⬆️ Dependency Updates
+
+- Bump org.jetbrains.kotlinx.kover from 0.9.2 to 0.9.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/192
+- Bump org.junit.jupiter:junit-jupiter-api from 5.11.0 to 6.0.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/195
+- Bump org.assertj:assertj-core from 3.23.1 to 3.27.6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/193
+- Bump org.jetbrains.kotlinx.kover from 0.9.1 to 0.9.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/174
+- Bump gradle/actions from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/186
+
 ## [0.0.12] - 2025-09-12
 
 ### ✨ New Features and Enhancements
@@ -107,7 +140,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.13...HEAD
+[0.0.13]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...v0.0.10
