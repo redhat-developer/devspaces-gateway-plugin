@@ -25,7 +25,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DevWorkspaces(private val client: ApiClient) {
+    private val customApi = CustomObjectsApi(client)
+
     companion object {
+        private val CHE_EDITOR_ID_REGEX = Regex("che-.*-server", RegexOption.IGNORE_CASE)
+
         val FAILED: String = "Failed"
         val RUNNING: String = "Running"
         val STOPPED: String = "Stopped"
@@ -35,8 +39,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     fun list(namespace: String): List<DevWorkspace> {
-        val customApi = CustomObjectsApi(client)
-        try {
+       try {
             val response = customApi.listNamespacedCustomObject(
                 "workspace.devfile.io",
                 "v1alpha2",
@@ -44,16 +47,14 @@ class DevWorkspaces(private val client: ApiClient) {
                 "devworkspaces"
             ).execute()
 
+            val devWorkspaceTemplateMap = getDevWorkspaceTemplateMap(namespace)
             val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
             return dwItems
                 .stream()
                 .map { dwItem -> DevWorkspace.from(dwItem) }
-                .filter {
-                    val parts = it.editor.split("/")
-                    val segment = parts.getOrNull(1) ?: return@filter false
-                    Regex("che-.*-server").matches(segment)
-                }
+                .filter { isIdeaEditorBased(it, devWorkspaceTemplateMap) }
                 .toList()
+
         } catch (e: ApiException) {
             thisLogger().info(e.message)
 
@@ -72,8 +73,29 @@ class DevWorkspaces(private val client: ApiClient) {
         }
     }
 
+    fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
+        // Quick editor ID check
+        val segment = devWorkspace.cheEditor?.split("/")?.getOrNull(1)
+        if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
+             return true
+        }
+
+        // DevWorkspace Template check
+        val templates = devWorkspaceTemplateMap[devWorkspace.uid] ?: return false
+        return templates.any { template ->
+            @Suppress("UNCHECKED_CAST")
+            val components = template.components as? List<Any> ?: return@any false
+            components.any { component: Any ->
+                val map = component as? Map<*, *> ?: return@any false
+                val volume = map["volume"] as? Map<*, *>
+                // Check 'volume.name' first (v1alpha1), fallback to top-level 'name' (v1alpha2)
+                val name = volume?.get("name") as? String ?: map["name"] as? String
+                name.equals("idea-server", ignoreCase = true)
+            }
+        }
+    }
+
     fun get(namespace: String, name: String): DevWorkspace {
-        val customApi = CustomObjectsApi(client)
         val dwObj = customApi.getNamespacedCustomObject(
             "workspace.devfile.io",
             "v1alpha2",
@@ -82,6 +104,29 @@ class DevWorkspaces(private val client: ApiClient) {
             name
         ).execute()
         return DevWorkspace.from(dwObj)
+    }
+
+    // Returns a map of DW Owner UID tp list of DW Templates
+    fun getDevWorkspaceTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
+        val dwTemplateList = customApi
+            .listNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspacetemplates",
+            )
+            .execute()
+
+        val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
+        return items
+            .map { DevWorkspaceTemplate.from(it) }
+            .flatMap { templ ->
+                templ.ownerRefencesUids.map { uid -> uid to templ }
+            }
+            .groupBy(
+                keySelector = { it.first },   // UID
+                valueTransform = { it.second } // DevWorkspaceTemplate
+            )
     }
 
     @Throws(ApiException::class)
@@ -140,7 +185,6 @@ class DevWorkspaces(private val client: ApiClient) {
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/PatchExample.java
     @Throws(ApiException::class)
     private fun doPatch(namespace: String, name: String, body: Any) {
-        val customApi = CustomObjectsApi(client)
         PatchUtils.patch(
             DevWorkspace.javaClass,
             {
@@ -161,10 +205,9 @@ class DevWorkspaces(private val client: ApiClient) {
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
     private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
-        val customObjectsApi = CustomObjectsApi(client)
         return Watch.createWatch(
             client,
-            customObjectsApi.listNamespacedCustomObject(
+            customApi.listNamespacedCustomObject(
                 "workspace.devfile.io",
                 "v1alpha2",
                 namespace,
