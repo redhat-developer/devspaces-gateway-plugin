@@ -172,22 +172,20 @@ class Pods(private val client: ApiClient) {
                     forwardResult = portForward.forward(pod, listOf(remotePort))
                     copyStreams(clientSocket, forwardResult, remotePort)
                     return
-                } catch (e: IOException) {
+                } catch (e: Exception) {
+                    if (e is kotlin.coroutines.cancellation.CancellationException) throw e
                     logger.info(
-                        "Could not port forward $localPort -> $remotePort: ${e.message}. " +
-                                "Retrying in ${RECONNECT_DELAY}ms..."
+                        "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
                     )
                     if (isActive) {
                         delay(RECONNECT_DELAY)
                     }
                 } finally {
-                    runCatching {
-                        forwardResult?.getInputStream(remotePort)?.close()
-                        forwardResult?.getOutboundStream(remotePort)?.close()
-                    }
+                  closeStreams(remotePort, forwardResult)
                 }
             }
         } catch(e: Exception) {
+            if (e is kotlin.coroutines.cancellation.CancellationException) throw e
             logger.warn(
                 "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
                 e)
@@ -205,20 +203,35 @@ class Pods(private val client: ApiClient) {
         coroutineScope {
             ensureActive()
             launch {
-                clientSocket.getInputStream().copyToAndHandleExceptions(forwardResult.getOutboundStream(remotePort))
+                try {
+                    clientSocket.getInputStream().copyToAndFlush(forwardResult.getOutboundStream(remotePort))
+                } catch (e: Exception) {
+                    closeStreams(remotePort, forwardResult)
+                    throw e
+                }
             }
             launch {
-                forwardResult.getInputStream(remotePort).copyToAndHandleExceptions(clientSocket.getOutputStream())
+                try {
+                    forwardResult.getInputStream(remotePort).copyToAndFlush(clientSocket.getOutputStream())
+                } catch (e: Exception) {
+                    closeStreams(remotePort, forwardResult)
+                    throw e
+                }
             }
         }
     }
 
-    private fun InputStream.copyToAndHandleExceptions(destination: OutputStream) {
+    private fun closeStreams(port: Int, forwardResult: PortForward.PortForwardResult?) {
+      runCatching { forwardResult?.getInputStream(port)?.close() }
+      runCatching { forwardResult?.getOutboundStream(port)?.close() }
+    }
+
+    private fun InputStream.copyToAndFlush(destination: OutputStream) {
         try {
-            this.copyTo(destination)
+            copyTo(destination)
             destination.flush()
         } catch (e: IOException) {
-            logger.info("IOException during stream copy: ${e.message}")
+            logger.info("IOException during stream copy.", e)
             throw e
         }
     }
