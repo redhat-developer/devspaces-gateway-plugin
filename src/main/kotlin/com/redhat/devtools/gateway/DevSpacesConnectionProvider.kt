@@ -68,15 +68,62 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
                         val ready = CompletableDeferred<GatewayConnectionHandle?>()
 
-                        thinClient.onClientPresenceChanged.advise(thinClient.lifetime,
-                            onClientPresenceChanged(ready, indicator, handle)
-                        )
-                        thinClient.clientFailedToOpenProject.advise(thinClient.lifetime,
-                            onClientFailedToOpenProject(ready, indicator)
-                        )
-                        thinClient.clientClosed.advise(thinClient.lifetime,
-                            onClientClosed(ready, indicator)
-                        )
+                        // Simple timeout for stuck dialogs - longer to avoid interfering with normal startup
+                        val maxWaitTime = 180000L // 3 minutes - should be enough for normal IDE startup
+                        val timeoutTimer = javax.swing.Timer(maxWaitTime.toInt()) {
+                            ApplicationManager.getApplication().invokeLater {
+                                if (!ready.isCompleted) {
+                                    thisLogger().warn("Connection timed out after ${maxWaitTime/1000} seconds")
+                                    indicator.text = "Connection timed out."
+                                    indicator.text2 = "If you restarted the remote IDE, please cancel and try connecting again."
+                                    runDelayed(5000) {
+                                        indicator.stop()
+                                        ready.complete(null)
+                                    }
+                                }
+                            }
+                        }
+                        timeoutTimer.isRepeats = false
+                        timeoutTimer.start()
+
+                        // Set up simple event handlers - no aggressive recovery, just normal flow
+                        thinClient.onClientPresenceChanged.advise(thinClient.lifetime) {
+                            timeoutTimer.stop()
+                            ApplicationManager.getApplication().invokeLater {
+                                if (!ready.isCompleted) {
+                                    indicator.text = "Remote IDE connected successfully"
+                                    indicator.text2 = "Opening project..."
+                                    runDelayed(1000) {
+                                        indicator.stop()
+                                        ready.complete(handle)
+                                    }
+                                }
+                            }
+                        }
+
+                        thinClient.clientFailedToOpenProject.advise(thinClient.lifetime) { errorCode ->
+                            timeoutTimer.stop()
+                            ApplicationManager.getApplication().invokeLater {
+                                if (!ready.isCompleted) {
+                                    indicator.text = "Failed to open project (error: $errorCode)"
+                                    runDelayed(2000) {
+                                        indicator.stop()
+                                        ready.complete(null)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Handle connection closure - this might be normal during startup, so don't be too aggressive
+                        thinClient.clientClosed.advise(thinClient.lifetime) {
+                            // Only handle if we haven't completed yet (avoid interfering with normal shutdown)
+                            if (!ready.isCompleted) {
+                                thisLogger().debug("ThinClient closed during connection setup")
+                                // Don't immediately fail - let the timeout handle it gracefully
+                                // This prevents false positives during normal IDE startup handshake
+                            }
+                        }
+
                         ready.invokeOnCompletion { error ->
                             if (error == null) {
                                 cont.resume(ready.getCompleted())
@@ -111,52 +158,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
     }
 
-    private fun onClientPresenceChanged(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator,
-        handle: GatewayConnectionHandle
-    ): (Unit) -> Unit = {
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Remote IDE has started successfully"
-                indicator.text2 = "Opening project window…"
-                runDelayed(3000) {
-                    indicator.stop()
-                    ready.complete(handle)
-                }
-            }
-        }
-    }
 
-    private fun onClientFailedToOpenProject(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator
-    ): (Int) -> Unit = { errorCode ->
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Failed to open remote project (code: $errorCode)"
-                runDelayed(2000) {
-                    indicator.stop()
-                    ready.complete(null)
-                }
-            }
-        }
-    }
-
-    private fun onClientClosed(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator
-    ): (Unit) -> Unit = {
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Remote IDE closed unexpectedly."
-                runDelayed(2000) {
-                    indicator.stop()
-                    ready.complete(null)
-                }
-            }
-        }
-    }
 
     @Suppress("UnstableApiUsage")
     @Throws(IllegalArgumentException::class)
@@ -189,8 +191,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
         indicator.text2 = "Establishing remote IDE connection…"
-        val thinClient = DevSpacesConnection(ctx)
-            .connect({}, {}, {})
+        val devSpacesConnection = DevSpacesConnection(ctx)
+        val thinClient = devSpacesConnection.connect({}, {
+          System.err.print("================================>onDisconnected")
+        }, {})
 
         indicator.text2 = "Connection established successfully."
         return DevSpacesConnectionHandle(
@@ -242,7 +246,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         val message = """
             Workspace or DevWorkspace support not found.
             You're likely connected to a cluster that doesn't have the DevWorkspace Operator installed, or the specified workspace doesn't exist.
-        
+
             Please verify your Kubernetes context, namespace, and that the DevWorkspace Operator is installed and running.
         """.trimIndent()
 

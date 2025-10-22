@@ -28,7 +28,7 @@ import java.io.IOException
 class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     var pod: V1Pod
     private var container: V1Container
-    private var readyTimeout: Long = 60
+    private var readyTimeout: Long = 180 // 3 minutes to allow for IDE restart
 
     init {
         pod = findPod()
@@ -68,13 +68,27 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitServerReady() {
-        doWaitServerState(true)
-            .also {
-                if (!it) throw IOException(
-                    "Remote IDE server is not ready after $readyTimeout seconds.",
-                )
+    fun waitServerReady(timeoutSeconds: Long = 30) {
+        val startTime = System.currentTimeMillis()
+        val timeoutMs = timeoutSeconds * 1000 // Convert seconds to milliseconds
+        
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            if (doWaitServerState(true)) {
+                thisLogger().debug("Remote IDE server is ready")
+                return
             }
+            
+            try {
+                Thread.sleep(5000) // Wait 5 seconds before next check
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IOException("Interrupted while waiting for server to be ready")
+            }
+        }
+        
+        throw IOException(
+            "Remote IDE server is not ready after $timeoutSeconds seconds."
+        )
     }
 
     @Throws(IOException::class)
