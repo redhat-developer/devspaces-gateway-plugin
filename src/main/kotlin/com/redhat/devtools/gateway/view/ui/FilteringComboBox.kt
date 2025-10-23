@@ -213,7 +213,7 @@ object FilteringComboBox {
         override fun addActionListener(listener: ActionListener?) {
             textField.addActionListener(listener)
         }
-
+        
         override fun removeActionListener(listener: ActionListener?) {
             textField.removeActionListener(listener)
         }
