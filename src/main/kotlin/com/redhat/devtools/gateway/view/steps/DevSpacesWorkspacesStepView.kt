@@ -206,7 +206,9 @@ class DevSpacesWorkspacesStepView(
                             )
                             enableButtons()
                         },
-                        {},
+                        {
+                            enableButtons()
+                        },
                         {
                             if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
                                 refreshDevWorkspace(
@@ -245,10 +247,22 @@ class DevSpacesWorkspacesStepView(
 
     private fun enableButtons() {
         runInEdt {
-            val selectedWorkspaceStarted = isRunning(getSelectedWorkspace())
+            val workspace = getSelectedWorkspace()
+            val running = isRunning(workspace)
+            val alreadyConnected = isAlreadyConnected(workspace)
 
-            stopDevWorkspaceButton.isEnabled = selectedWorkspaceStarted
+            // stop button enabled only if workspace is running
+            stopDevWorkspaceButton.isEnabled = running
+
+            // Enable/disable "Next" (connect) button dynamically
             refreshNextButton()
+
+            // Optional: tooltip for clarity
+            if (alreadyConnected) {
+                stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
+            } else {
+                stopDevWorkspaceButton.toolTipText = null
+            }
         }
     }
 
@@ -261,11 +275,20 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun isNextEnabled(): Boolean {
-        return isRunning(getSelectedWorkspace())
+        val workspace = getSelectedWorkspace() ?: return false
+        return isRunning(workspace) && !isAlreadyConnected(workspace)
     }
 
     private fun isRunning(workspace: DevWorkspace?): Boolean {
         return workspace?.running ?: false
+    }
+
+    /**
+     * Returns true if the workspace is already connected (client-side session active).
+     */
+    private fun isAlreadyConnected(workspace: DevWorkspace?): Boolean {
+        if (workspace == null) return false
+        return devSpacesContext.activeWorkspaces.contains(workspace)
     }
 
     inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {

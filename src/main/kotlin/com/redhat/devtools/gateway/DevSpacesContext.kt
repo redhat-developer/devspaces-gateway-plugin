@@ -17,5 +17,5 @@ import io.kubernetes.client.openapi.ApiClient
 class DevSpacesContext {
     lateinit var client: ApiClient
     lateinit var devWorkspace: DevWorkspace
-    var isConnected = false
+    var activeWorkspaces = mutableSetOf<DevWorkspace>()  // Global or companion-level variable
 }
