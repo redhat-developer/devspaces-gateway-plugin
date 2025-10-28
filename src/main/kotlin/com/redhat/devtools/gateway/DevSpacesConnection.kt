@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway
 
+import com.intellij.openapi.diagnostic.thisLogger
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
@@ -33,7 +34,6 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         try {
             return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
-            devSpacesContext.isConnected = false
             throw e
         }
     }
@@ -45,52 +45,139 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit
     ): ThinClientHandle {
-        startAndWaitDevWorkspace()
+        val workspace = devSpacesContext.devWorkspace
 
-        val remoteIdeServer = RemoteIDEServer(devSpacesContext)
-        val remoteIdeServerStatus = remoteIdeServer.getStatus()
-        val joinLink = remoteIdeServerStatus.joinLink
-            ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
-
-        val pods = Pods(devSpacesContext.client)
-        // ✅ Dynamically find a free local port
-        val localPort = findFreePort()
-        val forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
-        pods.waitForForwardReady(localPort)
-        val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
-        
-        val client = LinkedClientManager
-            .getInstance()
-            .startNewClient(
-                Lifetime.Eternal,
-                URI(effectiveJoinLink),
-                "",
-                onConnected,
-                false
-            )
-
-        client.run {
-            lifetime.onTermination {
-                try {
-                    forwarder.close()
-                } catch (_: Exception) {
-                    // Ignore cleanup errors
-                }
+        synchronized(devSpacesContext.activeWorkspaces) {
+            if (devSpacesContext.activeWorkspaces.contains(workspace)) {
+                throw IllegalStateException("Workspace '${workspace.name}' is already connected.")
             }
-            lifetime.onTermination {
-                if (remoteIdeServer.waitServerTerminated())
-                    DevWorkspaces(devSpacesContext.client)
-                        .stop(
-                            devSpacesContext.devWorkspace.namespace,
-                            devSpacesContext.devWorkspace.name
-                        )
-                        .also { onDevWorkspaceStopped() }
-            }
-            lifetime.onTermination { devSpacesContext.isConnected = false }
-            lifetime.onTermination(onDisconnected)
+            devSpacesContext.activeWorkspaces.add(workspace)
         }
 
-        return client
+        var client: ThinClientHandle? = null
+        var forwarder: AutoCloseable? = null
+
+        try {
+            startAndWaitDevWorkspace()
+
+            val remoteIdeServer = RemoteIDEServer(devSpacesContext)
+            val remoteIdeServerStatus = remoteIdeServer.getStatus()
+            val joinLink = remoteIdeServerStatus.joinLink
+                ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
+
+            val pods = Pods(devSpacesContext.client)
+            val localPort = findFreePort()
+            forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
+            pods.waitForForwardReady(localPort)
+
+            val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
+
+            client = LinkedClientManager
+                .getInstance()
+                .startNewClient(
+                    Lifetime.Eternal,
+                    URI(effectiveJoinLink),
+                    "",
+                    onConnected, // 🔹 Triggers enableButtons() via your view
+                    false
+                )
+
+            client.run {
+                lifetime.onTermination {
+                    try {
+                        forwarder.close()
+                    } catch (_: Exception) {
+                        // ignore cleanup errors
+                    }
+                }
+
+                lifetime.onTermination {
+                    try {
+                        if (remoteIdeServer.waitServerTerminated()) {
+                            DevWorkspaces(devSpacesContext.client)
+                                .stop(
+                                    devSpacesContext.devWorkspace.namespace,
+                                    devSpacesContext.devWorkspace.name
+                                )
+                            onDevWorkspaceStopped() // 🔹 UI refresh through callback
+                        }
+                    } finally {
+                        synchronized(devSpacesContext.activeWorkspaces) {
+                            devSpacesContext.activeWorkspaces.remove(workspace)
+                        }
+                        onDisconnected()
+                    }
+                }
+
+                lifetime.onTermination {
+                    onDisconnected() // 🔹 UI refresh through callback
+                }
+            }
+
+            return client
+        } catch (e: Exception) {
+            try {
+                terminateClient(client, forwarder, onDevWorkspaceStopped, onDisconnected) // 🔹 Cancel if started
+            } catch (_: Exception) {}
+
+            try {
+                forwarder?.close()
+            } catch (_: Exception) {}
+
+            synchronized(devSpacesContext.activeWorkspaces) {
+                devSpacesContext.activeWorkspaces.remove(workspace)
+            }
+
+            // 🔹 Make sure UI refresh still happens on failure
+            onDisconnected()
+
+            throw e
+        }
+    }
+
+    private fun terminateClient(
+        client: ThinClientHandle?,
+        forwarder: AutoCloseable?,
+        onDevWorkspaceStopped: () -> Unit,
+        onDisconnected: () -> Unit
+    ) {
+        if (client == null) {
+            onDisconnected()
+            return
+        }
+
+        try {
+            // Close the port forwarder first
+            try {
+                forwarder?.close()
+            } catch (e: Exception) {
+                thisLogger().debug("Failed to close port forwarder: ${e.message}")
+            }
+
+            // Stop workspace cleanly
+            val devWorkspaces = DevWorkspaces(devSpacesContext.client)
+            val workspace = devSpacesContext.devWorkspace
+
+            try {
+                devWorkspaces.stop(workspace.namespace, workspace.name)
+                onDevWorkspaceStopped()
+            } catch (e: Exception) {
+                thisLogger().debug("Workspace stop failed: ${e.message}")
+            }
+
+            // Remove from active list and update state
+            synchronized(devSpacesContext.activeWorkspaces) {
+                devSpacesContext.activeWorkspaces.remove(workspace)
+            }
+            onDisconnected()
+
+        } catch (e: Exception) {
+            thisLogger().debug("Error while terminating client: ${e.message}")
+            synchronized(devSpacesContext.activeWorkspaces) {
+                devSpacesContext.activeWorkspaces.remove(devSpacesContext.devWorkspace)
+            }
+            onDisconnected()
+        }
     }
 
     private fun findFreePort(): Int {
