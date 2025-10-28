@@ -14,7 +14,6 @@ package com.redhat.devtools.gateway
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
-import com.redhat.devtools.gateway.openshift.DevWorkspace
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.Pods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
@@ -34,7 +33,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnected: () -> Unit,
         onDisconnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
-    ): ThinClientHandle? {
+    ): ThinClientHandle {
         try {
             return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
@@ -48,7 +47,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit
-    ): ThinClientHandle? {
+    ): ThinClientHandle {
         val workspace = devSpacesContext.devWorkspace
         devSpacesContext.addWorkspace(workspace)
 
@@ -84,9 +83,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             }
 
             client
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             onClientClosed(onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
-            null
+            throw e
         }
     }
 

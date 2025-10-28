@@ -110,7 +110,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
                 delay(500L)
             }
-            true
+            @Suppress("UNREACHABLE_CODE")
+            null
         } ?: false
     }
 
