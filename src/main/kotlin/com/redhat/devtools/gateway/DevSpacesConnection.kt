@@ -78,7 +78,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                     Lifetime.Eternal,
                     URI(effectiveJoinLink),
                     "",
-                    onConnected, // 🔹 Triggers enableButtons() via your view
+                    onConnected, // Triggers enableButtons() via view
                     false
                 )
 
@@ -99,7 +99,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                                     devSpacesContext.devWorkspace.namespace,
                                     devSpacesContext.devWorkspace.name
                                 )
-                            onDevWorkspaceStopped() // 🔹 UI refresh through callback
+                            onDevWorkspaceStopped() // UI refresh through callback
                         }
                     } finally {
                         synchronized(devSpacesContext.activeWorkspaces) {
@@ -110,14 +110,14 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 }
 
                 lifetime.onTermination {
-                    onDisconnected() // 🔹 UI refresh through callback
+                    onDisconnected() //  UI refresh through callback
                 }
             }
 
             return client
         } catch (e: Exception) {
             try {
-                terminateClient(client, forwarder, onDevWorkspaceStopped, onDisconnected) // 🔹 Cancel if started
+                disconnectAndCleanup(client, forwarder, onDevWorkspaceStopped, onDisconnected) // Cancel if started
             } catch (_: Exception) {}
 
             try {
@@ -128,14 +128,14 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 devSpacesContext.activeWorkspaces.remove(workspace)
             }
 
-            // 🔹 Make sure UI refresh still happens on failure
+            // Make sure UI refresh still happens on failure
             onDisconnected()
 
             throw e
         }
     }
 
-    private fun terminateClient(
+    private fun disconnectAndCleanup(
         client: ThinClientHandle?,
         forwarder: AutoCloseable?,
         onDevWorkspaceStopped: () -> Unit,
