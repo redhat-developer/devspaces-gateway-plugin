@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -19,8 +19,8 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
-import org.bouncycastle.util.Arrays
 import java.io.IOException
+import java.util.concurrent.CancellationException
 
 /**
  * Represent an IDE server running in a CDE.
@@ -68,8 +68,10 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitServerReady() {
-        doWaitServerState(true)
+    fun waitServerReady(
+        checkCancelled: (() -> Unit)? = null
+    ) {
+        doWaitServerState(true, readyTimeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
                     "Remote IDE server is not ready after $readyTimeout seconds.",
@@ -77,20 +79,38 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             }
     }
 
+    fun isServerState(isReadyState: Boolean): Boolean {
+        return try {
+            (getStatus().isReady == isReadyState)
+        } catch (e: Exception) {
+            thisLogger().debug("Failed to check remote IDE server state.", e)
+            false
+        }
+    }
+
     @Throws(IOException::class)
     fun waitServerTerminated(): Boolean {
         return doWaitServerState(false)
     }
 
-    @Throws(IOException::class)
-    fun doWaitServerState(isReadyState: Boolean): Boolean {
-        return try {
-            val status = getStatus()
-            isReadyState == !Arrays.isNullOrEmpty(status.projects)
-        } catch (e: Exception) {
-            thisLogger().debug("Failed to check remote IDE server state.", e)
-            false
+    @Throws(IOException::class, CancellationException::class)
+    fun doWaitServerState(
+        isReadyState: Boolean,
+        timeout: Long = readyTimeout,
+        checkCancelled: (() -> Unit)? = null
+    ): Boolean {
+        var delayMillis = 1000L
+        val maxDelayMillis = 8000L
+        val deadline = System.currentTimeMillis() + timeout * 1000
+        while (System.currentTimeMillis() < deadline) {
+            checkCancelled?.invoke() // Throws CancellationException
+            if (isServerState(isReadyState)) {
+                return true
+            }
+            Thread.sleep(delayMillis)
+            delayMillis = (delayMillis * 2).coerceAtMost(maxDelayMillis)
         }
+        return false // Timeout
     }
 
     @Throws(IOException::class)

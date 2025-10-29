@@ -21,7 +21,7 @@ import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
 import java.io.IOException
-import java.util.concurrent.Executors
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 
 class DevWorkspaces(private val client: ApiClient) {
@@ -141,44 +141,34 @@ class DevWorkspaces(private val client: ApiClient) {
         doPatch(namespace, name, patch)
     }
 
-    @Throws(ApiException::class, IOException::class)
+    @Throws(ApiException::class, IOException::class, CancellationException::class)
     fun waitPhase(
         namespace: String,
         name: String,
         desiredPhase: String,
-        timeout: Long
+        timeout: Long, // in seconds
+        checkCancelled: (() -> Unit)? = null,
+        pollInterval: Long = 1 // in seconds
     ): Boolean {
-        var phaseIsDesiredState = false
+        val deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeout)
 
-        val watcher = createWatcher(namespace, "metadata.name=$name")
-        val executor = Executors.newSingleThreadScheduledExecutor()
-        executor.schedule(
-            {
-                try {
-                    for (item in watcher) {
-                        val devWorkspace = DevWorkspace.from(item.`object`)
-                        if (desiredPhase == devWorkspace.phase) {
-                            phaseIsDesiredState = true
-                            break
-                        }
-                    }
-                } finally {
-                    watcher.close()
-                    executor.shutdown()
-                }
-            },
-            0,
-            TimeUnit.SECONDS
-        )
+        while (System.currentTimeMillis() < deadline) {
+            checkCancelled?.invoke() // Will throw CancellationException if cancelled
 
-        try {
-            executor.awaitTermination(timeout, TimeUnit.SECONDS)
-        } finally {
-            watcher.close()
-            executor.shutdown()
+            val devWorkspace = get(namespace, name)
+            if (devWorkspace.phase == desiredPhase) {
+                return true
+            }
+
+            try {
+                TimeUnit.SECONDS.sleep(pollInterval)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw CancellationException("Polling interrupted")
+            }
         }
 
-        return phaseIsDesiredState
+        return false
     }
 
     // Example:
