@@ -29,7 +29,6 @@ import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.text.JTextComponent
 
-
 object FilteringComboBox {
 
     private val popupOpened = PopupOpened()

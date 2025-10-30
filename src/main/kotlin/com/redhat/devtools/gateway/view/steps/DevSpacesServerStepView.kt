@@ -21,10 +21,12 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.kubeconfig.KubeconfigFileWatcher
+import com.redhat.devtools.gateway.kubeconfig.KubeconfigMonitor
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.kube.Cluster
-import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
+import com.redhat.devtools.gateway.openshift.kube.KubeConfigUtils
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.message
 import com.redhat.devtools.gateway.view.ui.Dialogs
@@ -32,27 +34,31 @@ import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.util.Config
-import javax.swing.JComboBox
+import kotlinx.coroutines.*
 import javax.swing.JTextField
-
 
 class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext
 ) : DevSpacesWizardStep {
 
-    private val allServers = KubeConfigBuilder.getClusters()
+    private val viewScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // KubeConfigBuilder is now an object, so no need to instantiate
+    private lateinit var kubeconfigFileWatcher: KubeconfigFileWatcher
+    private lateinit var kubeconfigMonitor: KubeconfigMonitor
+
+    private var currentClusters: List<Cluster> = emptyList()
+
     private var tfToken = JBTextField()
         .apply { PasteClipboardMenu.addTo(this) }
-    private var tfServer: JComboBox<Cluster> =
+    private var tfServer =
         FilteringComboBox.create(
-            allServers,
-            Cluster::toString,
-            Cluster::fromString,
+            emptyList(),
+            { it?.name ?: "" },
+            { name -> currentClusters.firstOrNull { it.name == name } },
             Cluster::class.java
         ) { cluster ->
             if (cluster != null) {
-                val token = KubeConfigBuilder.getTokenForCluster(cluster.name) ?: ""
-                tfToken.text = token
+                tfToken.text = cluster.token ?: ""
             }
         }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
 
@@ -96,17 +102,34 @@ class DevSpacesServerStepView(
 
     override fun onInit() {
         loadOpenShiftConnectionSettings()
+        kubeconfigFileWatcher = KubeconfigFileWatcher(viewScope)
+        kubeconfigMonitor = KubeconfigMonitor(viewScope, kubeconfigFileWatcher, KubeConfigUtils)
+        kubeconfigMonitor.start()
+
+        viewScope.launch {
+            var isInitialLoad = true
+            kubeconfigMonitor.onClusterCollected { updatedClusters ->
+                withContext(Dispatchers.Main) {
+                    updateComboBox(updatedClusters)
+                    if (isInitialLoad) {
+                        loadOpenShiftConnectionSettings()
+                        isInitialLoad = false
+                    }
+                }
+            }
+        }
     }
 
     override fun onPrevious(): Boolean {
+        viewScope.cancel()
         return true
     }
 
     override fun onNext(): Boolean {
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
-        val server = selectedCluster.url
+        val server = selectedCluster.apiServerUrl
         val token = tfToken.text
-        val client = OpenShiftClientFactory().create(server, token.toCharArray())
+        val client = OpenShiftClientFactory(KubeConfigUtils).create(server, token.toCharArray())
         var success = false
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
@@ -132,37 +155,90 @@ class DevSpacesServerStepView(
         return success
     }
 
-    private fun loadOpenShiftConnectionSettings() {
-        tfServer.removeAllItems()
-        allServers.forEach { tfServer.addItem(it) }
+    private fun saveOpenShiftConnectionSettings() {
+        if (settingsAreLoaded) {
+            val selectedCluster = tfServer.selectedItem as? Cluster
+            settings.state.server = selectedCluster?.apiServerUrl.orEmpty()
+            settings.state.token = tfToken.text
+        }
+    }
 
+    private fun updateComboBox(updatedClusters: List<Cluster>) {
+        println("DEBUG: updateComboBox called with ${updatedClusters.size} clusters: ${updatedClusters.map { "${it.name}@${it.apiServerUrl}" }}")
+        val selectedItem = tfServer.selectedItem as? Cluster
+        setComboBoxItems(updatedClusters)
+        setComboBoxSelection(updatedClusters, selectedItem)
+    }
+
+    private fun setComboBoxItems(updatedClusters: List<Cluster>) {
+        tfServer.removeAllItems()
+        currentClusters = updatedClusters
+        updatedClusters.forEach { tfServer.addItem(it) }
+    }
+
+    private fun loadOpenShiftConnectionSettings() {
+        tryLoadFromDefaultClient()
+        
+        if (isSelectionIncomplete()) {
+            loadFromSavedSettings()
+        }
+    }
+
+    private fun setComboBoxSelection(updatedClusters: List<Cluster>, previouslySelectedItem: Cluster?) {
+        if (previouslySelectedItem != null) {
+            restorePreviousSelection(updatedClusters, previouslySelectedItem)
+        } else {
+            setDefaultSelection(updatedClusters)
+        }
+    }
+
+    private fun restorePreviousSelection(updatedClusters: List<Cluster>, previouslySelectedItem: Cluster) {
+        val reselectedCluster = updatedClusters.firstOrNull { it.id == previouslySelectedItem.id }
+        if (reselectedCluster != null) {
+            tfServer.selectedItem = reselectedCluster
+        } else {
+            tfToken.text = ""
+            if (updatedClusters.isNotEmpty()) {
+                tfServer.selectedIndex = 0
+            } else {
+                tfServer.selectedItem = null
+            }
+        }
+    }
+
+    private fun setDefaultSelection(updatedClusters: List<Cluster>) {
+        if (updatedClusters.isNotEmpty()) {
+            tfServer.selectedIndex = 0
+        } else {
+            tfServer.selectedItem = null
+            tfToken.text = ""
+        }
+    }
+
+    private fun tryLoadFromDefaultClient() {
         try {
             val config = Config.defaultClient()
-            val matchingCluster = allServers.find { it.url == config.basePath }
+            val matchingCluster = currentClusters.find { it.apiServerUrl == config.basePath }
             if (matchingCluster != null) {
                 tfServer.selectedItem = matchingCluster
             }
             val auth = config.authentications["BearerToken"]
             if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
         } catch (_: Exception) {
-            // Do nothing
-        }
-
-        if (tfServer.selectedItem == null || tfToken.text.isEmpty()) {
-            val matchingCluster = allServers.find { it.url == settings.state.server.orEmpty() }
-            if (matchingCluster != null) {
-                tfServer.selectedItem = matchingCluster
-            }
-            tfToken.text = settings.state.token.orEmpty()
-            settingsAreLoaded = true
+            // Ignore exceptions and continue
         }
     }
-
-    private fun saveOpenShiftConnectionSettings() {
-        if (settingsAreLoaded) {
-            val selectedCluster = tfServer.selectedItem as Cluster
-            settings.state.server = selectedCluster.url
-            settings.state.token = tfToken.text
+    
+    private fun isSelectionIncomplete(): Boolean {
+        return tfServer.selectedItem == null || tfToken.text.isEmpty()
+    }
+    
+    private fun loadFromSavedSettings() {
+        val matchingCluster = currentClusters.find { it.apiServerUrl == settings.state.server.orEmpty() }
+        if (matchingCluster != null) {
+            tfServer.selectedItem = matchingCluster
         }
+        tfToken.text = settings.state.token.orEmpty()
+        settingsAreLoaded = true
     }
 }
