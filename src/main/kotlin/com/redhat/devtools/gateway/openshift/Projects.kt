@@ -27,4 +27,12 @@ class Projects(private val client: ApiClient) {
 
         return response["items"] as List<*>
     }
+
+    @Throws(ApiException::class)
+    fun isAuthenticated(): Boolean {
+        list()
+        // throws if not authenticated
+        return true
+    }
+
 }

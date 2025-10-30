@@ -9,14 +9,15 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift.kube
+package com.redhat.devtools.gateway.openshift
 
-import io.kubernetes.client.openapi.ApiException
-
-fun ApiException.isNotFound(): Boolean {
-    return code == 404
-}
-
-fun ApiException.isUnauthorized(): Boolean {
-    return code == 401
+data class Cluster(
+    val id: String,
+    val name: String,
+    val url: String,
+    val token: String?
+) {
+    override fun toString(): String {
+        return "$name ($url)"
+    }
 }

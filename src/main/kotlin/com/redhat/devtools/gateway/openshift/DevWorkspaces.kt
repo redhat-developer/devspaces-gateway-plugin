@@ -229,7 +229,7 @@ class DevWorkspaces(private val client: ApiClient) {
     @Throws(ApiException::class)
     private fun doPatch(namespace: String, name: String, body: Any) {
         PatchUtils.patch(
-            DevWorkspace.javaClass,
+            DevWorkspace::class.java,
             {
                 customApi.patchNamespacedCustomObject(
                     "workspace.devfile.io",

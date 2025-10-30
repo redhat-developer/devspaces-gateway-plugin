@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -21,62 +22,50 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.kubeconfig.FileWatcher
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
+import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
-import com.redhat.devtools.gateway.openshift.kube.Cluster
-import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.message
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
-import io.kubernetes.client.openapi.auth.ApiKeyAuth
-import io.kubernetes.client.util.Config
-import javax.swing.JComboBox
+import kotlinx.coroutines.*
 import javax.swing.JTextField
-
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class DevSpacesServerStepView(
-    private var devSpacesContext: DevSpacesContext
+    private var devSpacesContext: DevSpacesContext,
+    private val enableNextButton: (() -> Unit)?
 ) : DevSpacesWizardStep {
 
-    private val allServers = KubeConfigBuilder.getClusters()
+    private val settings: ServerSettings = ServerSettings()
+    private lateinit var kubeconfigScope: CoroutineScope
+
+    private lateinit var kubeconfigMonitor: KubeConfigMonitor
+
     private var tfToken = JBTextField()
-        .apply { PasteClipboardMenu.addTo(this) }
-    private var tfServer: JComboBox<Cluster> =
+        .apply {
+            document.addDocumentListener(onTokenChanged())
+            PasteClipboardMenu.addTo(this)
+        }
+
+    private var tfServer =
         FilteringComboBox.create(
-            allServers,
-            Cluster::toString,
-            Cluster::fromString,
+            { it?.toString() ?: "" },
+            { name, clusters -> clusters.firstOrNull { it.name == name } },
             Cluster::class.java
         ) { cluster ->
             if (cluster != null) {
-                val token = KubeConfigBuilder.getTokenForCluster(cluster.name) ?: ""
-                tfToken.text = token
+                tfToken.text = cluster.token ?: ""
             }
-        }.apply { PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField) }
-
-    private var settingsAreLoaded = false
-    private val settings = service<DevSpacesSettings>()
-
-    /**
-     * Checks if both server and token fields have content
-     */
-    private fun areServerAndTokenValid(): Boolean {
-        if (tfServer.selectedItem == null) {
-            return false
+        }.apply {
+            PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField)
         }
-
-        return !tfToken.text.isNullOrBlank()
-    }
-
-    override fun isNextEnabled(): Boolean {
-        return areServerAndTokenValid()
-    }
-
-    override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
-    override val previousActionText =
-        DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
     override val component = panel {
         row {
             label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.title")).applyToComponent {
@@ -93,12 +82,38 @@ class DevSpacesServerStepView(
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
         border = JBUI.Borders.empty(8)
     }
+    override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
+    override val previousActionText =
+        DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
 
     override fun onInit() {
-        loadOpenShiftConnectionSettings()
+        startKubeconfigMonitor()
+    }
+
+    private fun onTokenChanged(): DocumentListener = object : DocumentListener {
+        override fun insertUpdate(event: DocumentEvent) {
+            enableNextButton?.invoke()
+        }
+
+        override fun removeUpdate(e: DocumentEvent) {
+            enableNextButton?.invoke()
+        }
+
+        override fun changedUpdate(e: DocumentEvent?) {
+            enableNextButton?.invoke()
+        }
+    }
+
+    private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = { updatedClusters ->
+        invokeLater {
+            val selectedName = (tfServer.selectedItem as? Cluster)?.name
+            setClusters(updatedClusters)
+            setSelectedCluster(selectedName, updatedClusters)
+        }
     }
 
     override fun onPrevious(): Boolean {
+        stopKubeconfigMonitor()
         return true
     }
 
@@ -106,8 +121,9 @@ class DevSpacesServerStepView(
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
         val server = selectedCluster.url
         val token = tfToken.text
-        val client = OpenShiftClientFactory().create(server, token.toCharArray())
+        val client = OpenShiftClientFactory(KubeConfigUtils).create(server, token.toCharArray())
         var success = false
+        stopKubeconfigMonitor()
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
@@ -125,44 +141,68 @@ class DevSpacesServerStepView(
         )
 
         if (success) {
-            saveOpenShiftConnectionSettings()
+            settings.save(tfServer.selectedItem as? Cluster)
             devSpacesContext.client = client
         }
 
         return success
     }
 
-    private fun loadOpenShiftConnectionSettings() {
-        tfServer.removeAllItems()
-        allServers.forEach { tfServer.addItem(it) }
-
-        try {
-            val config = Config.defaultClient()
-            val matchingCluster = allServers.find { it.url == config.basePath }
-            if (matchingCluster != null) {
-                tfServer.selectedItem = matchingCluster
-            }
-            val auth = config.authentications["BearerToken"]
-            if (auth is ApiKeyAuth) tfToken.text = auth.apiKey
-        } catch (_: Exception) {
-            // Do nothing
-        }
-
-        if (tfServer.selectedItem == null || tfToken.text.isEmpty()) {
-            val matchingCluster = allServers.find { it.url == settings.state.server.orEmpty() }
-            if (matchingCluster != null) {
-                tfServer.selectedItem = matchingCluster
-            }
-            tfToken.text = settings.state.token.orEmpty()
-            settingsAreLoaded = true
+    override fun isNextEnabled(): Boolean {
+        return if (tfServer.selectedItem == null) {
+            false
+        } else {
+            !tfToken.text.isNullOrBlank()
         }
     }
 
-    private fun saveOpenShiftConnectionSettings() {
-        if (settingsAreLoaded) {
-            val selectedCluster = tfServer.selectedItem as Cluster
-            settings.state.server = selectedCluster.url
-            settings.state.token = tfToken.text
+    private fun setClusters(clusters: List<Cluster>) {
+        this.tfServer.removeAllItems()
+        clusters.forEach {
+            tfServer.addItem(it)
+        }
+    }
+
+    private fun setSelectedCluster(name: String?, clusters: List<Cluster>) {
+        tfServer.selectedItem = null // Reset selectedItem
+        val saved = settings.load(clusters)
+        val toSelect = clusters.find { it.name == name }
+            ?: clusters.firstOrNull { it.id == saved?.id }
+            ?: clusters.firstOrNull()
+        tfServer.selectedItem = toSelect
+        tfToken.text = toSelect?.token ?: ""
+    }
+
+    private fun startKubeconfigMonitor() {
+        this.kubeconfigScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        this.kubeconfigMonitor = KubeConfigMonitor(
+            kubeconfigScope,
+            FileWatcher(kubeconfigScope),
+            KubeConfigUtils
+        )
+
+        kubeconfigScope.launch {
+            kubeconfigMonitor.onClustersCollected(onClustersChanged())
+        }
+        kubeconfigMonitor.start()
+    }
+
+    private fun stopKubeconfigMonitor() {
+        kubeconfigMonitor.stop()
+        kubeconfigScope.cancel()
+    }
+
+    private class ServerSettings {
+
+        val service = service<DevSpacesSettings>()
+
+        fun load(clusters: List<Cluster>): Cluster? {
+            return clusters.find { it.url == service.state.server.orEmpty() }
+        }
+
+        fun save(toSave: Cluster?) {
+            val cluster = toSave ?: return
+            service.state.server = cluster.url
         }
     }
 }
