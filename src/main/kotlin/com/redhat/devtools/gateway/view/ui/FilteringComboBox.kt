@@ -16,65 +16,51 @@ import java.awt.event.ActionListener
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
-import javax.swing.ComboBoxEditor
-import javax.swing.DefaultComboBoxModel
-import javax.swing.JComboBox
-import javax.swing.JComponent
-import javax.swing.JLabel
-import javax.swing.JTextField
-import javax.swing.ListCellRenderer
-import javax.swing.SwingUtilities
-import javax.swing.UIManager
+import javax.swing.*
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.text.JTextComponent
-
 
 object FilteringComboBox {
 
     private val popupOpened = PopupOpened()
 
     fun <T> create(
-        allItems: List<T>,
         toString: (T?) -> String = { it.toString() },
-        toType: ((String) -> T?)? = null,
+        matchItem: ((expression: String, toMatch: List<T>) -> T?)? = null,
         type: Class<T>,
-        onItemUpdated: (T?) -> Unit
+        onItemSelected: (T?) -> Unit
     ): JComboBox<T> {
         val comboBox = JComboBox<T>()
         comboBox.isEditable = true
-        comboBox.editor = UnsettableComboBoxEditor(allItems, toString, toType)
+        comboBox.editor = UnsettableComboBoxEditor(comboBox, toString, matchItem)
         popupOpened.reset(comboBox)
 
-        val model = DefaultComboBoxModel<T>()
-        allItems.forEach { model.addElement(it) }
-        comboBox.model = model
+        comboBox.model = FilteringComboBoxModel<T>()
         comboBox.setRenderer(onListItemRendered<T>(toString))
 
-        comboBox.addPopupMenuListener(onPopupVisible(allItems, comboBox, toString))
+        comboBox.addPopupMenuListener(onPopupVisible(comboBox, toString))
 
         val editor = getEditor(comboBox)
-        editor?.addKeyListener(onKeyPressed(editor, comboBox, allItems, toString))
+        editor?.addKeyListener(onKeyPressed(editor, comboBox, toString))
 
-        comboBox.addItemListener(onItemSelected(editor, onItemUpdated, toString, type))
+        comboBox.addItemListener(onItemSelected(editor, onItemSelected, toString, type))
         return comboBox
     }
 
     private fun <T> onPopupVisible(
-        allItems: List<T>,
         comboBox: JComboBox<T>,
         toString: (T) -> String
     ): PopupMenuListener = object : PopupMenuListener {
         override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
+            val allItems = comboBox.filteringModel().getAllItems()
             val editorText = getEditor(comboBox)?.text ?: ""
-            val model = DefaultComboBoxModel<T>()
-            val items = if (popupOpened.isProgrammatic(comboBox)) {
+            val visible = if (popupOpened.isProgrammatic(comboBox)) {
                 filterItems(editorText, allItems, toString)
             } else {
                 allItems
             }
-            items.forEach { model.addElement(it) }
-            comboBox.model = model
+            comboBox.filteringModel().showOnly(visible)
             comboBox.selectedIndex = -1 // prevent item selection
             popupOpened.reset(comboBox)
         }
@@ -129,7 +115,6 @@ object FilteringComboBox {
     private fun <T> onKeyPressed(
         editor: JTextField,
         comboBox: JComboBox<T>,
-        allItems: List<T>,
         toString: (T) -> String
     ): KeyAdapter = object : KeyAdapter() {
         override fun keyReleased(e: KeyEvent) {
@@ -137,7 +122,7 @@ object FilteringComboBox {
                 return
             }
             val currentText = editor.text
-            val filtered = filterItems(currentText, allItems, toString)
+            val filtered = filterItems(currentText, comboBox.filteringModel().getAllItems(), toString)
             showPopup(comboBox, filtered)
         }
     }
@@ -151,10 +136,8 @@ object FilteringComboBox {
         val selection = Selection(comboBox.editor.editorComponent as? JTextComponent).backup()
 
         val currentTextInEditor = editor?.text ?: ""
-        val model = DefaultComboBoxModel<T>()
-        items.forEach { model.addElement(it) }
+        comboBox.filteringModel().showOnly(items)
 
-        comboBox.model = model
         editor?.text = currentTextInEditor
 
         // Restore the selection after the model and text are set
@@ -183,10 +166,14 @@ object FilteringComboBox {
         )
     }
 
+    private fun <T> JComboBox<T>.filteringModel(): FilteringComboBoxModel<T> {
+        return model as FilteringComboBoxModel<T>
+    }
+
     private class UnsettableComboBoxEditor<T>(
-        private val allItems: List<T?>,
+        private val comboBox: JComboBox<T>,
         private val toString: (T?) -> String,
-        private val toType: ((String) -> T)?
+        private val matchItem: ((expression: String, toMatch: List<T>) -> T?)?
     ) : ComboBoxEditor {
         private val textField = JTextField()
 
@@ -202,8 +189,9 @@ object FilteringComboBox {
 
         override fun getItem(): Any? {
             val text = textField.text
+            val allItems = comboBox.filteringModel().getAllItems()
             val matchingItem = allItems.find { toString(it) == text }
-            return matchingItem ?: (toType?.invoke(text) ?: text)
+            return matchingItem ?: (matchItem?.invoke(text, allItems) ?: text)
         }
 
         override fun selectAll() {
@@ -262,7 +250,7 @@ object FilteringComboBox {
         }
     }
 
-    class PopupOpened() {
+    private class PopupOpened() {
 
         private val key = Key.create<Boolean>("isPopupProgrammatic")
 
@@ -277,6 +265,46 @@ object FilteringComboBox {
 
         fun reset(component: JComponent) {
             setProgrammatic(false, component)
+        }
+    }
+
+    private class FilteringComboBoxModel<T>() : DefaultComboBoxModel<T>() {
+
+        private val hidden = mutableSetOf<T>()
+
+        override fun getIndexOf(item: Any?): Int {
+            return getAllVisible().indexOf(item)
+        }
+
+        override fun getSize(): Int {
+            return getAllItems()
+                .filter { it !in hidden }.size
+        }
+
+        override fun getElementAt(index: Int): T? {
+            return getAllVisible()
+                .elementAtOrNull(index)
+        }
+
+        override fun removeAllElements() {
+            hidden.clear()
+            super.removeAllElements()
+        }
+
+        fun showOnly(items: List<T>) {
+            val toHide = getAllItems().filter { !items.contains(it) }
+            hidden.clear()
+            hidden.addAll(toHide)
+            fireContentsChanged(this, 0, size - 1)
+        }
+
+        private fun getAllVisible(): List<T> {
+            return getAllItems().filter { it !in hidden }
+        }
+
+        fun getAllItems(): List<T> {
+            return (0 until super.size)
+                .map { super.getElementAt(it) }
         }
     }
 }

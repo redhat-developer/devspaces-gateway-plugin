@@ -31,7 +31,7 @@ class RemoteIDEServerTest {
     private lateinit var remoteIDEServer: RemoteIDEServer
 
     @BeforeEach
-    fun setUp() {
+    fun beforeEach() {
         devSpacesContext = mockk(relaxed = true)
 
         mockkConstructor(Pods::class)
@@ -60,7 +60,7 @@ class RemoteIDEServerTest {
     }
 
     @AfterEach
-    fun tearDown() {
+    fun afterEach() {
         unmockkAll()
     }
 

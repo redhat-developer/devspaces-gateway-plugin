@@ -12,38 +12,49 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.thisLogger
-import com.redhat.devtools.gateway.openshift.kube.InvalidKubeConfigException
-import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
 import java.io.StringReader
 
-class OpenShiftClientFactory() {
+class OpenShiftClientFactory(private val kubeConfigBuilder: KubeConfigUtils) {
     private val userName = "openshift_user"
     private val contextName = "openshift_context"
     private val clusterName = "openshift_cluster"
+    
+    private var lastUsedKubeConfig: KubeConfig? = null
 
     fun create(): ApiClient {
-        val envKubeConfig = System.getenv("KUBECONFIG")
-        if (envKubeConfig != null) {
-            try {
-                val effectiveConfigYaml = KubeConfigBuilder.fromEnvVar()
-                val reader = StringReader(effectiveConfigYaml)
-                val kubeConfig = KubeConfig.loadKubeConfig(reader)
-                return ClientBuilder.kubeconfig(kubeConfig).build()
-            } catch (err: InvalidKubeConfigException) {
-                thisLogger().debug("Failed to build an effective Kube config from `KUBECONFIG` due to error: ${err.message}. Falling back to the default ApiClient.")
+        val mergedConfig = kubeConfigBuilder.getAllConfigsMerged()
+            ?: run {
+                thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
+                lastUsedKubeConfig = null
+                return ClientBuilder.defaultClient()
             }
-        }
 
-        return ClientBuilder.defaultClient()
+        return try {
+                val kubeConfig = KubeConfig.loadKubeConfig(StringReader(mergedConfig))
+                lastUsedKubeConfig = kubeConfig
+                ClientBuilder.kubeconfig(kubeConfig).build()
+            } catch (e: Exception) {
+                thisLogger().debug("Failed to build effective Kube config from discovered files due to error: ${e.message}. Falling back to the default ApiClient.")
+                lastUsedKubeConfig = null
+                ClientBuilder.defaultClient()
+            }
     }
 
     fun create(server: String, token: CharArray): ApiClient {
         val kubeConfig = createKubeConfig(server, token)
+        lastUsedKubeConfig = kubeConfig
         return Config.fromConfig(kubeConfig)
+    }
+    
+    fun isTokenAuth(): Boolean {
+        return lastUsedKubeConfig?.let {
+            KubeConfigUtils.isCurrentUserTokenAuth(it)
+        } ?: false
     }
 
     private fun createKubeConfig(server: String, token: CharArray): KubeConfig {
@@ -69,7 +80,6 @@ class OpenShiftClientFactory() {
                 "user" to userName
             )
         )
-
 
         val kubeConfig  = KubeConfig(arrayListOf(context), arrayListOf(cluster), arrayListOf(user))
         kubeConfig.setContext(contextName)

@@ -1,3 +1,4 @@
+import org.gradle.kotlin.dsl.dependencies
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
@@ -35,7 +36,12 @@ dependencies {
     testImplementation("org.junit.platform:junit-platform-launcher:6.0.1")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:6.0.1")
     testImplementation("org.assertj:assertj-core:3.27.6")
+
     testImplementation("io.mockk:mockk:1.14.6")
+    testImplementation("io.mockk:mockk-agent-jvm:1.14.6")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {

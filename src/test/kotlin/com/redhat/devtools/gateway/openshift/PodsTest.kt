@@ -51,7 +51,7 @@ class PodsTest {
     private var localPort = 0
 
     @BeforeEach
-    fun setUp() {
+    fun beforeEach() {
         client = mockk(relaxed = true)
         pods = Pods(client)
         localPort = findFreePort()
@@ -60,7 +60,7 @@ class PodsTest {
     }
 
     @AfterEach
-    fun tearDown() {
+    fun afterEach() {
         unmockkConstructor(PortForward::class)
     }
     

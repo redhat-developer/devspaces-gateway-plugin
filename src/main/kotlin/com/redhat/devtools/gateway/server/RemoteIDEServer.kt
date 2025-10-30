@@ -60,7 +60,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             )
             .trim()
             .also { status ->
-                logger<RemoteIDEServer>().debug("remote server status: $status")
+                thisLogger().debug("remote server status: $status")
                 return if (status.isEmpty()) {
                     RemoteIDEServerStatus.empty()
                 } else {
