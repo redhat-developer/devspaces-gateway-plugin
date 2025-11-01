@@ -170,6 +170,7 @@ class Pods(private val client: ApiClient) {
                     logger.info("Attempt #${attempt + 1}: Connecting $localPort -> $remotePort...")
                     val portForward = PortForward(client)
                     forwardResult = portForward.forward(pod, listOf(remotePort))
+                    logger.info("forward successful: $localPort -> $remotePort...")
                     copyStreams(clientSocket, forwardResult, remotePort)
                     return
                 } catch (e: Exception) {
