@@ -22,7 +22,7 @@ import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import com.redhat.devtools.gateway.openshift.kube.KubeConfigBuilder
+import com.redhat.devtools.gateway.openshift.kube.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.kube.isNotFound
 import com.redhat.devtools.gateway.openshift.kube.isUnauthorized
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
@@ -30,7 +30,6 @@ import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -45,6 +44,8 @@ private const val DW_NAME = "dwName"
  *      https://code-with-me.jetbrains.com/remoteDev#type=devspaces
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
+
+    private var clientFactory: OpenShiftClientFactory? = null
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("UnstableApiUsage")
@@ -183,7 +184,9 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         val ctx = DevSpacesContext()
 
         indicator.text2 = "Initializing Kubernetes connection…"
-        ctx.client = OpenShiftClientFactory().create()
+        val factory = OpenShiftClientFactory(KubeConfigUtils)
+        ctx.client = factory.create()
+        clientFactory = factory
 
         indicator.text2 = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…"
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
@@ -225,7 +228,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     private fun handleUnauthorizedError(err: ApiException): Boolean {
         if (!err.isUnauthorized()) return false
 
-        val tokenNote = if (KubeConfigBuilder.isTokenAuthUsed())
+        val tokenNote = if (clientFactory?.isTokenAuthUsed() == true)
             "\n\nYou are using token-based authentication.\nUpdate your token in the kubeconfig file."
         else ""
 
