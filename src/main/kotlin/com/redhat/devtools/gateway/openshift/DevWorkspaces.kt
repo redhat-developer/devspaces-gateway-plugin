@@ -24,6 +24,7 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
@@ -179,6 +180,48 @@ class DevWorkspaces(private val client: ApiClient) {
         }
 
         return phaseIsDesiredState
+    }
+
+    // Waits until the DevWorkspace goes out of any the given phases
+    @Throws(ApiException::class, IOException::class)
+    fun waitPhaseChanges(
+        namespace: String,
+        name: String,
+        currentPhases: Collection<String>,
+        timeout: Long
+    ): Boolean {
+        var phaseChanged = false
+
+        val watcher = createWatcher(namespace, "metadata.name=$name")
+        val executor = Executors.newSingleThreadScheduledExecutor()
+
+        executor.schedule (
+            {
+                try {
+                    for (item in watcher) {
+                        val devWorkspace = DevWorkspace.from(item.`object`)
+                        if (devWorkspace.phase !in currentPhases) {
+                            phaseChanged = true
+                            break
+                        }
+                    }
+                } finally {
+                    watcher.close()
+                    executor.shutdown()
+                }
+            },
+            0,
+            TimeUnit.SECONDS
+        )
+
+        try {
+            executor.awaitTermination(timeout, TimeUnit.SECONDS)
+        } finally {
+            watcher.close()
+            executor.shutdownNow()
+        }
+
+        return phaseChanged
     }
 
     // Example:
