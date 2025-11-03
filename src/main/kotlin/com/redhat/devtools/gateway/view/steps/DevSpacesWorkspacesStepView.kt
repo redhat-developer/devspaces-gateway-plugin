@@ -57,6 +57,7 @@ class DevSpacesWorkspacesStepView(
     // 'true' when there are DevWorkspaces come from multiple namespaces
     private var multipleNamespaces = false
 
+    private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
 
     override val component = panel {
@@ -71,6 +72,10 @@ class DevSpacesWorkspacesStepView(
         row {
             label("").resizableColumn().align(AlignX.FILL)
 
+            startDevWorkspaceButton =
+                button(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.start")) {
+                    startDevWorkspace()
+                }.gap(RightGap.SMALL).align(AlignX.RIGHT).component
             stopDevWorkspaceButton =
                 button(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.stop")) {
                     stopDevWorkspace()
@@ -160,6 +165,34 @@ class DevSpacesWorkspacesStepView(
         listDevWorkspaces.selectedIndex = selectedIndex
     }
 
+    private fun startDevWorkspace() {
+        if (!listDevWorkspaces.isSelectionEmpty) {
+            listDWDataModel
+                .get(listDevWorkspaces.selectedIndex)
+                .also {
+                    DevWorkspaces(devSpacesContext.client)
+                        .start(
+                            it.namespace,
+                            it.name
+                        )
+                    ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                        {
+                            if (waitDevWorkspaceNotStopped(it)) {
+                                refreshDevWorkspace(
+                                    it.namespace,
+                                    it.name
+                                )
+                                enableButtons()
+                            }
+                        },
+                        "Refreshing Workspace",
+                        true,
+                        null
+                    )
+                }
+        }
+    }
+
     private fun stopDevWorkspace() {
         if (!listDevWorkspaces.isSelectionEmpty) {
             listDWDataModel
@@ -235,6 +268,16 @@ class DevSpacesWorkspacesStepView(
         )
     }
 
+    private fun waitDevWorkspaceNotStopped(devWorkspace: DevWorkspace): Boolean {
+        return DevWorkspaces(devSpacesContext.client)
+            .waitPhaseChanges(
+                devWorkspace.namespace,
+                devWorkspace.name,
+                listOf(DevWorkspaces.STOPPED, DevWorkspaces.FAILED),
+                30
+            )
+    }
+
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
         return DevWorkspaces(devSpacesContext.client)
             .waitPhase(
@@ -249,9 +292,11 @@ class DevSpacesWorkspacesStepView(
         runInEdt {
             val workspace = getSelectedWorkspace()
             val running = isRunning(workspace)
+            val stopped = isStopped(workspace)
             val alreadyConnected = isAlreadyConnected(workspace)
 
             // stop button enabled only if workspace is running
+            startDevWorkspaceButton.isEnabled = stopped
             stopDevWorkspaceButton.isEnabled = running
 
             // Enable/disable "Next" (connect) button dynamically
@@ -277,6 +322,10 @@ class DevSpacesWorkspacesStepView(
     override fun isNextEnabled(): Boolean {
         val workspace = getSelectedWorkspace() ?: return false
         return isRunning(workspace) && !isAlreadyConnected(workspace)
+    }
+
+    private fun isStopped(workspace: DevWorkspace?): Boolean {
+        return workspace?.started == false
     }
 
     private fun isRunning(workspace: DevWorkspace?): Boolean {
