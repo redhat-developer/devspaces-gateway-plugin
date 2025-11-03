@@ -19,8 +19,10 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
-import org.bouncycastle.util.Arrays
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Represent an IDE server running in a CDE.
@@ -68,8 +70,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitServerReady() {
-        doWaitServerState(true)
+    suspend fun waitServerReady() {
+        doWaitServerProjectExists(true)
             .also {
                 if (!it) throw IOException(
                     "Remote IDE server is not ready after $readyTimeout seconds.",
@@ -78,19 +80,39 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    fun waitServerTerminated(): Boolean {
-        return doWaitServerState(false)
+    suspend fun waitServerTerminated(): Boolean {
+        return doWaitServerProjectExists(false)
     }
 
-    @Throws(IOException::class)
-    fun doWaitServerState(isReadyState: Boolean): Boolean {
-        return try {
-            val status = getStatus()
-            isReadyState == !Arrays.isNullOrEmpty(status.projects)
-        } catch (e: Exception) {
-            thisLogger().debug("Failed to check remote IDE server state.", e)
-            false
-        }
+    /**
+     * Waits for the server to have or not have projects according to the given parameter.
+     * Times out the wait if the expected state is not reached within 10 seconds.
+     *
+     * @param expected True if projects are expected, False otherwise,
+     * @return True if the expected state is achieved within the timeout, False otherwise.
+     */
+    private suspend fun doWaitServerProjectExists(expected: Boolean): Boolean {
+        val timeout = 10.seconds
+
+        return withTimeoutOrNull(timeout) {
+            while (true) {
+                val hasProjects = try {
+                    val status = getStatus()
+                    status.projects.isNotEmpty()
+                } catch (e: Exception) {
+                    thisLogger().debug("Failed to check remote IDE server state.", e)
+                    null
+                }
+
+                if (expected == hasProjects) {
+                    return@withTimeoutOrNull true
+                }
+
+                delay(500L)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            null
+        } ?: false
     }
 
     @Throws(IOException::class)

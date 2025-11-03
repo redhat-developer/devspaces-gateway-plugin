@@ -18,6 +18,10 @@ import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.Pods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import io.kubernetes.client.openapi.ApiException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.Closeable
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.URI
@@ -33,7 +37,6 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         try {
             return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected)
         } catch (e: Exception) {
-            devSpacesContext.isConnected = false
             throw e
         }
     }
@@ -45,52 +48,71 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit
     ): ThinClientHandle {
-        startAndWaitDevWorkspace()
+        val workspace = devSpacesContext.devWorkspace
+        devSpacesContext.addWorkspace(workspace)
 
-        val remoteIdeServer = RemoteIDEServer(devSpacesContext)
-        val remoteIdeServerStatus = remoteIdeServer.getStatus()
-        val joinLink = remoteIdeServerStatus.joinLink
-            ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
+        var remoteIdeServer: RemoteIDEServer? = null
+        var forwarder: Closeable? = null
 
-        val pods = Pods(devSpacesContext.client)
-        // ✅ Dynamically find a free local port
-        val localPort = findFreePort()
-        val forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
-        pods.waitForForwardReady(localPort)
-        val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
-        
-        val client = LinkedClientManager
-            .getInstance()
-            .startNewClient(
-                Lifetime.Eternal,
-                URI(effectiveJoinLink),
-                "",
-                onConnected,
-                false
-            )
+        return try {
+            startAndWaitDevWorkspace()
+            remoteIdeServer = RemoteIDEServer(devSpacesContext)
+            val remoteIdeServerStatus = remoteIdeServer.getStatus()
+            val joinLink = remoteIdeServerStatus.joinLink
+                ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
 
-        client.run {
-            lifetime.onTermination {
-                try {
-                    forwarder.close()
-                } catch (_: Exception) {
-                    // Ignore cleanup errors
-                }
+            val pods = Pods(devSpacesContext.client)
+            val localPort = findFreePort()
+            forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
+            pods.waitForForwardReady(localPort)
+
+            val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
+
+            val client = LinkedClientManager
+                .getInstance()
+                .startNewClient(
+                    Lifetime.Eternal,
+                    URI(effectiveJoinLink),
+                    "",
+                    onConnected, // Triggers enableButtons() via view
+                    false
+                )
+
+            client.clientClosed.advise(client.lifetime) {
+                onClientClosed(onDisconnected , onDevWorkspaceStopped, remoteIdeServer, forwarder)
             }
-            lifetime.onTermination {
-                if (remoteIdeServer.waitServerTerminated())
+
+            client
+        } catch (e: Exception) {
+            onClientClosed(onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
+            throw e
+        }
+    }
+
+    private fun onClientClosed(
+        onDisconnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
+        remoteIdeServer: RemoteIDEServer?,
+        forwarder: Closeable?
+    ) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val currentWorkspace = devSpacesContext.devWorkspace
+            try {
+                onDisconnected.invoke()
+                if (true == remoteIdeServer?.waitServerTerminated()) {
                     DevWorkspaces(devSpacesContext.client)
                         .stop(
                             devSpacesContext.devWorkspace.namespace,
                             devSpacesContext.devWorkspace.name
                         )
                         .also { onDevWorkspaceStopped() }
+                }
+                forwarder?.close()
+            } finally {
+                devSpacesContext.removeWorkspace(currentWorkspace)
+                onDisconnected()
             }
-            lifetime.onTermination { devSpacesContext.isConnected = false }
-            lifetime.onTermination(onDisconnected)
         }
-
-        return client
     }
 
     private fun findFreePort(): Int {

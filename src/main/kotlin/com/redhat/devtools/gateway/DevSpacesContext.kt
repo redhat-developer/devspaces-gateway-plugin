@@ -17,5 +17,21 @@ import io.kubernetes.client.openapi.ApiClient
 class DevSpacesContext {
     lateinit var client: ApiClient
     lateinit var devWorkspace: DevWorkspace
-    var isConnected = false
+    var activeWorkspaces = mutableSetOf<DevWorkspace>()
+
+    fun addWorkspace(workspace: DevWorkspace) {
+        synchronized(activeWorkspaces) {
+            if (activeWorkspaces.contains(workspace)) {
+                return
+            }
+            activeWorkspaces.add(workspace)
+        }
+    }
+
+    fun removeWorkspace(currentWorkspace: DevWorkspace) {
+        synchronized(activeWorkspaces) {
+            activeWorkspaces.remove(currentWorkspace)
+        }
+    }
+
 }
