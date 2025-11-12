@@ -150,6 +150,13 @@ tasks {
     withType<Test> {
         useJUnitPlatform()
         jvmArgs("-Dnet.bytebuddy.experimental=true", "-Dmockk.agent.global=false")
+        testLogging {
+            events("skipped", "failed", "standardOut", "standardError")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            showExceptions = true
+            showCauses = true
+            showStackTraces = true
+        }
     }
 }
 
