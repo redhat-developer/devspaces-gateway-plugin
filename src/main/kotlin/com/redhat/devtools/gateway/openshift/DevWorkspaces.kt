@@ -169,37 +169,26 @@ class DevWorkspaces(private val client: ApiClient) {
         namespace: String,
         name: String,
         desiredPhase: String,
-        timeout: Long,
+        timeout: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
         return withTimeoutOrNull(timeout.seconds) {
             while (true) {
                 checkCancelled?.invoke()
-                val watcher = createWatcher(namespace, "metadata.name=$name", latestResourceVersion = null)
-                try {
-                    while (true) {
-                        checkCancelled?.invoke()
-                        val event = runCatching {
-                            withTimeoutOrNull(300L) { watcher.next() }
-                        }.getOrElse {
-                            break
-                        } ?: continue
-
-                        val workspace = DevWorkspace.from(event.`object`)
-                        if (workspace.phase == desiredPhase) {
-                            return@withTimeoutOrNull true
-                        }
-
-                        if (workspace.phase in listOf(FAILED, STOPPED, STOPPING)) {
-                            return@withTimeoutOrNull false
-                        }
-                    }
-                } finally {
-                    watcher.close()
+                val devWorkspace = try {
+                    DevWorkspaces(client).get(namespace, name)
+                } catch (e: Exception) {
+                    delay(500)
+                    continue
                 }
 
-                // Watch ended because server closed the stream - retry a new watch
-                delay(200)
+                checkCancelled?.invoke()
+                when (devWorkspace.phase) {
+                    desiredPhase -> return@withTimeoutOrNull true
+                    FAILED, STOPPED, STOPPING -> return@withTimeoutOrNull false
+                }
+
+                delay(500)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -213,33 +202,26 @@ class DevWorkspaces(private val client: ApiClient) {
         namespace: String,
         name: String,
         currentPhases: Collection<String>,
-        timeout: Long,              // in seconds
+        timeout: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
         return withTimeoutOrNull(timeout.seconds) {
             while (true) {
                 checkCancelled?.invoke()
-                val watcher = createWatcher(namespace, "metadata.name=$name", latestResourceVersion = null)
-                try {
-                    while (true) {
-                        checkCancelled?.invoke()
-                        val event = runCatching {
-                            withTimeoutOrNull(300L) { watcher.next() }
-                        }.getOrElse {
-                            break
-                        } ?: continue
 
-                        val workspace = DevWorkspace.from(event.`object`)
-                        if (workspace.phase !in currentPhases) {
-                            return@withTimeoutOrNull true // phase changed out of the given set
-                        }
-                    }
-                } finally {
-                    watcher.close()
+                val devWorkspace = try {
+                    DevWorkspaces(client).get(namespace, name)
+                } catch (e: Exception) {
+                    delay(500)
+                    continue
                 }
 
-                // Watch ended because server closed the stream - retry a new watch
-                delay(200)
+                checkCancelled?.invoke()
+                if (devWorkspace.phase !in currentPhases) {
+                    return@withTimeoutOrNull true // phase changed out of the given set
+                }
+
+                delay(500)
             }
 
             @Suppress("UNREACHABLE_CODE")

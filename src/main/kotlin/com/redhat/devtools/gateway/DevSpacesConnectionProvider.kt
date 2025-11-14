@@ -20,11 +20,13 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isUnauthorized
+import com.redhat.devtools.gateway.util.ProgressCountdown
+import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
@@ -57,7 +59,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         return suspendCancellableCoroutine { cont ->
             ProgressManager.getInstance().runProcessWithProgressSynchronously(
                 {
-                    val indicator = ProgressManager.getInstance().progressIndicator
+                    val indicator = ProgressCountdown(ProgressManager.getInstance().progressIndicator)
                     try {
                         indicator.isIndeterminate = true
                         indicator.text = "Connecting to DevSpace..."
@@ -98,7 +100,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
                         if (cont.isActive) cont.resume(null)
                     } catch (e: Exception) {
-                        if (indicator.isCanceled) {
+                        if (e.isCancellationException() || indicator.isCanceled) {
                             indicator.text2 = "Error: ${e.message}"
                             runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
                         } else {
@@ -169,11 +171,11 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     @Throws(IllegalArgumentException::class)
     private fun doConnect(
         parameters: Map<String, String>,
-        indicator: ProgressIndicator
+        indicator: ProgressCountdown
     ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
-        indicator.text2 = "Preparing connection environment…"
+        indicator.update(message = "Preparing connection environment…")
 
         val dwNamespace = parameters[DW_NAMESPACE]
         if (dwNamespace.isNullOrBlank()) {
@@ -189,30 +191,35 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
         val ctx = DevSpacesContext()
 
-        indicator.text2 = "Initializing Kubernetes connection…"
+        indicator.update(message = "Initializing Kubernetes connection…")
         val factory = OpenShiftClientFactory(KubeConfigUtils)
         this.clientFactory = factory
         ctx.client = factory.create()
 
-        indicator.text2 = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…"
+        indicator.update(message = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…")
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
-        indicator.text2 = "Establishing remote IDE connection…"
+        indicator.update(message = "Establishing remote IDE connection…")
         val thinClient = DevSpacesConnection(ctx)
             .connect({}, {}, {},
-                onProgress = { message ->
-                    if (!message.isEmpty()) {
-                        indicator.text2 = message
+                onProgress = { value: Any ->
+                    when (val v = value) {
+                        is String -> {
+                            if (!v.isEmpty()) {
+                                indicator.text2 = v
+                            }
+                        }
+                        is ProgressCountdown.ProgressEvent -> {
+                            indicator.update(value.title, value.message, value.countdownSeconds)
+                        }
                     }
                 },
                 checkCancelled = {
-                    if (indicator.isCanceled) {
-                        throw CancellationException("User cancelled the operation")
-                    }
+                    if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
                 }
             )
 
-        indicator.text2 = "Connection established successfully."
+        indicator.update(message = "Connection established successfully.")
         return DevSpacesConnectionHandle(
             thinClient.lifetime,
             thinClient,

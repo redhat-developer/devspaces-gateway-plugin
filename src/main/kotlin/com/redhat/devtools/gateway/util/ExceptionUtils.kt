@@ -13,6 +13,9 @@ package com.redhat.devtools.gateway.util
 
 import com.google.gson.Gson
 import io.kubernetes.client.openapi.ApiException
+import kotlinx.coroutines.TimeoutCancellationException
+import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeoutException
 
 
 fun Throwable.rootMessage(): String {
@@ -48,3 +51,6 @@ fun ApiException.message(): String {
     return "Reason: $msg"
 }
 
+fun Throwable.isTimeoutException(): Boolean = (this is TimeoutCancellationException || this is TimeoutException )
+
+fun Throwable.isCancellationException(): Boolean = (this is CancellationException && !isTimeoutException() )
