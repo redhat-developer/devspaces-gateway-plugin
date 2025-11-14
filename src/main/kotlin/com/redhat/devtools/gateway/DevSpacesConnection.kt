@@ -11,7 +11,9 @@
  */
 package com.redhat.devtools.gateway
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.ui.Messages
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
@@ -32,6 +34,7 @@ import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.seconds
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
@@ -76,6 +79,34 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                     val server = remoteIdeServer.apply { waitServerReady(checkCancelled) }
                     server.getStatus()
                 }.getOrElse { RemoteIDEServerStatus.empty() }
+
+            checkCancelled?.invoke()
+            if (!remoteIdeServerStatus.isReady) {
+                val result = AtomicInteger(-1)
+                ApplicationManager.getApplication().invokeAndWait {
+                    result.set(
+                        Messages.showDialog(
+                            "The Remote IDE Server is not responding properly.\n" +
+                                    "Would you like to try restarting the Pod or cancel the connection?",
+                            "Remote IDE Server Issue",
+                            arrayOf("Cancel Connection", "Restart Pod and try again"),
+                            0,  // default selected index
+                            Messages.getWarningIcon()
+                        )
+                    )
+                }
+
+                when (result.get()) {
+                    1 -> {
+                        // User chose "Restart Pod"
+                        stopAndWaitDevWorkspace(checkCancelled)
+                        return doConnect(onConnected, onDevWorkspaceStopped, onDisconnected, onProgress, checkCancelled)
+                    }
+                }
+
+                // User chose "Cancel Connection"
+                throw IllegalStateException("Remote IDE server is not responding properly. Try restarting the pod and reconnecting.")
+            }
 
             check(remoteIdeServerStatus.isReady) { "Could not connect, remote IDE is not ready." }
 
@@ -182,7 +213,12 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class, ApiException::class, CancellationException::class)
     private fun startAndWaitDevWorkspace(checkCancelled: (() -> Unit)? = null) {
-        if (!devSpacesContext.devWorkspace.started) {
+        // We really need a refreshed DevWorkspace here
+        val devWorkspace = DevWorkspaces(devSpacesContext.client).get(
+            devSpacesContext.devWorkspace.namespace,
+            devSpacesContext.devWorkspace.name)
+
+        if (!devWorkspace.started) {
             checkCancelled?.invoke()
             DevWorkspaces(devSpacesContext.client)
                 .start(
@@ -201,6 +237,35 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             ) }
         ) throw IOException(
             "DevWorkspace '${devSpacesContext.devWorkspace.name}' is not running after ${DevWorkspaces.RUNNING_TIMEOUT} seconds"
+        )
+    }
+
+    @Throws(IOException::class, ApiException::class, CancellationException::class)
+    private fun stopAndWaitDevWorkspace(checkCancelled: (() -> Unit)? = null) {
+        // We really need a refreshed DevWorkspace here
+        val devWorkspace = DevWorkspaces(devSpacesContext.client).get(
+            devSpacesContext.devWorkspace.namespace,
+            devSpacesContext.devWorkspace.name)
+
+        if (devWorkspace.started) {
+            checkCancelled?.invoke()
+            DevWorkspaces(devSpacesContext.client)
+                .stop(
+                    devSpacesContext.devWorkspace.namespace,
+                    devSpacesContext.devWorkspace.name
+                )
+        }
+
+        if (!runBlocking { DevWorkspaces(devSpacesContext.client)
+                .waitPhase(
+                    devSpacesContext.devWorkspace.namespace,
+                    devSpacesContext.devWorkspace.name,
+                    DevWorkspaces.STOPPED,
+                    DevWorkspaces.RUNNING_TIMEOUT,
+                    checkCancelled
+                ) }
+        ) throw IOException(
+            "DevWorkspace '${devSpacesContext.devWorkspace.name}' has not stopped after ${DevWorkspaces.RUNNING_TIMEOUT} seconds"
         )
     }
 }
