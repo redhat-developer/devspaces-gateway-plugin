@@ -35,6 +35,7 @@ import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
+import kotlinx.coroutines.runBlocking
 import java.awt.Component
 import javax.swing.DefaultListModel
 import javax.swing.JButton
@@ -269,23 +270,23 @@ class DevSpacesWorkspacesStepView(
     }
 
     private fun waitDevWorkspaceNotStopped(devWorkspace: DevWorkspace): Boolean {
-        return DevWorkspaces(devSpacesContext.client)
+        return runBlocking { DevWorkspaces(devSpacesContext.client)
             .waitPhaseChanges(
                 devWorkspace.namespace,
                 devWorkspace.name,
                 listOf(DevWorkspaces.STOPPED, DevWorkspaces.FAILED),
                 30
-            )
+            ) }
     }
 
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
-        return DevWorkspaces(devSpacesContext.client)
+        return runBlocking { DevWorkspaces(devSpacesContext.client)
             .waitPhase(
                 devWorkspace.namespace,
                 devWorkspace.name,
                 DevWorkspaces.STOPPED,
                 30
-            )
+            ) }
     }
 
     private fun enableButtons() {
