@@ -9,17 +9,16 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-
 package com.redhat.devtools.gateway.server
 
 import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.Pods
+import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.*
 import java.io.IOException
 import java.util.concurrent.CancellationException
 import kotlin.time.Duration.Companion.seconds
@@ -30,7 +29,10 @@ import kotlin.time.Duration.Companion.seconds
 class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     var pod: V1Pod
     private var container: V1Container
-    private var readyTimeout: Long = 60
+
+    companion object {
+        var readyTimeout: Long = 60
+    }
 
     init {
         pod = findPod()
@@ -40,11 +42,14 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     /**
      * Asks the CDE for the remote IDE server status.
      */
-    fun getStatus(): RemoteIDEServerStatus {
-        Pods(devSpacesContext.client)
-            .exec(
-                pod,
-                arrayOf(
+    @Throws(CancellationException::class)
+    suspend fun getStatus(checkCancelled: (() -> Unit)? = null): RemoteIDEServerStatus =
+        withContext(Dispatchers.IO) {
+            checkCancelled?.invoke()
+            val output = Pods(devSpacesContext.client).exec(
+                pod = pod,
+                container = container.name,
+                command = arrayOf(
 //                  remote-dev-server.sh writes to several sub-folders of HOME (.config, .cache, etc.)
 //                  When registry.access.redhat.com/ubi9 is used for running a user container,
 //                  HOME=/ which is read-only.
@@ -55,24 +60,18 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
                 ),
-                container.name,
-                readyTimeout
-            )
-            .trim()
-            .also { status ->
-                thisLogger().debug("remote server status: $status")
-                return if (status.isEmpty()) {
-                    RemoteIDEServerStatus.empty()
-                } else {
-                    Gson().fromJson(status, RemoteIDEServerStatus::class.java)
-                }
-            }
-    }
+                timeout = readyTimeout
+            ).trim()
+
+            checkCancelled?.invoke()
+            output.takeIf { it.isNotEmpty() }?.let {
+                runCatching { Gson().fromJson(it, RemoteIDEServerStatus::class.java) }.getOrNull()
+            } ?: RemoteIDEServerStatus.empty()
+        }
+
 
     @Throws(IOException::class)
-    suspend fun waitServerReady(
-        checkCancelled: (() -> Unit)? = null
-    ) {
+    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null) {
         doWaitServerState(true, readyTimeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
@@ -81,12 +80,17 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             }
     }
 
-    fun isServerState(isReadyState: Boolean): Boolean {
-        return try {
-            (getStatus().isReady == isReadyState)
+    @Throws(CancellationException::class)
+    suspend fun isServerState(
+        isReadyState: Boolean,
+        checkCancelled: (() -> Unit)? = null
+    ): Boolean {
+        try {
+            return getStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
+            if (e.isCancellationException()) throw e
             thisLogger().debug("Failed to check remote IDE server state.", e)
-            false
+            return false
         }
     }
 
@@ -111,8 +115,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             while (true) {
                 checkCancelled?.invoke() // Throws CancellationException
                 val hasProjects = try {
-                    val status = getStatus()
-                    status.projects?.isNotEmpty()
+                    getStatus(checkCancelled).projects?.isNotEmpty()
                 } catch (e: Exception) {
                     thisLogger().debug("Failed to check remote IDE server state.", e)
                     null
@@ -130,24 +133,23 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class, CancellationException::class)
-    private  suspend fun doWaitServerState(
+    private suspend fun doWaitServerState(
         isReadyState: Boolean,
         timeout: Long = readyTimeout,
         checkCancelled: (() -> Unit)? = null
-    ): Boolean {
-        return withTimeoutOrNull(timeout * 1000) { // convert seconds to ms
-            while (true) {
-                checkCancelled?.invoke() // Throws CancellationException if needed
-
-                if (isServerState(isReadyState)) {
-                    return@withTimeoutOrNull true
-                }
-
-                delay(500L)
+    ): Boolean = withTimeout(timeout * 1000) { // convert seconds → ms
+        while (true) {
+            checkCancelled?.invoke()
+            if (isServerState(isReadyState, checkCancelled)) {
+                return@withTimeout true
             }
-            @Suppress("UNREACHABLE_CODE")
-            null
-        } ?: false // false if timeout occurred
+
+            yield()
+            delay(500)
+        }
+
+        @Suppress("UNREACHABLE_CODE")
+        false
     }
 
     @Throws(IOException::class)

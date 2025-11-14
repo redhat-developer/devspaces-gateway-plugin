@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -12,38 +12,24 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
-import io.kubernetes.client.Exec
+import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
+import io.kubernetes.client.openapi.auth.ApiKeyAuth
+import io.kubernetes.client.openapi.auth.HttpBasicAuth
+import io.kubernetes.client.openapi.auth.HttpBearerAuth
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.*
 import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.BindException
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.util.concurrent.TimeUnit
+import java.net.*
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class Pods(private val client: ApiClient) {
 
@@ -56,53 +42,184 @@ class Pods(private val client: ApiClient) {
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
-    @Throws(IOException::class)
-    fun exec(pod: V1Pod, command: Array<String>, container: String, timeout: Long): String {
-        return runBlocking {
-            val output = ByteArrayOutputStream()
-            val errorOutput = ByteArrayOutputStream()
-            val process: Process = try {
-                Exec(client).exec(pod, command, container, false, false)
-            } catch (e: ApiException) {
-                throw IOException("Failed to execute command in pod: ${e.code} - ${e.responseBody}", e)
-            } catch (e: IOException) {
-                throw IOException("Failed to execute command in pod: ${e.message}", e)
-            }
+    suspend fun exec(
+        pod: V1Pod,
+        command: Array<String>,
+        container: String,
+        timeout: Long = 60,
+        checkCancelled: (() -> Unit)? = null
+    ): String = suspendCancellableCoroutine { cont ->
+        val namespace = pod.metadata!!.namespace!!
+        val podName = pod.metadata!!.name!!
 
-            var stdoutJob: Job? = null
-            var stderrJob: Job? = null
-            try {
-                stdoutJob = copyStream(process.inputStream, output)
-                stderrJob = copyStream(process.errorStream, errorOutput)
-                val exitCode = waitForProcess(process, timeout)
-                stdoutJob.join()
-                stderrJob.join()
-                if (exitCode != 0) {
-                    throw IOException(
-                        "Pod.exec() exited with code $exitCode.\nStderr: ${errorOutput.toString(Charsets.UTF_8)}"
-                    )
+        val closed = CompletableDeferred<Unit>()
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        val execClientApi = createIsolatedExecClient(client)
+        var stdoutJob: Job? = null
+        var stderrJob: Job? = null
+        lateinit var stdoutStream: InputStream
+        lateinit var stderrStream: InputStream
+
+        try {
+            val execHandle = ContainerAwareExec(execClientApi).containerAwareExec(
+                namespace = namespace,
+                pod = podName,
+                container = container,
+                command = command,
+                onOpen = { io ->
+                    stdoutStream = io.stdout
+                    stderrStream = io.stderr
+
+                    stdoutJob = scope.launch { readStream(io.stdout, stdout, checkCancelled) }
+                    stderrJob = scope.launch { readStream(io.stderr, stderr, checkCancelled) }
+
+                    scope.launch {
+                        try {
+                            listOfNotNull(stdoutJob, stderrJob).joinAll()
+                            closed.await()
+
+                            checkCancelled?.invoke()
+                            cont.resume(stdout.toString())
+                        } catch (e: Throwable) {
+                            if (e.isCancellationException()) cont.cancel(e)
+                            else if (cont.isActive) cont.resumeWithException(e)
+                        }
+                    }
+                },
+                onClosed = { _, _ ->
+                    closed.complete(Unit)
+                },
+                onError = { err, _ ->
+                    closed.complete(Unit)
+                    cont.resumeWithException(err)
+                },
+                timeoutMs = timeout * 1000,
+                tty = false
+            )
+
+            cont.invokeOnCancellation { cause ->
+                try { stdoutStream.close() } catch (_: Throwable) {}
+                try { stderrStream.close() } catch (_: Throwable) {}
+                try {
+                    execHandle.job.cancel(CancellationException("Pods.exec cancellation"))
+                    execHandle.future.cancel(true)
+                } catch (_: Throwable) {}
+                scope.cancel()
+            }
+        } catch (e: Exception) {
+            if (cont.isActive) cont.resumeWithException(e)
+        }
+    }
+
+    private fun readStream(
+        input: InputStream,
+        output: StringBuilder,
+        checkCancelled: (() -> Unit)?
+    ) {
+        while (true) {
+            checkCancelled?.invoke()
+            val b = input.read()
+            if (b == -1) break
+            output.append(b.toChar())
+        }
+    }
+
+    // Helpers to access private maps using reflection
+     fun ApiClient.copy(): ApiClient {
+        val newDispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 64
+        }
+        val newPool = okhttp3.ConnectionPool()
+
+        val newHttp = this.httpClient.newBuilder()
+            .dispatcher(newDispatcher)
+            .connectionPool(newPool)
+            .pingInterval(0, java.util.concurrent.TimeUnit.SECONDS) // IMPORTANT for Exec
+            .build()
+
+        val clone = ApiClient(newHttp)
+
+        clone.basePath = this.basePath
+        clone.setDebugging(this.isDebugging)
+        clone.setVerifyingSsl(this.isVerifyingSsl)
+        clone.setSslCaCert(this.sslCaCert)
+        clone.setKeyManagers(this.keyManagers)
+        clone.setReadTimeout(this.readTimeout)
+        clone.setConnectTimeout(this.connectTimeout)
+        clone.setWriteTimeout(this.writeTimeout)
+
+        this.authentications.forEach { (name, auth) ->
+            val target = clone.getAuthentication(name) ?: return@forEach
+
+            when (auth) {
+                is ApiKeyAuth -> {
+                    if (target is ApiKeyAuth) {
+                        target.apiKey = auth.apiKey
+                        target.apiKeyPrefix = auth.apiKeyPrefix
+                    }
                 }
-                output.toString(Charsets.UTF_8)
-            } finally {
-                stdoutJob?.cancelAndJoin()
-                stderrJob?.cancelAndJoin()
-                process.destroy()
+
+                is HttpBasicAuth -> {
+                    if (target is HttpBasicAuth) {
+                        target.username = auth.username
+                        target.password = auth.password
+                    }
+                }
+
+                is HttpBearerAuth -> {
+                    if (target is HttpBearerAuth) {
+                        // No access to private "scheme" – always use correct "Bearer"
+                        target.bearerToken = auth.bearerToken
+                    }
+                }
             }
         }
+
+        defaultHeaders().forEach { (k, v) -> clone.addDefaultHeader(k, v) }
+        defaultCookies().forEach { (k, v) -> clone.addDefaultCookie(k, v) }
+        return clone
     }
 
-    private suspend fun waitForProcess(process: Process, timeout: Long): Int = withContext(Dispatchers.IO) {
-        val exited = process.waitFor(timeout, TimeUnit.SECONDS) // Wait up to 30 seconds
-        if (!exited) {
-            process.destroyForcibly()
-            throw RuntimeException("Command in pod timed out after 30 seconds.")
+    // Helpers to access headers/cookies via public API
+    fun ApiClient.defaultHeaders(): Map<String, String> {
+        return try {
+            val field = ApiClient::class.java.getDeclaredField("defaultHeaderMap")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            field.get(this) as Map<String, String>
+        } catch (_: Exception) {
+            emptyMap()
         }
-        process.exitValue()
     }
 
-    private fun CoroutineScope.copyStream(input: InputStream, output: ByteArrayOutputStream
-    ): Job = launch(Dispatchers.IO) {
-        input.copyTo(output)
+    fun ApiClient.defaultCookies(): Map<String, String> {
+        return try {
+            val field = ApiClient::class.java.getDeclaredField("defaultCookieMap")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            field.get(this) as Map<String, String>
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun createIsolatedExecClient(base: ApiClient): ApiClient {
+        val cloned = base.copy()
+
+        cloned.httpClient = base.httpClient.newBuilder()
+            .connectionPool(okhttp3.ConnectionPool())
+            .dispatcher(okhttp3.Dispatcher().apply {
+                maxRequests = 64
+                maxRequestsPerHost = 64
+            })
+            .build()
+
+        return cloned
     }
 
     @Throws(IOException::class)
@@ -174,7 +291,7 @@ class Pods(private val client: ApiClient) {
                     copyStreams(clientSocket, forwardResult, remotePort)
                     return
                 } catch (e: Exception) {
-                    if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+                    if (e.isCancellationException()) throw e
                     logger.info(
                         "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
                     )
@@ -186,7 +303,7 @@ class Pods(private val client: ApiClient) {
                 }
             }
         } catch(e: Exception) {
-            if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+            if (e.isCancellationException()) throw e
             logger.warn(
                 "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
                 e)
