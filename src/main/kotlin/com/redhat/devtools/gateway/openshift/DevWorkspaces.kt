@@ -26,6 +26,11 @@ import java.io.IOException
 import java.util.concurrent.CancellationException
 import kotlin.time.Duration.Companion.seconds
 
+data class DevWorkspaceListResult(
+    val items: List<DevWorkspace>,
+    val resourceVersion: String?
+)
+
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
@@ -41,8 +46,8 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     @Throws(ApiException::class)
-    fun list(namespace: String): List<DevWorkspace> {
-       try {
+    fun listWithResult(namespace: String): DevWorkspaceListResult {
+        try {
             val response = customApi.listNamespacedCustomObject(
                 "workspace.devfile.io",
                 "v1alpha2",
@@ -52,12 +57,12 @@ class DevWorkspaces(private val client: ApiClient) {
 
             val devWorkspaceTemplateMap = getDevWorkspaceTemplateMap(namespace)
             val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
-            return dwItems
-                .stream()
+            val dwList = dwItems
                 .map { dwItem -> DevWorkspace.from(dwItem) }
                 .filter { isIdeaEditorBased(it, devWorkspaceTemplateMap) }
-                .toList()
+            val lastResourceVersion = (Utils.getValue(response, arrayOf("metadata", "resourceVersion")) as String?)
 
+            return DevWorkspaceListResult(dwList, lastResourceVersion)
         } catch (e: ApiException) {
             thisLogger().info(e.message)
 
@@ -67,13 +72,18 @@ class DevWorkspaces(private val client: ApiClient) {
             // It doesn't make sense to show an error to the user in such cases,
             // so let's skip it silently.
             if ((response["code"] as Double) == 403.0) {
-                return emptyList()
+                return DevWorkspaceListResult(emptyList(), null)
             } else {
                 // The error will be shown in the Gateway UI.
                 thisLogger().error(e.message)
                 throw e
             }
         }
+    }
+
+    @Throws(ApiException::class)
+    fun list(namespace: String): List<DevWorkspace> {
+       return listWithResult(namespace).items
     }
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
@@ -95,6 +105,16 @@ class DevWorkspaces(private val client: ApiClient) {
                 val name = volume?.get("name") as? String ?: map["name"] as? String
                 name.equals("idea-server", ignoreCase = true)
             }
+        }
+    }
+
+    // Creates a filter for the Idea-based DevWorkspaces
+    fun createFilter(
+        namespace: String
+    ): (DevWorkspace) -> Boolean {
+        val templateMap = getDevWorkspaceTemplateMap(namespace)
+        return { dw: DevWorkspace ->
+            isIdeaEditorBased(dw, templateMap)
         }
     }
 
@@ -155,7 +175,7 @@ class DevWorkspaces(private val client: ApiClient) {
         return withTimeoutOrNull(timeout.seconds) {
             while (true) {
                 checkCancelled?.invoke()
-                val watcher = createWatcher(namespace, "metadata.name=$name")
+                val watcher = createWatcher(namespace, "metadata.name=$name", latestResourceVersion = null)
                 try {
                     while (true) {
                         checkCancelled?.invoke()
@@ -178,7 +198,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     watcher.close()
                 }
 
-                // Watch ended because server closed the stream → retry a new watch
+                // Watch ended because server closed the stream - retry a new watch
                 delay(200)
             }
 
@@ -199,7 +219,7 @@ class DevWorkspaces(private val client: ApiClient) {
         return withTimeoutOrNull(timeout.seconds) {
             while (true) {
                 checkCancelled?.invoke()
-                val watcher = createWatcher(namespace, "metadata.name=$name")
+                val watcher = createWatcher(namespace, "metadata.name=$name", latestResourceVersion = null)
                 try {
                     while (true) {
                         checkCancelled?.invoke()
@@ -218,7 +238,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     watcher.close()
                 }
 
-                // Watch ended because server closed the stream → retry a new watch
+                // Watch ended because server closed the stream - retry a new watch
                 delay(200)
             }
 
@@ -250,7 +270,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
-    private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
+    fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = "", latestResourceVersion: String? = null): Watch<Any> {
         return Watch.createWatch(
             client,
             customApi.listNamespacedCustomObject(
@@ -260,6 +280,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 "devworkspaces"
             ).fieldSelector(fieldSelector)
                 .labelSelector(labelSelector)
+                .resourceVersion(latestResourceVersion)
                 .watch(true)
                 .buildCall(null),
             object : TypeToken<Watch.Response<Any>>() {}.type
