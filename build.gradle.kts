@@ -40,7 +40,7 @@ dependencies {
     testImplementation("io.mockk:mockk:1.14.6")
     testImplementation("io.mockk:mockk-agent-jvm:1.14.6")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+//    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
