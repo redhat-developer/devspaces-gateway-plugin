@@ -247,7 +247,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
-    private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
+    fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
         return Watch.createWatch(
             client,
             customApi.listNamespacedCustomObject(

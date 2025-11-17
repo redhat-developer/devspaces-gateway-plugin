@@ -11,6 +11,8 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import DevWorkspaceListener
+import DevWorkspaceWatcher
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
@@ -35,13 +37,19 @@ import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
+import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.util.Watch
+import kotlinx.coroutines.*
 import java.awt.Component
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JList
 import javax.swing.ListCellRenderer
+import javax.swing.SwingUtilities
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
+import kotlin.collections.remove
+import kotlin.text.set
 
 class DevSpacesWorkspacesStepView(
     private var devSpacesContext: DevSpacesContext,
@@ -59,6 +67,19 @@ class DevSpacesWorkspacesStepView(
 
     private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
+
+    // DevWorkspace watchers (per namespace)
+    private val watcherScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var watchManager: DevWorkspaceWatchManager? = null
+
+    fun DefaultListModel<DevWorkspace>.indexOfFirst(
+        predicate: (DevWorkspace) -> Boolean
+    ): Int {
+        for (i in 0 until size()) {
+            if (predicate(get(i))) return i
+        }
+        return -1
+    }
 
     override val component = panel {
         row {
@@ -100,14 +121,46 @@ class DevSpacesWorkspacesStepView(
         }
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
+
         refreshAllDevWorkspaces()
+
+        watchManager = DevWorkspaceWatchManager(
+            client = devSpacesContext.client,
+            createWatcher = { ns -> DevWorkspaces(devSpacesContext.client).createWatcher(ns) },
+            listener = object : DevWorkspaceListener {
+                override fun onAdded(dw: DevWorkspace) {
+                    SwingUtilities.invokeLater {
+                        val idx = listDWDataModel.indexOfFirst { it.name == dw.name }
+                        if (idx == -1) listDWDataModel.addElement(dw)
+                    }
+                }
+
+                override fun onUpdated(dw: DevWorkspace) {
+                    SwingUtilities.invokeLater {
+                        val idx = listDWDataModel.indexOfFirst { it.name == dw.name }
+                        if (idx >= 0) listDWDataModel[idx] = dw
+                    }
+                }
+
+                override fun onDeleted(name: String) {
+                    SwingUtilities.invokeLater {
+                        val idx = listDWDataModel.indexOfFirst { it.name == name }
+                        if (idx >= 0) listDWDataModel.remove(idx)
+                    }
+                }
+            }
+        )
+
+        watchManager!!.start()
     }
 
     override fun onPrevious(): Boolean {
+        watchManager?.stop()
         return true
     }
 
     override fun onNext(): Boolean {
+        watchManager?.stop()
         if (!listDevWorkspaces.isSelectionEmpty) {
             connect()
         }
@@ -370,6 +423,36 @@ class DevSpacesWorkspacesStepView(
         override fun valueChanged(e: ListSelectionEvent) {
             enableButtons()
             refreshNextButton()
+        }
+    }
+
+    class DevWorkspaceWatchManager(
+        private val client: ApiClient,
+        private val createWatcher: (String) -> Watch<Any>,
+        private val listener: DevWorkspaceListener,
+        private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    ) {
+
+        private val watchers = mutableListOf<DevWorkspaceWatcher>()
+
+        fun start() {
+            Projects(client).list()
+                .onEach { project ->
+                    val ns = Utils.getValue(project, arrayOf("metadata","name")) as String
+                    val w = DevWorkspaceWatcher(
+                        namespace = ns,
+                        createWatcher = createWatcher,
+                        listener = listener,
+                        scope = scope
+                    )
+                    watchers += w
+                    w.start()
+                }
+        }
+
+        fun stop() {
+            watchers.forEach { it.stop() }
+            watchers.clear()
         }
     }
 }
