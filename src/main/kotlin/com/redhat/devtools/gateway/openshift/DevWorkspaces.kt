@@ -96,6 +96,16 @@ class DevWorkspaces(private val client: ApiClient) {
         }
     }
 
+    // Creates filter for Idea-based DevWorkspaces
+    fun createFilter(
+        namespace: String
+    ): (DevWorkspace) -> Boolean {
+        val templateMap = getDevWorkspaceTemplateMap(namespace)
+        return { dw: DevWorkspace ->
+            isIdeaEditorBased(dw, templateMap)
+        }
+    }
+
     fun get(namespace: String, name: String): DevWorkspace {
         val dwObj = customApi.getNamespacedCustomObject(
             "workspace.devfile.io",
@@ -247,7 +257,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
-    private fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
+    fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = ""): Watch<Any> {
         return Watch.createWatch(
             client,
             customApi.listNamespacedCustomObject(

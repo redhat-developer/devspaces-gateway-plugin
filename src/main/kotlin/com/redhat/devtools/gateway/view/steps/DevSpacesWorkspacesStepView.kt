@@ -11,17 +11,20 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import DevWorkspaceListener
+import DevWorkspaceWatcher
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
-import com.intellij.ui.components.JBLabel
+import com.intellij.ui.ColoredListCellRenderer
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.dsl.builder.AlignX
-import com.intellij.ui.dsl.builder.RightGap
-import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.dsl.builder.*
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -35,18 +38,22 @@ import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
-import java.awt.Component
-import javax.swing.DefaultListModel
-import javax.swing.JButton
-import javax.swing.JList
-import javax.swing.ListCellRenderer
+import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.util.Watch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import java.awt.Dimension
+import java.awt.Font
+import java.awt.FontMetrics
+import javax.swing.*
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
 
 class DevSpacesWorkspacesStepView(
     private var devSpacesContext: DevSpacesContext,
     private val enableNextButton: (() -> Unit)?
-) : DevSpacesWizardStep {
+) : DevSpacesWizardStep, Disposable {
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.previous")
@@ -54,11 +61,22 @@ class DevSpacesWorkspacesStepView(
     private var listDWDataModel = DefaultListModel<DevWorkspace>()
     private var listDevWorkspaces = JBList(listDWDataModel)
 
-    // 'true' when there are DevWorkspaces come from multiple namespaces
-    private var multipleNamespaces = false
-
     private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
+
+    private var watchManager: DevWorkspaceWatchManager? = null
+
+    override fun dispose() {
+    }
+
+    fun DefaultListModel<DevWorkspace>.indexOfFirst(
+        predicate: (DevWorkspace) -> Boolean
+    ): Int {
+        for (i in 0 until size()) {
+            if (predicate(get(i))) return i
+        }
+        return -1
+    }
 
     override val component = panel {
         row {
@@ -66,9 +84,17 @@ class DevSpacesWorkspacesStepView(
                 font = JBFont.h2().asBold()
             }
         }
+
         row {
-            cell(JBScrollPane(listDevWorkspaces)).align(AlignX.FILL)
-        }
+            cell(JBScrollPane(listDevWorkspaces)
+                    .apply {
+                        preferredSize = Dimension(preferredSize.width, 200)
+                        minimumSize = Dimension(minimumSize.width, 100)
+                    })
+                .align(AlignX.FILL)
+                .align(AlignY.FILL)
+        }.resizableRow().bottomGap(BottomGap.MEDIUM)
+
         row {
             label("").resizableColumn().align(AlignX.FILL)
 
@@ -98,20 +124,103 @@ class DevSpacesWorkspacesStepView(
                 connect()
             }
         }
-        listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
+        listDevWorkspaces.cellRenderer = MultipleDevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
+
+        initListListeners { this }
         refreshAllDevWorkspaces()
+
+        val devWorkspaces = DevWorkspaces(devSpacesContext.client)
+        watchManager = DevWorkspaceWatchManager(
+            client = devSpacesContext.client,
+            createWatcher = { ns -> devWorkspaces.createWatcher(ns) },
+            createFilter = { ns -> devWorkspaces.createFilter(ns) },
+            listener = object : DevWorkspaceListener {
+                override fun onAdded(dw: DevWorkspace) {
+                    onUpdated(dw)
+                }
+
+                override fun onUpdated(dw: DevWorkspace) {
+                    SwingUtilities.invokeLater {
+                        val idx = listDWDataModel.indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
+                        if (idx == -1) {
+                            println("onAdded: ${dw.name}")
+//                            listDWDataModel.addElement(dw)
+                            val index = findInsertIndex(dw)
+                            listDWDataModel.add(index, dw)
+                        } // Item did not exist → ADD
+                        else {
+                            println("onUpdated: ${dw.name}")
+                            listDWDataModel.set(idx, dw)
+                        } // Item exists → UPDATE
+                    }
+                }
+
+                override fun onDeleted(dw: DevWorkspace) {
+                    SwingUtilities.invokeLater {
+                        val idx = listDWDataModel.indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
+                        if (idx >= 0) {
+                            println("onDeleted: ${dw.name} @${dw.namespace}")
+                            listDWDataModel.remove(idx)
+                        }
+                    }
+                }
+
+                private fun findInsertIndex(dw: DevWorkspace): Int {
+                    val n = listDWDataModel.size
+
+                    // Step 1: Find first index of this namespace or where it should go
+                    val groupStart = (0 until n).firstOrNull {
+                        listDWDataModel[it].namespace >= dw.namespace
+                    } ?: n
+
+                    // Step 2: find correct position inside the namespace group
+                    val insertIndex = (groupStart until n).firstOrNull {
+                        listDWDataModel[it].namespace == dw.namespace && listDWDataModel[it].name >= dw.name
+                    } ?: run {
+                        // find end of group
+                        var endOfGroup = groupStart
+                        while (endOfGroup < n && listDWDataModel[endOfGroup].namespace == dw.namespace) endOfGroup++
+                        endOfGroup
+                    }
+
+                    return insertIndex
+                }
+
+            }
+        )
+        watchManager!!.start()
     }
 
     override fun onPrevious(): Boolean {
+        watchManager?.stop()
         return true
     }
 
     override fun onNext(): Boolean {
+        watchManager?.stop()
         if (!listDevWorkspaces.isSelectionEmpty) {
             connect()
         }
         return false
+    }
+
+    private fun initListListeners(disposable: Disposable) {
+        val selectionListener = ListSelectionListener { enableButtons() }
+        listDevWorkspaces.addListSelectionListener(selectionListener)
+
+        val dataListener = object : javax.swing.event.ListDataListener {
+            override fun intervalAdded(e: javax.swing.event.ListDataEvent) = enableButtons()
+            override fun intervalRemoved(e: javax.swing.event.ListDataEvent) = enableButtons()
+            override fun contentsChanged(e: javax.swing.event.ListDataEvent) = enableButtons()
+        }
+        listDWDataModel.addListDataListener(dataListener)
+
+        Disposer.register(disposable) {
+            listDevWorkspaces.removeListSelectionListener(selectionListener)
+            listDWDataModel.removeListDataListener(dataListener)
+        }
+
     }
 
     private fun refreshAllDevWorkspaces() {
@@ -144,8 +253,6 @@ class DevSpacesWorkspacesStepView(
     private fun doRefreshAllDevWorkspaces() {
         val devWorkspaces = ArrayList<DevWorkspace>()
         val projects = Projects(devSpacesContext.client).list()
-
-        multipleNamespaces = projects.size > 1
 
         projects
             .onEach { project ->
@@ -340,25 +447,47 @@ class DevSpacesWorkspacesStepView(
         return devSpacesContext.activeWorkspaces.contains(workspace)
     }
 
-    inner class DevWorkspaceListRenderer : ListCellRenderer<DevWorkspace> {
-        override fun getListCellRendererComponent(
-            list: JList<out DevWorkspace>?,
+    inner class MultipleDevWorkspaceListRenderer : ColoredListCellRenderer<DevWorkspace>() {
+        override fun customizeCellRenderer(
+            list: JList<out DevWorkspace>,
             devWorkspace: DevWorkspace,
             index: Int,
-            isSelected: Boolean,
-            cellHasFocus: Boolean
-        ): Component {
-            val icon = DevSpacesIcons.getWorkspacePhaseIcon(devWorkspace.phase)
-                ?: AllIcons.Empty
-            return JBLabel().apply {
-                font = JBFont.h4().asPlain()
-                border = JBUI.Borders.emptyLeft(6)
-                icon.let {
-                    setIcon(it)
-                    horizontalTextPosition = JBLabel.TRAILING
-                }
-                text = "${if (!multipleNamespaces) "" else (devWorkspace.namespace + " /")} ${devWorkspace.name}"
+            selected: Boolean,
+            hasFocus: Boolean
+        ) {
+            val icon = DevSpacesIcons.getWorkspacePhaseIcon(devWorkspace.phase) ?: AllIcons.Empty
+            setIcon(icon)
+
+            border = JBUI.Borders.emptyLeft(6)
+            font = JBFont.h4().asPlain()
+
+            append(devWorkspace.name, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+            if (hasMultipleWorkspaces(list.model)) {
+                val fm = getFontMetrics(font)
+                val maxNameWidth = calculateMaxNameWidth(list.model, font, fm)
+                val padding = maxNameWidth - fm.stringWidth(devWorkspace.name) + 20 // extra gap
+                append(" ".repeat(padding / fm.stringWidth(" ")), SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                append(" @${devWorkspace.namespace}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
             }
+        }
+
+        private fun calculateMaxNameWidth(listModel: ListModel<out DevWorkspace>, font: Font, fm: FontMetrics): Int {
+            var maxWidth = 0
+            for (i in 0 until listModel.size) {
+                val nameWidth = fm.stringWidth(listModel.getElementAt(i).name)
+                if (nameWidth > maxWidth) maxWidth = nameWidth
+            }
+            return maxWidth
+        }
+
+        private fun hasMultipleWorkspaces(listModel: ListModel<out DevWorkspace>): Boolean {
+            if (listModel.size <= 1) return false
+
+            val firstNamespace = listModel.getElementAt(0).namespace
+            return (1 until listModel.size)
+                .asSequence()
+                .map { listModel.getElementAt(it).namespace }
+                .any { it != firstNamespace }
         }
     }
 
@@ -370,6 +499,38 @@ class DevSpacesWorkspacesStepView(
         override fun valueChanged(e: ListSelectionEvent) {
             enableButtons()
             refreshNextButton()
+        }
+    }
+
+    class DevWorkspaceWatchManager(
+        private val client: ApiClient,
+        private val createWatcher: (String) -> Watch<Any>,
+        private val createFilter: (String) -> ((DevWorkspace) -> Boolean),
+        private val listener: DevWorkspaceListener,
+        private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    ) {
+
+        private val watchers = mutableListOf<DevWorkspaceWatcher>()
+
+        fun start() {
+            Projects(client).list()
+                .onEach { project ->
+                    val ns = Utils.getValue(project, arrayOf("metadata","name")) as String
+                    val w = DevWorkspaceWatcher(
+                        namespace = ns,
+                        createWatcher = createWatcher,
+                        createFilter = createFilter,
+                        listener = listener,
+                        scope = scope
+                    )
+                    watchers += w
+                    w.start()
+                }
+        }
+
+        fun stop() {
+            watchers.forEach { it.stop() }
+            watchers.clear()
         }
     }
 }
