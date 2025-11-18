@@ -149,6 +149,7 @@ tasks {
 
     withType<Test> {
         useJUnitPlatform()
+        outputs.upToDateWhen { false }  // Force tests to always run
         jvmArgs("-Dnet.bytebuddy.experimental=true", "-Dmockk.agent.global=false")
         testLogging {
             events("skipped", "failed", "standardOut", "standardError")

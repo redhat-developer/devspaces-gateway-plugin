@@ -33,7 +33,10 @@ import com.redhat.devtools.gateway.util.message
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
+import com.redhat.devtools.gateway.view.ui.getAllElements
+import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import kotlinx.coroutines.*
+import java.awt.event.ItemEvent
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -57,13 +60,10 @@ class DevSpacesServerStepView(
     private var tfServer =
         FilteringComboBox.create(
             { it?.toString() ?: "" },
-            { name, clusters -> clusters.firstOrNull { it.name == name } },
-            Cluster::class.java
-        ) { cluster ->
-            if (cluster != null) {
-                tfToken.text = cluster.token ?: ""
-            }
-        }.apply {
+            { Cluster.fromUrl(it) }
+        )
+        .apply {
+            addItemListener(::onClusterSelected)
             PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField)
         }
     override val component = panel {
@@ -81,13 +81,26 @@ class DevSpacesServerStepView(
     }.apply {
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
         border = JBUI.Borders.empty(8)
+        requestInitialFocus(tfServer) // tfServer.focused() does not work
     }
+
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
 
     override fun onInit() {
         startKubeconfigMonitor()
+    }
+
+    private fun onClusterSelected(event: ItemEvent) {
+        if (event.stateChange == ItemEvent.SELECTED) {
+            (event.item as? Cluster)?.let { selectedCluster ->
+                val allClusters = tfServer.getAllElements()
+                if (allClusters.contains(selectedCluster)) {
+                    tfToken.text = selectedCluster.token
+                }
+            }
+        }
     }
 
     private fun onTokenChanged(): DocumentListener = object : DocumentListener {
@@ -149,11 +162,8 @@ class DevSpacesServerStepView(
     }
 
     override fun isNextEnabled(): Boolean {
-        return if (tfServer.selectedItem == null) {
-            false
-        } else {
-            !tfToken.text.isNullOrBlank()
-        }
+        return tfServer.selectedItem != null
+                && tfToken.text.isNotEmpty()
     }
 
     private fun setClusters(clusters: List<Cluster>) {
