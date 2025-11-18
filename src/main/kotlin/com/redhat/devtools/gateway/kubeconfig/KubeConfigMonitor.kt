@@ -36,9 +36,9 @@ class KubeConfigMonitor(
      */
     suspend fun onClustersCollected(action: suspend (clusters: List<Cluster>) -> Unit) {
         logger.info("Setting up SharedFlow collection for cluster updates")
-        clusters.collect { clusters ->
-            logger.info("Found ${clusters.size} clusters")
-            action(clusters)
+        clusters.collect { collected ->
+            logger.info("Found ${collected.size} clusters")
+            action(collected)
         }
     }
 

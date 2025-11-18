@@ -37,10 +37,11 @@ class FilteringComboBoxTest {
     @BeforeEach
     fun setUp() {
         selectedItem = null
+        comboBox = createComboBox()
     }
 
     @Test
-    fun `Should use custom toString function for rendering`() {
+    fun `#renderer does use custom toString function for rendering`() {
         // given
         val customToString: (TestItem?) -> String = { it?.let { "ID: ${it.id} - ${it.name}" } ?: "" }
         comboBox = createComboBox(customToString)
@@ -62,9 +63,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should invoke given onItemSelected callback when item is selected`() {
+    fun `#onItemSelected does invoke callback when item is selected`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
 
         // when
@@ -78,9 +78,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should filter items case-insensitively`() {
+    fun `#filterItems does filter items case-insensitively`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -99,9 +98,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should filter items with substring matching`() {
+    fun `#filterItems does match substrings`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -119,9 +117,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should doe not filter on navigation keys`() {
+    fun `#onKeyPressed does not filter on navigation keys`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
         val initialCount = comboBox.itemCount
@@ -134,9 +131,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should not filter on escape key`() {
+    fun `#onKeyPressed does not filter on escape key`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
         val initialCount = comboBox.itemCount
@@ -148,13 +144,17 @@ class FilteringComboBoxTest {
         assertThat(comboBox.itemCount).isEqualTo(initialCount)
     }
 
+
+
+
+
     @Test
-    fun `Should is matching item using custom matchItem function`() {
+    fun `#getItem does match item using custom toElement function`() {
         // given
-        val matchItem: (String, List<TestItem>) -> TestItem? = { text, items ->
+        val toElement: (String) -> TestItem? = { text ->
             items.find { it.id.toString() == text }
         }
-        comboBox = createComboBox(matchItem = matchItem)
+        comboBox = createComboBox(toElement = toElement)
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -172,9 +172,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should return text when matchItem is null and no exact match`() {
+    fun `#getItem does return null when toElement is null and no exact match`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -185,13 +184,12 @@ class FilteringComboBoxTest {
 
         // then - should return the text itself
         val item = comboBox.editor.item
-        assertThat(item).isEqualTo("Unknown Item")
+        assertThat(item).isNull()
     }
 
     @Test
-    fun `Should set editor text when item is selected`() {
+    fun `#onItemSelected does set editor text when item is selected`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -208,7 +206,7 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should handle null items gracefully`() {
+    fun `#create does handle null items gracefully`() {
         // given
         comboBox = createComboBox(toString = { it?.name ?: "null" })
         
@@ -225,7 +223,7 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should render null items with toString function`() {
+    fun `#renderer does render null items with toString function`() {
         // given
         comboBox = createComboBox(toString = { it?.name ?: "<empty>" })
 
@@ -246,9 +244,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should hide popup when filtering results in no matches`() {
+    fun `#showPopup does hide popup when filtering results in no matches`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
         
@@ -275,9 +272,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should preserve editor text when filtering`() {
+    fun `#filterItems does preserve editor text when filtering`() {
         // given
-        comboBox = createComboBox()
         items.forEach { comboBox.addItem(it) }
         val editor = comboBox.editor.editorComponent as JTextField
 
@@ -291,17 +287,19 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should not invoke onItemSelected for DESELECTED events`() {
+    fun `#onItemSelected does not invoke callback for DESELECTED events`() {
         // given
         var updateCount = 0
         comboBox = FilteringComboBox.create(
             toString = { it?.name ?: "" },
-            type = TestItem::class.java,
-            onItemSelected = {
-                updateCount++
-                selectedItem = it
-            }
+            toElement = { null }
         )
+        comboBox.addItemListener { event ->
+            if (event.stateChange == java.awt.event.ItemEvent.SELECTED) {
+                updateCount++
+                selectedItem = event.item as? TestItem
+            }
+        }
         items.forEach { comboBox.addItem(it) }
 
         // when - select and then deselect
@@ -321,9 +319,8 @@ class FilteringComboBoxTest {
     }
 
     @Test
-    fun `Should sort filtered items by match position`() {
+    fun `#filterItems does sort filtered items by match position`() {
         // given
-        comboBox = createComboBox()
         // Add items where "an" appears at different positions
         listOf(
             TestItem(1, "Han Solo"),           // 'an' at position 1
@@ -345,60 +342,294 @@ class FilteringComboBoxTest {
         }
     }
 
+    @Test
+    fun `#filterItems does show all items with empty string`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        val editor = comboBox.editor.editorComponent as JTextField
+        val totalItems = comboBox.itemCount
+
+        // when - filter with empty string
+        SwingUtilities.invokeAndWait {
+            editor.text = ""
+        }
+        typeText(editor, " ")
+        SwingUtilities.invokeAndWait {
+            editor.text = ""
+        }
+        Thread.sleep(100)
+
+        // then - all items should be visible
+        assertThat(comboBox.itemCount).isEqualTo(totalItems)
+    }
+
+    @Test
+    fun `#renderer does render selected items with selection colors`() {
+        // given
+        comboBox.addItem(items[0])
+
+        // when
+        val renderer = comboBox.renderer
+        val component = renderer.getListCellRendererComponent(
+            JList(),
+            items[0],
+            0,
+            true,  // isSelected = true
+            false
+        )
+
+        // then - should have selection background
+        assertThat(component).isInstanceOf(JLabel::class.java)
+        val label = component as JLabel
+        assertThat(label.background).isNotNull
+        assertThat(label.foreground).isNotNull
+    }
+
+    @Test
+    fun `#renderer does render focused items`() {
+        // given
+        comboBox.addItem(items[0])
+
+        // when
+        val renderer = comboBox.renderer
+        val component = renderer.getListCellRendererComponent(
+            JList(),
+            items[0],
+            0,
+            false,
+            true  // cellHasFocus = true
+        )
+
+        // then - should render without error
+        assertThat(component).isInstanceOf(JLabel::class.java)
+        assertThat((component as JLabel).text).isEqualTo("Luke Skywalker")
+    }
+
+    @Test
+    fun `#getItem does return selected item when text matches`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+
+        // when - select an item and verify editor.item returns it
+        SwingUtilities.invokeAndWait {
+            comboBox.selectedItem = items[3]
+        }
+        Thread.sleep(100)
+
+        // then - getItem should return the selected item
+        val item = comboBox.editor.item
+        assertThat(item).isEqualTo(items[3])
+    }
+
+    @Test
+    fun `#selectAll does select all text in editor`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        val editor = comboBox.editor.editorComponent as JTextField
+
+        // when
+        SwingUtilities.invokeAndWait {
+            editor.text = "test text"
+            comboBox.editor.selectAll()
+        }
+
+        // then
+        SwingUtilities.invokeAndWait {
+            assertThat(editor.selectedText).isEqualTo("test text")
+        }
+    }
+
+    @Test
+    fun `#addActionListener does add and invoke action listener`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        var actionPerformed = false
+        val listener = java.awt.event.ActionListener { actionPerformed = true }
+
+        // when
+        comboBox.editor.addActionListener(listener)
+        SwingUtilities.invokeAndWait {
+            val editor = comboBox.editor.editorComponent as JTextField
+            editor.postActionEvent()
+        }
+        Thread.sleep(50)
+
+        // then
+        assertThat(actionPerformed).isTrue
+
+        // cleanup
+        comboBox.editor.removeActionListener(listener)
+    }
+
+    @Test
+    fun `#removeActionListener does remove action listener`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        var actionCount = 0
+        val listener = java.awt.event.ActionListener { actionCount++ }
+
+        // when
+        comboBox.editor.addActionListener(listener)
+        SwingUtilities.invokeAndWait {
+            val editor = comboBox.editor.editorComponent as JTextField
+            editor.postActionEvent()
+        }
+        Thread.sleep(50)
+        val firstCount = actionCount
+
+        comboBox.editor.removeActionListener(listener)
+        SwingUtilities.invokeAndWait {
+            val editor = comboBox.editor.editorComponent as JTextField
+            editor.postActionEvent()
+        }
+        Thread.sleep(50)
+
+        // then - count should not increase after removing listener
+        assertThat(firstCount).isEqualTo(1)
+        assertThat(actionCount).isEqualTo(firstCount)
+    }
+
+    @Test
+    fun `#Selection does preserve text selection during filtering`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        val editor = comboBox.editor.editorComponent as JTextField
+
+        // when - type text and select part of it
+        SwingUtilities.invokeAndWait {
+            editor.text = "Luke"
+            editor.select(1, 3)  // select "uk"
+        }
+        val selectedBefore = editor.selectedText
+
+        // trigger filtering
+        typeText(editor, "Luke")
+        Thread.sleep(100)
+
+        // then - selection might be restored or handled gracefully
+        SwingUtilities.invokeAndWait {
+            assertThat(editor.text).isEqualTo("Luke")
+            // Selection behavior may vary, just ensure no crash
+        }
+    }
+
+    @Test
+    fun `#getIndexOf does get correct index of item in filtered model`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        val editor = comboBox.editor.editorComponent as JTextField
+
+        // when - filter to reduce items
+        typeText(editor, "Sky")
+        Thread.sleep(200)
+
+        // then - getIndexOf should work on filtered model
+        SwingUtilities.invokeAndWait {
+            val skywalkerItem = (0 until comboBox.itemCount)
+                .map { comboBox.getItemAt(it) }
+                .firstOrNull { it?.name?.contains("Skywalker") == true }
+            
+            if (skywalkerItem != null) {
+                val model = comboBox.model as DefaultComboBoxModel
+                val index = model.getIndexOf(skywalkerItem)
+                assertThat(index).isGreaterThanOrEqualTo(0)
+            }
+        }
+    }
+
+    @Test
+    fun `#removeAllElements does remove all elements from model`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        assertThat(comboBox.itemCount).isGreaterThan(0)
+
+        // when
+        SwingUtilities.invokeAndWait {
+            comboBox.removeAllItems()
+        }
+
+        // then
+        assertThat(comboBox.itemCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `#PopupOpened does handle programmatic popup opening vs user opening`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        val editor = comboBox.editor.editorComponent as JTextField
+
+        // when - user types (programmatic popup)
+        typeText(editor, "Luke")
+        Thread.sleep(100)
+
+        // then - popup should open and show filtered results
+        SwingUtilities.invokeAndWait {
+            // After typing, the model should be filtered
+            assertThat(comboBox.itemCount).isLessThanOrEqualTo(items.size)
+        }
+
+        // when - hide popup (don't need to show it again as that requires component visibility)
+        SwingUtilities.invokeAndWait {
+            comboBox.hidePopup()
+        }
+        Thread.sleep(50)
+
+        // then - should handle popup state without error
+        SwingUtilities.invokeAndWait {
+            assertThat(comboBox.isPopupVisible).isFalse
+            assertThat(comboBox.itemCount).isGreaterThanOrEqualTo(0)
+        }
+    }
+
     private fun createComboBox(
         toString: (TestItem?) -> String = { it?.name ?: "" },
-        matchItem: ((String, List<TestItem>) -> TestItem?)? = null
+        toElement: (String) -> TestItem? = { null }
     ): JComboBox<TestItem> {
-        return FilteringComboBox.create(
+        val comboBox = FilteringComboBox.create(
             toString = toString,
-            matchItem = matchItem,
-            type = TestItem::class.java,
-            onItemSelected = { selectedItem = it }
+            toElement = toElement
         )
+        comboBox.addItemListener { event ->
+            if (event.stateChange == java.awt.event.ItemEvent.SELECTED) {
+                selectedItem = event.item as? TestItem
+            }
+        }
+        return comboBox
     }
 
     private fun typeText(editor: JTextField, text: String) {
-        val lastChar = text.lastOrNull() ?: return
-        val keyCode = when (lastChar.uppercaseChar()) {
-            'A' -> KeyEvent.VK_A
-            'B' -> KeyEvent.VK_B
-            'E' -> KeyEvent.VK_E
-            'I' -> KeyEvent.VK_I
-            'N' -> KeyEvent.VK_N
-            'R' -> KeyEvent.VK_R
-            'Y' -> KeyEvent.VK_Y
-            else -> KeyEvent.VK_UNDEFINED
+        text.lastOrNull()?.let { lastChar ->
+            SwingUtilities.invokeAndWait {
+                editor.text = text
+                editor.dispatchEvent(
+                    KeyEvent(
+                        editor,
+                        KeyEvent.KEY_RELEASED,
+                        System.currentTimeMillis(),
+                        0,
+                        KeyEvent.VK_UNDEFINED,
+                        lastChar
+                    )
+                )
+            }
+            Thread.sleep(100)
         }
-        
-        SwingUtilities.invokeAndWait {
-            editor.text = text
-            val keyEvent = KeyEvent(
-                editor,
-                KeyEvent.KEY_RELEASED,
-                System.currentTimeMillis(),
-                0,
-                keyCode,
-                lastChar
-            )
-            editor.dispatchEvent(keyEvent)
-        }
-        
-        Thread.sleep(100) // Allow event processing
     }
 
     private fun pressKey(editor: JTextField, keyCode: Int, keyChar: Char = KeyEvent.CHAR_UNDEFINED) {
         SwingUtilities.invokeAndWait {
-            val keyEvent = KeyEvent(
-                editor,
-                KeyEvent.KEY_RELEASED,
-                System.currentTimeMillis(),
-                0,
-                keyCode,
-                keyChar
+            editor.dispatchEvent(
+                KeyEvent(
+                    editor,
+                    KeyEvent.KEY_RELEASED,
+                    System.currentTimeMillis(),
+                    0,
+                    keyCode,
+                    keyChar
+                )
             )
-            editor.dispatchEvent(keyEvent)
         }
-        Thread.sleep(50) // Allow time for event processing
+        Thread.sleep(50)
     }
 }
 

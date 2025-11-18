@@ -59,19 +59,10 @@ object KubeConfigUtils {
         val userToken = KubeConfigNamedUser.getUserTokenForCluster(clusterEntry.name, kubeConfig)
 
         return Cluster(
-            id = generateClusterId(clusterEntry.name, clusterEntry.cluster.server),
-            name = clusterEntry.name,
             url = clusterEntry.cluster.server,
+            name = clusterEntry.name,
             token = userToken
         )
-    }
-
-    private fun generateClusterId(clusterName: String, apiServerUrl: String): String {
-        return "$clusterName@${
-            apiServerUrl
-                .removePrefix("https://")
-                .removePrefix("http://")
-        }"
     }
 
     private fun getEnvConfigs(): List<Path> {
