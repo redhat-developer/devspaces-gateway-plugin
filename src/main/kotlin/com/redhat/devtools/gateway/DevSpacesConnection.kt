@@ -66,7 +66,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         return try {
             onProgress?.invoke("Waiting for the Dev Workspace to get ready...")
 
-            startAndWaitDevWorkspace()
+            startAndWaitDevWorkspace(checkCancelled)
 
             checkCancelled?.invoke()
             onProgress?.invoke("Waiting for the Remote IDE server to get ready...")

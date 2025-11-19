@@ -24,9 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
-
 
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
@@ -38,6 +36,7 @@ class DevWorkspaces(private val client: ApiClient) {
         val RUNNING: String = "Running"
         val STOPPED: String = "Stopped"
         val STARTING: String = "Starting"
+        val STOPPING: String = "Stopping"
         val RUNNING_TIMEOUT: Long = 300
     }
 
@@ -158,11 +157,21 @@ class DevWorkspaces(private val client: ApiClient) {
                 checkCancelled?.invoke()
                 val watcher = createWatcher(namespace, "metadata.name=$name")
                 try {
-                    for (event in watcher) {
+                    while (true) {
                         checkCancelled?.invoke()
+                        val event = runCatching {
+                            withTimeoutOrNull(300L) { watcher.next() }
+                        }.getOrElse {
+                            break
+                        } ?: continue
+
                         val workspace = DevWorkspace.from(event.`object`)
                         if (workspace.phase == desiredPhase) {
                             return@withTimeoutOrNull true
+                        }
+
+                        if (workspace.phase in listOf(FAILED, STOPPED, STOPPING)) {
+                            return@withTimeoutOrNull false
                         }
                     }
                 } finally {
@@ -192,8 +201,14 @@ class DevWorkspaces(private val client: ApiClient) {
                 checkCancelled?.invoke()
                 val watcher = createWatcher(namespace, "metadata.name=$name")
                 try {
-                    for (event in watcher) {
+                    while (true) {
                         checkCancelled?.invoke()
+                        val event = runCatching {
+                            withTimeoutOrNull(300L) { watcher.next() }
+                        }.getOrElse {
+                            break
+                        } ?: continue
+
                         val workspace = DevWorkspace.from(event.`object`)
                         if (workspace.phase !in currentPhases) {
                             return@withTimeoutOrNull true // phase changed out of the given set
