@@ -11,8 +11,8 @@
  */
 package com.redhat.devtools.gateway.openshift
 
-import java.net.URI
-import java.net.URISyntaxException
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toName
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toUriWithHost
 
 data class Cluster(
     val name: String,
@@ -21,26 +21,50 @@ data class Cluster(
 ) {
 
     companion object {
-        fun fromUrl(url: String): Cluster? {
-            return try {
-                val name = toName(url)
-                if (name == null) {
-                    null
-                } else {
-                    Cluster(name, url) // Use host directly from URI
+        fun fromNameAndUrl(nameAndUrl: String): Cluster? {
+            val parsed = getNameAndUrl(nameAndUrl)
+            val name = parsed?.first
+            val uri = toUriWithHost(parsed?.second)
+            return when {
+                name != null && uri != null ->
+                    Cluster(name, uri.toString())
+                uri != null -> {
+                    val nameFromUrl = toName(uri) ?: return null
+                    Cluster(nameFromUrl, uri.toString())
                 }
-            } catch(_: URISyntaxException) {
-                null
+                else -> null
             }
         }
 
-        private fun toName(url: String): String? {
-            return try {
-                val uri = URI(url)
-                uri.host
-            } catch (_: URISyntaxException) {
-                null
+        private fun getNameAndUrl(nameAndUrl: String): Pair<String?, String?>? {
+            // Captures: 1: Name, 2: URL in parentheses, 3: Full URL (if no parens)
+            val regex = Regex("^(.+?)\\s*\\((.*?)\\)$|^(.+)$")
+
+            val matchResult = regex.find(nameAndUrl.trim())
+                ?: return Pair(nameAndUrl.trim(), nameAndUrl.trim()) // Should not happen with this regex
+
+            val (name, urlInParens, fullUrl) = matchResult.destructured
+
+            val pair = when {
+                // "name (url)" OR "name ()"
+                name.isNotEmpty() -> {
+                    val trimmedName = name.trim()
+                    val trimmedUrl = urlInParens.trim()
+                    if (trimmedUrl.isEmpty()) {
+                        Pair(trimmedName, null)
+                    } else {
+                        Pair(trimmedName, trimmedUrl)
+                    }
+                }
+                // "url-only" (Matches the second alternative: ^(.+)$)
+                fullUrl.isNotEmpty() -> {
+                    val trimmedUrl = fullUrl.trim()
+                    Pair(null, trimmedUrl)
+                }
+
+                else -> null
             }
+            return pair
         }
     }
 

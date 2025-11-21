@@ -20,10 +20,33 @@ object Utils {
 
         var value = obj
         for (s in path) {
-            value = (value as Map<*, *>)[s] ?: return null
+            value = (value as? Map<*, *>)?.get(s) ?: return null
         }
 
         return value
     }
+
+    @JvmStatic
+    fun setValue(obj: Any?, value: Any, path: Array<String>) {
+        if (obj !is MutableMap<*, *>) {
+            return
+        }
+
+        var currentMap: MutableMap<Any?, Any?> = obj as MutableMap<Any?, Any?>
+        for (i in path.indices) {
+            val key = path[i]
+            if (i == path.lastIndex) {
+                currentMap[key] = value
+            } else {
+                var nextMap = currentMap[key] as? MutableMap<Any?, Any?>
+                if (nextMap == null) {
+                    nextMap = mutableMapOf()
+                    currentMap[key] = nextMap
+                }
+                currentMap = nextMap
+            }
+        }
+    }
+
 }
 
