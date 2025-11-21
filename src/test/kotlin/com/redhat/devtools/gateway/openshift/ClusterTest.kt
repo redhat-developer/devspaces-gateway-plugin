@@ -91,112 +91,6 @@ class ClusterTest {
     }
 
     @Test
-    fun `#fromUrl creates cluster from valid http URL`() {
-        // given
-        val url = "http://api.tatooine.galaxy"
-
-        // when
-        val cluster = Cluster.fromUrl(url)
-
-        // then
-        assertThat(cluster)
-            .isNotNull()
-        assertThat(cluster?.name)
-            .isEqualTo("api.tatooine.galaxy")
-        assertThat(cluster?.url)
-            .isEqualTo(url)
-    }
-
-    @Test
-    fun `#fromUrl creates cluster from URL with port`() {
-        // given
-        val url = "https://api.solo.ship:8443"
-        
-        // when
-        val cluster = Cluster.fromUrl(url)
-        
-        // then
-        assertThat(cluster)
-            .isNotNull()
-        assertThat(cluster?.name)
-            .isEqualTo("api.solo.ship") // Only host, no port
-        assertThat(cluster?.url)
-            .isEqualTo(url)
-    }
-
-    @Test
-    fun `#fromUrl creates cluster from URL with path`() {
-        // given
-        val url = "https://api.darth.vader/path"
-        
-        // when
-        val cluster = Cluster.fromUrl(url)
-        
-        // then
-        assertThat(cluster)
-            .isNotNull()
-        assertThat(cluster?.name)
-            .isEqualTo("api.darth.vader") // Only host, no path
-        assertThat(cluster?.url)
-            .isEqualTo(url)
-    }
-
-    @Test
-    fun `#fromUrl returns null for empty string`() {
-        // given
-        // when
-        val cluster = Cluster.fromUrl("")
-
-        // then
-        assertThat(cluster)
-            .isNull()
-    }
-
-    @Test
-    fun `#fromUrl returns null for URL without scheme`() {
-        // given
-        // when
-        val cluster = Cluster.fromUrl("api.deathstar.empire")
-
-        // then
-        assertThat(cluster)
-            .isNull()
-    }
-
-    @Test
-    fun `#fromUrl returns null for URL without host`() {
-        // given
-        // when
-        val cluster = Cluster.fromUrl("https://")
-
-        // then
-        assertThat(cluster)
-            .isNull()
-    }
-
-    @Test
-    fun `#fromUrl returns null for malformed URL`() {
-        // given
-        // when
-        val cluster = Cluster.fromUrl("ht@tp://api.tatooine.galaxy")
-
-        // then
-        assertThat(cluster)
-            .isNull()
-    }
-
-    @Test
-    fun `#fromUrl returns null for URL with invalid characters`() {
-        val cluster = Cluster.fromUrl("https://api sith.galaxy")
-        assertThat(cluster)
-            .isNull()
-
-        val cluster2 = Cluster.fromUrl("https://api@with#special.com")
-        assertThat(cluster2)
-            .isNotNull()
-    }
-
-    @Test
     fun `#equals returns true for clusters with same properties`() {
         // given
         val cluster1 = Cluster("r2d2", "https://api.robots.galaxy", "droid-token-1")
@@ -239,22 +133,22 @@ class ClusterTest {
     }
 
     @Test
-    fun `#name returns url without scheme, port nor path`() {
-        val cluster1 = Cluster.fromUrl("https://jedi-temple.galaxy")
+    fun `#name returns url without scheme nor path`() {
+        val cluster1 = Cluster.fromNameAndUrl("https://jedi-temple.galaxy")
         assertThat(cluster1?.name)
             .isEqualTo("jedi-temple.galaxy")
 
-        val cluster2 = Cluster.fromUrl("http://local-transport:8080")
+        val cluster2 = Cluster.fromNameAndUrl("http://local-transport:8080")
         assertThat(cluster2?.name)
-            .isEqualTo("local-transport")
+            .isEqualTo("local-transport-8080")
 
-        val cluster3 = Cluster.fromUrl("https://rebel-base.galaxy:443/")
+        val cluster3 = Cluster.fromNameAndUrl("https://rebel-base.galaxy:443/")
         assertThat(cluster3?.name)
-            .isEqualTo("rebel-base.galaxy")
+            .isEqualTo("rebel-base.galaxy-443")
 
-        val cluster4 = Cluster.fromUrl("https://sith-tower.galaxy:9090/api/v1")
+        val cluster4 = Cluster.fromNameAndUrl("https://sith-tower.galaxy:9090/api/v1")
         assertThat(cluster4?.name)
-            .isEqualTo("sith-tower.galaxy")
+            .isEqualTo("sith-tower.galaxy-9090")
     }
 
     @Test
@@ -274,5 +168,57 @@ class ClusterTest {
         val cluster4 = Cluster("jedi-council", "https://api.jedi.temple:9090/api/v1")
         assertThat(cluster4.id)
             .isEqualTo("jedi-council@api.jedi.temple:9090/api/v1")
+    }
+
+    @Test
+    fun `#fromNameAndUrl creates cluster from URL-only input`() {
+        // given
+        val url = "https://api.che-dev.x6e0.p1.openshiftapps.com:6443"
+
+        // when
+        val cluster = Cluster.fromNameAndUrl(url)
+
+        // then
+        assertThat(cluster)
+            .isNotNull()
+        assertThat(cluster?.url)
+            .isEqualTo(url)
+        assertThat(cluster?.name)
+            .isNotNull()
+            .isNotEmpty()
+    }
+
+    @Test
+    fun `#fromNameAndUrl creates cluster from name and URL format`() {
+        // given
+        val name = "x-wing"
+        val url = "https://api.xwing.rebel"
+        val input = "$name ($url)"
+
+        // when
+        val cluster = Cluster.fromNameAndUrl(input)
+
+        // then
+        assertThat(cluster)
+            .isNotNull()
+        assertThat(cluster?.name)
+            .isEqualTo(name)
+        assertThat(cluster?.url)
+            .isEqualTo(url)
+    }
+
+    @Test
+    fun `#fromNameAndUrl handles http URL`() {
+        // given
+        val url = "http://api.example.com:8080"
+
+        // when
+        val cluster = Cluster.fromNameAndUrl(url)
+
+        // then
+        assertThat(cluster)
+            .isNotNull()
+        assertThat(cluster?.url)
+            .isEqualTo(url)
     }
 }

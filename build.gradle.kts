@@ -157,10 +157,17 @@ tasks {
 
     withType<Test> {
         useJUnitPlatform()
-        outputs.upToDateWhen { false }  // Force tests to always run
-        jvmArgs("-Dnet.bytebuddy.experimental=true", "-Dmockk.agent.global=false")
+          // Force tests to always run
+        outputs.upToDateWhen { false }
+        jvmArgs(
+            "-Dnet.bytebuddy.experimental=true",
+            "-Dmockk.agent.global=false",
+            // Suppress dynamic agent loading trace warnings
+            "-Djdk.instrument.traceUsage=false"
+        )
         testLogging {
-            events("skipped", "failed", "standardOut", "standardError")
+            // Exclude standardError, standardOut
+            events("skipped", "failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             showExceptions = true
             showCauses = true

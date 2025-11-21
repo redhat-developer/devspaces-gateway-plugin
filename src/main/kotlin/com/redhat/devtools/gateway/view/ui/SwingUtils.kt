@@ -31,11 +31,6 @@ fun <T> JList<T>.onDoubleClick(action: (T) -> Unit) {
     })
 }
 
-fun <T> JComboBox<T>.getAllElements(): List<T?> {
-    return (0 until model.size)
-        .map { index -> model.getElementAt(index) }.toList()
-}
-
 fun JPanel.requestInitialFocus(component: JComboBox<Cluster>) {
     addAncestorListener(object : AncestorListenerAdapter() {
         override fun ancestorAdded(event: AncestorEvent?) {

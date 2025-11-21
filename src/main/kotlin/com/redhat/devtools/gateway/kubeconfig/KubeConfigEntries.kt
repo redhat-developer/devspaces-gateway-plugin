@@ -11,35 +11,42 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.sanitizeName
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.urlToName
 import io.kubernetes.client.util.KubeConfig
-import kotlin.collections.get
+
 
 /**
  * Domain classes representing the structure of a kubeconfig file.
  */
 data class KubeConfigNamedCluster(
-    val name: String,
-    val cluster: KubeConfigCluster
+    val cluster: KubeConfigCluster,
+    val name: String = toName(cluster)
 ) {
+
     companion object {
-        fun fromMap(name: String, clusterObject: Any?): KubeConfigNamedCluster? {
-            val clusterMap = clusterObject as? Map<*, *> ?: return null
-            val clusterDetails = clusterMap["cluster"] as? Map<*, *> ?: return null
-            
+        fun fromMap(map: Map<*,*>): KubeConfigNamedCluster? {
+            val name = map["name"] as? String ?: return null
+            val clusterDetails = map["cluster"] as? Map<*, *> ?: return null
+
             return KubeConfigNamedCluster(
                 name = name,
                 cluster = KubeConfigCluster.fromMap(clusterDetails) ?: return null
             )
         }
-        
-        fun fromKubeConfig(kubeConfig: KubeConfig): List<KubeConfigNamedCluster> {
-            return (kubeConfig.clusters as? List<*>)
-                ?.mapNotNull { clusterObject ->
-                    val clusterMap = clusterObject as? Map<*, *> ?: return@mapNotNull null
-                    val name = clusterMap["name"] as? String ?: return@mapNotNull null
-                    fromMap(name, clusterObject)
-                } ?: emptyList()
+
+        private fun toName(cluster: KubeConfigCluster): String {
+            val url = cluster.server
+            return urlToName(url) ?: url
         }
+
+    }
+
+    fun toMap(): MutableMap<String, Any> {
+        return mutableMapOf(
+            "name" to name,
+            "cluster" to cluster.toMap()
+        )
     }
 }
 
@@ -58,48 +65,88 @@ data class KubeConfigCluster(
             )
         }
     }
+
+    fun toMap(): MutableMap<String, Any> {
+        val map = mutableMapOf<String, Any>()
+        map["server"] = server
+        certificateAuthorityData?.let { map["certificate-authority-data"] = it }
+        insecureSkipTlsVerify?.let { map["insecure-skip-tls-verify"] = it }
+        return map
+    }
 }
 
 data class KubeConfigNamedContext(
-    val name: String,
-    val context: KubeConfigContext
+    val context: KubeConfigContext,
+    val name: String = toName(context.user, context.cluster)
 ) {
     companion object {
-        fun getByClusterName(clusterName: String, kubeConfig: KubeConfig): KubeConfigNamedContext? {
-            return (kubeConfig.contexts as? List<*>)?.firstNotNullOfOrNull { contextObject ->
-                val contextMap = contextObject as? Map<*, *> ?: return@firstNotNullOfOrNull null
-                val contextName = contextMap["name"] as? String ?: return@firstNotNullOfOrNull null
-                val contextEntry = getByName(contextName, contextObject)
-                if (contextEntry?.context?.cluster == clusterName) {
-                    contextEntry
-                } else {
-                    null
-                }
+
+        private fun toName(user: String, cluster: String): String {
+            val sanitizedUser = sanitizeName(user)
+            val sanitizedCluster = sanitizeName(cluster)
+
+            return when {
+                sanitizedUser.isEmpty() && sanitizedCluster.isEmpty() -> ""
+                sanitizedUser.isEmpty() -> sanitizedCluster
+                sanitizedCluster.isEmpty() -> sanitizedUser
+                else -> "$sanitizedUser/$sanitizedCluster"
             }
         }
 
-        private fun getByName(name: String, contextObject: Any?): KubeConfigNamedContext? {
-            val contextMap = contextObject as? Map<*, *> ?: return null
-            val contextDetails = contextMap["context"] as? Map<*, *> ?: return null
+        fun getByClusterName(name: String?, allConfigs: List<KubeConfig>): KubeConfigNamedContext? {
+            return allConfigs
+                .flatMap {
+                    it.contexts ?: emptyList()
+                }
+                .mapNotNull {
+                    fromMap(it as? Map<*,*>)
+                }
+                .firstOrNull { context ->
+                    name == context.context.cluster
+                }
+        }
 
+        fun getByName(clusterName: String, kubeConfig: KubeConfig): KubeConfigNamedContext? {
+            return (kubeConfig.contexts as? List<*>)
+                ?.firstNotNullOfOrNull { contextObject ->
+                    val contextEntry = fromMap(contextObject as? Map<*, *>)
+                    if (contextEntry?.context?.cluster == clusterName) {
+                        contextEntry
+                    } else {
+                        null
+                    }
+            }
+        }
+
+        fun fromMap(map: Map<*, *>?): KubeConfigNamedContext? {
+            if (map == null) return null
+            val name = map["name"] as? String ?: return null
+            val context = map["context"] as? Map<*, *> ?: return null
             return KubeConfigNamedContext(
                 name = name,
-                context = KubeConfigContext.fromMap(contextDetails) ?: return null
+                context = KubeConfigContext.fromMap(context) ?: return null
             )
         }
+    }
+
+    fun toMap(): MutableMap<String, Any> {
+        return mutableMapOf(
+            "name" to name,
+            "context" to context.toMap()
+        )
     }
 }
 
 data class KubeConfigContext(
-    val cluster: String,
     val user: String,
+    val cluster: String,
     val namespace: String? = null
 ) {
     companion object {
         fun fromMap(map: Map<*, *>): KubeConfigContext? {
             val cluster = map["cluster"] as? String ?: return null
             val user = map["user"] as? String ?: return null
-            
+
             return KubeConfigContext(
                 cluster = cluster,
                 user = user,
@@ -107,41 +154,68 @@ data class KubeConfigContext(
             )
         }
     }
+
+    fun toMap(): MutableMap<String, Any> {
+        val map = mutableMapOf<String, Any>()
+        map["cluster"] = cluster
+        map["user"] = user
+        namespace?.let { map["namespace"] = it }
+        return map
+    }
 }
 
 data class KubeConfigNamedUser(
-    val name: String,
-    val user: KubeConfigUser
+    val user: KubeConfigUser?,
+    val name: String
 ) {
     companion object {
-        fun fromMap(name: String, userObject: Any?): KubeConfigNamedUser? {
-            val userMap = userObject as? Map<*, *> ?: return null
-            val userDetails = userMap["user"] as? Map<*, *> ?: return null
-            
+
+        fun getByName(userName: String, config: KubeConfig?): KubeConfigNamedUser? {
+            return (config?.users ?: emptyList<Any>())
+                .mapNotNull {
+                    it as? Map<String, Any>
+                }
+                .firstOrNull { user ->
+                    userName == user["name"]
+                }
+                ?.let { fromMap(it) }
+        }
+
+        fun fromMap(map: Map<*,*>): KubeConfigNamedUser? {
+            val name = map["name"] as? String ?: return null
+            val userDetails = map["user"] as? Map<*, *> ?: return null
+            val user = KubeConfigUser.fromMap(userDetails)
             return KubeConfigNamedUser(
                 name = name,
-                user = KubeConfigUser.fromMap(userDetails)
+                user = user
             )
         }
-        
+
         fun getUserTokenForCluster(clusterName: String, kubeConfig: KubeConfig): String? {
-            val contextEntry = KubeConfigNamedContext.getByClusterName(clusterName, kubeConfig) ?: return null
+            val contextEntry = KubeConfigNamedContext.getByName(clusterName, kubeConfig) ?: return null
             val userObject = (kubeConfig.users as? List<*>)?.firstOrNull { userObject ->
                 val userMap = userObject as? Map<*, *> ?: return@firstOrNull false
                 val userName = userMap["name"] as? String ?: return@firstOrNull false
                 userName == contextEntry.context.user
-            } ?: return null
-            return fromMap(contextEntry.context.user, userObject)?.user?.token
+            } as? Map<*,*> ?: return null
+            return fromMap(userObject)?.user?.token
         }
 
         fun isTokenAuth(kubeConfig: KubeConfig): Boolean {
             return kubeConfig.credentials?.containsKey(KubeConfig.CRED_TOKEN_KEY) == true
         }
     }
+
+    fun toMap(): MutableMap<String, Any> {
+        return mutableMapOf(
+            "name" to name,
+            "user" to (user?.toMap() ?: mutableMapOf())
+        )
+    }
 }
 
 data class KubeConfigUser(
-    val token: String? = null,
+    var token: String? = null,
     val clientCertificateData: String? = null,
     val clientKeyData: String? = null,
     val username: String? = null,
@@ -158,5 +232,17 @@ data class KubeConfigUser(
             )
         }
     }
+
+    fun toMap(): MutableMap<String, Any> {
+        val map = mutableMapOf<String, Any>()
+        token?.let { map["token"] = it }
+        clientCertificateData?.let { map["client-certificate-data"] = it }
+        clientKeyData?.let { map["client-key-data"] = it }
+        username?.let { map["username"] = it }
+        password?.let { map["password"] = it }
+        return map
+    }
 }
+
+
 
