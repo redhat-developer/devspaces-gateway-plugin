@@ -14,4 +14,15 @@ object Dialogs {
             )
         }
     }
+
+    fun info(message: String, title: String) {
+        ApplicationManager.getApplication().invokeLater {
+            Messages.showMessageDialog(
+                message,
+                title,
+                Messages.getInformationIcon(),
+            )
+        }
+    }
+
 }

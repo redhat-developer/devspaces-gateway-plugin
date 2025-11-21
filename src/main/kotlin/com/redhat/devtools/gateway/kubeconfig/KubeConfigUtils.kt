@@ -21,11 +21,13 @@ object KubeConfigUtils {
     fun getClusters(kubeconfigPaths: List<Path>): List<Cluster> {
         logger.info("Getting clusters from kubeconfig paths: $kubeconfigPaths")
         val kubeConfigs = toKubeConfigs(kubeconfigPaths)
-        logger.info("Loaded ${kubeConfigs.size} kubeconfig files")
+        logger.info("Loaded ${kubeConfigs.size} kubeconfig files from paths: $kubeconfigPaths")
+
         val clusters = kubeConfigs
             .flatMap { kubeConfig ->
-                val clusters = KubeConfigNamedCluster.fromKubeConfig(kubeConfig)
-                clusters.map { clusterEntry ->
+                val namedClusters = KubeConfigNamedCluster.fromKubeConfig(kubeConfig)
+                logger.info("kubeConfig.clusters size for this config: ${kubeConfig.clusters?.size}")
+                namedClusters.map { clusterEntry ->
                     val cluster = toCluster(clusterEntry, kubeConfig)
                     logger.info("Parsed cluster: ${cluster.name} at ${cluster.url}")
                     cluster
@@ -99,19 +101,73 @@ object KubeConfigUtils {
 
     fun getAllConfigsMerged(): String? {
         val kubeConfigPaths = getAllConfigs()
-
         if (kubeConfigPaths.isEmpty()) {
             logger.debug("No kubeconfig files found.")
             return null
         }
-
         val mergedKubeConfigs = mergeConfigs(kubeConfigPaths)
         if (mergedKubeConfigs.isEmpty()) {
             logger.debug("No valid kubeconfig content found.")
             return null
         }
-
         return mergedKubeConfigs
+    }
+
+    fun getCurrentUser(kubeConfig: KubeConfig): String {
+        try {
+            val currentContextName = kubeConfig.currentContext
+            val currentContext = (kubeConfig.contexts as? List<*>)?.find {
+                (it as? Map<*, *>)?.get("name") == currentContextName
+            }
+            val contextMap = currentContext as? Map<*, *>
+            return (contextMap?.get("context") as? Map<*, *>)?.get("user") as? String ?: ""
+        } catch (e: Exception) {
+            logger.warn("Failed to get current user from kubeconfig: ${e.message}", e)
+            return ""
+        }
+    }
+
+    fun getCurrentContext(kubeConfig: KubeConfig): KubeConfigNamedContext? {
+        val currentContextName = kubeConfig.currentContext
+        return (kubeConfig.contexts as? List<*>)
+            ?.mapNotNull { contextObject ->
+                val contextMap = contextObject as? Map<*, *> ?: return@mapNotNull null
+                val name = contextMap["name"] as? String ?: return@mapNotNull null
+                val contextDetails = contextMap["context"] as? Map<*, *> ?: return@mapNotNull null
+                if (name == currentContextName) {
+                    KubeConfigNamedContext(
+                        name = name,
+                        context = KubeConfigContext.fromMap(contextDetails) ?: return@mapNotNull null
+                    )
+                } else {
+                    null
+                }
+            }?.firstOrNull()
+    }
+
+    fun getCurrentContextClusterName(): String? {
+        return try {
+            getAllConfigs().firstNotNullOfOrNull { path ->
+                if (!isValid(path)) {
+                    null
+                } else {
+                    try {
+                        val kubeConfig = KubeConfig.loadKubeConfig(path.toFile().bufferedReader())
+                        if (!kubeConfig.currentContext.isNullOrBlank()) {
+                            getCurrentContext(kubeConfig)?.context?.cluster
+                        } else {
+                            null
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("Error parsing kubeconfig file '$path' while determining current context: ${e.message}", e)
+                        null
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to get current context cluster name from kubeconfig: ${e.message}", e)
+            null
+        }
     }
 
     private fun mergeConfigs(kubeconfigs: List<Path>): String {
