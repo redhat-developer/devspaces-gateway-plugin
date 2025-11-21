@@ -34,7 +34,7 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     private var nextButton = JButton()
 
     init {
-        steps.add(DevSpacesServerStepView(devSpacesContext) { enableNextButton() })
+        steps.add(DevSpacesServerStepView(devSpacesContext, { enableNextButton() }) { nextStep() })
         steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNextButton() })
 
         addToBottom(createButtons())
