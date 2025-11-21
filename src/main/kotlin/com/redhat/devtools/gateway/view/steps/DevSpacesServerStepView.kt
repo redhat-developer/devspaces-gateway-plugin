@@ -15,6 +15,7 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
@@ -23,20 +24,19 @@ import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigWriter
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.message
-import com.redhat.devtools.gateway.view.ui.Dialogs
-import com.redhat.devtools.gateway.view.ui.FilteringComboBox
-import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
-import com.redhat.devtools.gateway.view.ui.getAllElements
-import com.redhat.devtools.gateway.view.ui.requestInitialFocus
+import com.redhat.devtools.gateway.view.ui.*
+import io.kubernetes.client.util.KubeConfig
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
+import javax.swing.JLabel
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -51,12 +51,22 @@ class DevSpacesServerStepView(
 
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
 
+    private var initialServerUrl: String? = null
+    private var initialToken: String? = null
+    private var hasUnsavedChanges: Boolean = false
+    private var initialValuesSet: Boolean = false
+
+    private val updateKubeconfigCheckbox = JBCheckBox("Update kubeconfig")
+    private val kubeconfigFilePathLabel = JLabel().apply {
+        font = JBFont.small()
+    }
+    private lateinit var updateKubeconfigRow: com.intellij.ui.dsl.builder.Row
+
     private var tfToken = JBTextField()
         .apply {
             document.addDocumentListener(onTokenChanged())
             PasteClipboardMenu.addTo(this)
         }
-
     private var tfServer =
         FilteringComboBox.create(
             { it?.toString() ?: "" },
@@ -78,6 +88,17 @@ class DevSpacesServerStepView(
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
             cell(tfToken).align(Align.FILL)
         }
+        updateKubeconfigRow = row("") {
+            cell(updateKubeconfigCheckbox).applyToComponent {
+                isOpaque = false
+                background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
+            }
+            cell(kubeconfigFilePathLabel).applyToComponent {
+                isOpaque = false
+                background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
+            }
+            visible(false)
+        }
     }.apply {
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
         border = JBUI.Borders.empty(8)
@@ -90,6 +111,7 @@ class DevSpacesServerStepView(
 
     override fun onInit() {
         startKubeconfigMonitor()
+        updateUnsavedChangesFlag()
     }
 
     private fun onClusterSelected(event: ItemEvent) {
@@ -101,27 +123,63 @@ class DevSpacesServerStepView(
                 }
             }
         }
+        updateUnsavedChangesFlag()
     }
 
     private fun onTokenChanged(): DocumentListener = object : DocumentListener {
         override fun insertUpdate(event: DocumentEvent) {
             enableNextButton?.invoke()
+            updateUnsavedChangesFlag()
         }
 
         override fun removeUpdate(e: DocumentEvent) {
             enableNextButton?.invoke()
+            updateUnsavedChangesFlag()
         }
 
         override fun changedUpdate(e: DocumentEvent?) {
             enableNextButton?.invoke()
+            updateUnsavedChangesFlag()
         }
     }
 
+    private fun updateUnsavedChangesFlag() {
+        val currentServerUrl = (tfServer.selectedItem as? Cluster)?.url
+        val currentToken = tfToken.text
+        hasUnsavedChanges = (currentServerUrl != initialServerUrl) || (currentToken != initialToken)
+
+        updateKubeconfigRow.visible(hasUnsavedChanges)
+
+        if (hasUnsavedChanges) {
+            kubeconfigScope.launch {
+                val mergedKubeConfigContent = KubeConfigUtils.getAllConfigsMerged()
+                val kubeConfig = mergedKubeConfigContent?.reader()?.let { KubeConfig.loadKubeConfig(it) }
+                val currentUser = if (kubeConfig != null) KubeConfigUtils.getCurrentUser(kubeConfig) else ""
+                val kubeConfigFilePath = KubeConfigWriter.findKubeConfigFileForUser(currentUser, System.getenv("KUBECONFIG"))
+                
+                invokeLater {
+                    kubeconfigFilePathLabel.text = "Update kubeconfig: ${kubeConfigFilePath ?: "default location"}"
+                }
+            }
+        }
+    }
+
+    fun hasChanges(): Boolean {
+        return hasUnsavedChanges
+    }
+
     private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = { updatedClusters ->
+        val nameToSelect = KubeConfigUtils.getCurrentContextClusterName()
         invokeLater {
-            val selectedName = (tfServer.selectedItem as? Cluster)?.name
+            val previouslySelectedName = (tfServer.selectedItem as? Cluster)?.name
             setClusters(updatedClusters)
-            setSelectedCluster(selectedName, updatedClusters)
+            setSelectedCluster(previouslySelectedName ?: nameToSelect, updatedClusters)
+            if (!initialValuesSet) {
+                this.initialServerUrl = (tfServer.selectedItem as? Cluster)?.url
+                this.initialToken = tfToken.text
+                initialValuesSet = true
+            }
+            updateUnsavedChangesFlag()
         }
     }
 
@@ -137,6 +195,27 @@ class DevSpacesServerStepView(
         val client = OpenShiftClientFactory(KubeConfigUtils).create(server, token.toCharArray())
         var success = false
         stopKubeconfigMonitor()
+
+        if (updateKubeconfigCheckbox.isVisible && updateKubeconfigCheckbox.isSelected) {
+            val mergedKubeConfigContent = KubeConfigUtils.getAllConfigsMerged()
+            val currentKubeConfig = mergedKubeConfigContent?.reader()?.let { KubeConfig.loadKubeConfig(it) }
+            val currentUser = if (currentKubeConfig != null) KubeConfigUtils.getCurrentUser(currentKubeConfig) else ""
+            val kubeConfigFilePath = KubeConfigWriter.findKubeConfigFileForUser(currentUser, System.getenv("KUBECONFIG")) ?: ""
+
+            if (kubeConfigFilePath.isNotBlank()) {
+                kubeconfigScope.launch {
+                    try {
+                        KubeConfigWriter.applyChangesAndSave(kubeConfigFilePath, server, token)
+                        Dialogs.info("Kubeconfig updated successfully.", "Kubeconfig Update")
+                    } catch (e: Exception) {
+                        Dialogs.error("Failed to update kubeconfig: ${e.message}", "Kubeconfig Update Failed")
+                        e.printStackTrace()
+                    }
+                }
+            } else {
+                Dialogs.error("Could not determine kubeconfig file path to update.", "Kubeconfig Update Failed")
+            }
+        }
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
