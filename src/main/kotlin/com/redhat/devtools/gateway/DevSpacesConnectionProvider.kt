@@ -98,7 +98,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
                         if (cont.isActive) cont.resume(null)
                     } catch (e: Exception) {
-                        if (indicator.isCanceled) {
+                        if (e is CancellationException || indicator.isCanceled) {
                             indicator.text2 = "Error: ${e.message}"
                             runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
                         } else {
