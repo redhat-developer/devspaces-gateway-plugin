@@ -1,5 +1,14 @@
-
-
+/*
+ * Copyright (c) 2025 Red Hat, Inc.
+ * This program and the accompanying materials are made
+ * available under the terms of the Eclipse Public License 2.0
+ * which is available at https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Contributors:
+ *   Red Hat, Inc. - initial API and implementation
+ */
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
@@ -57,7 +66,7 @@ class KubeConfigMonitorTest {
     fun `#start should initially parse and publish clusters`() = testScope.runTest {
         // given
         val cluster1 = Cluster("skywalker", "url1", null)
-        every { mockKubeConfigBuilder.getAllConfigs() } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
         // when
@@ -76,7 +85,7 @@ class KubeConfigMonitorTest {
         val cluster1 = Cluster("skywalker", "url1", null)
         val cluster1Updated = Cluster("skywalker", "url1", "token1")
 
-        every { mockKubeConfigBuilder.getAllConfigs() } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
         kubeconfigMonitor.start()
@@ -100,7 +109,7 @@ class KubeConfigMonitorTest {
         val cluster2 = Cluster("obi-wan", "url2")
 
         // Initial KUBECONFIG
-        every { mockKubeConfigBuilder.getAllConfigs() } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
         kubeconfigMonitor.start()
         advanceUntilIdle()
@@ -108,7 +117,7 @@ class KubeConfigMonitorTest {
         verify(exactly = 1) { mockFileWatcher.addFile(kubeconfigPath1) }
 
         // when: Change KUBECONFIG to include kubeconfigPath2 and remove kubeconfigPath1
-        every { mockKubeConfigBuilder.getAllConfigs() } returns listOf(kubeconfigPath2)
+        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath2)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath2)) } returns listOf(cluster2)
 
         // Manually trigger updateMonitoredPaths and reparse

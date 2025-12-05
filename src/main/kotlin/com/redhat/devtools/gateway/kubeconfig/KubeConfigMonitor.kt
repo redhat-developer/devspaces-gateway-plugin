@@ -65,7 +65,7 @@ class KubeConfigMonitor(
 
     internal fun updateMonitoredPaths() {
         val newPaths = mutableSetOf<Path>()
-        newPaths.addAll(kubeConfigUtils.getAllConfigs())
+        newPaths.addAll(kubeConfigUtils.getAllConfigFiles())
         stopWatchingRemoved(newPaths)
         startWatchingNew(newPaths)
 

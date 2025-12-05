@@ -27,7 +27,7 @@ class OpenShiftClientFactory(private val kubeConfigBuilder: KubeConfigUtils) {
     private var lastUsedKubeConfig: KubeConfig? = null
 
     fun create(): ApiClient {
-        val mergedConfig = kubeConfigBuilder.getAllConfigsMerged()
+        val mergedConfig = kubeConfigBuilder.toString(kubeConfigBuilder.getAllConfigFiles())
             ?: run {
                 thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
                 lastUsedKubeConfig = null
