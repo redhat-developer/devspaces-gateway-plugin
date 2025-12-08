@@ -32,13 +32,13 @@ repositories {
 
 // Dependencies are managed with Gradle version catalog - read more: https://docs.gradle.org/current/userguide/platforms.html#sub:version-catalog
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter-api:6.0.1")
-    testImplementation("org.junit.platform:junit-platform-launcher:6.0.1")
-    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:6.0.1")
-    testImplementation("org.assertj:assertj-core:3.27.6")
-
-    testImplementation("io.mockk:mockk:1.14.6")
-    testImplementation("io.mockk:mockk-agent-jvm:1.14.6")
+    testImplementation(libs.junit.jupiter.api)
+    testImplementation(libs.junit.platform.launcher)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.vintage.engine)
+    testImplementation(libs.assertj.core)
+    testImplementation(libs.mockk)
+    testImplementation(libs.mockk.agent.jvm)
 
     // Do NOT bundle kotlinx-coroutines: IntelliJ/Gateway provides its own version.
     // Adding another copy causes classloader conflicts, broken cancellation, and runtime errors.
