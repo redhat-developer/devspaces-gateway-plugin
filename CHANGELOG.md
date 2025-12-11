@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [0.0.14] - 2025-12-11
+
+### ✨ New Features and Enhancements
+
+- feat: the workspaces list is auto-updating by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/217
+- feat: the servers list is updated when kube config(s) are updated (#23558) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/206
+- the Connect button is disabled when the workspace is connected by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/204
+- feat: the Start button is added for starting the selected workspace by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/212
+
+### 🐛 Bug Fixes
+
+- fix: stop workspace if server process was stopped (#23579) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/203
+- fix: Gateway: Cancelling the connect operation fails and leaks the port forwarding by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/205
+- fix: Gateway: Cancelling connection progress while waiting for a DevWorkspace going to a Running/Stopped phase gets blocked by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/220
+- fix: allow user to provide cluster URL only (#23654) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/218
+- fix: close streams when port forwarding is closed while copying (#23587) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/200
+
+### ⬆️ Dependency Updates
+
+- Update Gradle Wrapper to 9.2 by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/211
+- Bump org.jetbrains.intellij.platform from 2.9.0 to 2.10.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/191
+- build(deps): bump org.jetbrains.intellij.platform from 2.10.0 to 2.10.4 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/213
+- build(deps): bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.20.0 to 2.20.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/214
+- build(deps): bump actions/checkout from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/222
+- build(deps): bump org.jetbrains.qodana from 2025.2.1 to 2025.2.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/221
+- build(deps): bump org.jetbrains.intellij.platform from 2.10.4 to 2.10.5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/224
+- build(deps): bump org.jetbrains.changelog from 2.4.0 to 2.5.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/225
+- build(deps): bump org.jetbrains.qodana from 2025.2.2 to 2025.2.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/227
+- build(deps): bump org.jetbrains.kotlin.jvm from 2.2.20 to 2.2.21 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/201
+- build(deps): bump actions/upload-artifact from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/202
+- build(deps): bump com.fasterxml.jackson.core:jackson-databind from 2.20.0 to 2.20.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/209
+- build(deps): bump org.junit.jupiter:junit-jupiter-engine from 6.0.0 to 6.0.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/210
+- build(deps): bump org.junit.platform:junit-platform-launcher from 6.0.0 to 6.0.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/207
+- build(deps): bump org.jetbrains.kotlinx:kotlinx-coroutines-core from 1.8.0 to 1.10.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/215
+- Bump org.junit.platform:junit-platform-launcher from 1.11.0 to 6.0.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/198
+
 ## [0.0.13] - 2025-10-20
 
 ### ✨ New Features and Enhancements
@@ -140,7 +176,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.13...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.14...HEAD
+[0.0.14]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...v0.0.11
