@@ -18,7 +18,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.isRegularFile
 
 class FileWatcher(
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val watchService: WatchService = FileSystems.getDefault().newWatchService()
 ) {
@@ -29,15 +29,19 @@ class FileWatcher(
 
     fun start() {
         this.watchJob = scope.launch(dispatcher) {
-            while (isActive) {
-                val key = watchService.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
-                if (key == null) {
-                    delay(100)
-                    continue
+            try {
+                while (isActive) {
+                    val key = watchService.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    if (key == null) {
+                        delay(100)
+                        continue
+                    }
+                    val dir = registeredKeys[key] ?: continue
+                    pollEvents(key, dir)
+                    key.reset()
                 }
-                val dir = registeredKeys[key] ?: continue
-                pollEvents(key, dir)
-                key.reset()
+            } catch (e: ClosedWatchServiceException) {
+                // Watch service was closed, exit gracefully
             }
         }
     }
@@ -45,7 +49,11 @@ class FileWatcher(
     fun stop() {
         watchJob?.cancel()
         watchJob = null
-        watchService.close()
+        try {
+            watchService.close()
+        } catch (e: Exception) {
+            // Ignore exceptions when closing
+        }
     }
 
     fun addFile(path: Path): FileWatcher {
