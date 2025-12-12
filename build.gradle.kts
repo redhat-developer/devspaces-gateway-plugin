@@ -37,8 +37,8 @@ dependencies {
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:6.0.1")
     testImplementation("org.assertj:assertj-core:3.27.6")
 
-    testImplementation("io.mockk:mockk:1.14.6")
-    testImplementation("io.mockk:mockk-agent-jvm:1.14.6")
+    testImplementation("io.mockk:mockk:1.14.7")
+    testImplementation("io.mockk:mockk-agent-jvm:1.14.7")
 
     // Do NOT bundle kotlinx-coroutines: IntelliJ/Gateway provides its own version.
     // Adding another copy causes classloader conflicts, broken cancellation, and runtime errors.
