@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
@@ -242,67 +243,72 @@ class DevSpacesWorkspacesStepView(
                 devWorkspaces.addAll(dwListResult.items)
             }
 
-            val selectedIndex = listDevWorkspaces.selectedIndex
-            listDWDataModel.apply {
-                clear()
-                devWorkspaces.forEach { dw -> addElement(dw) }
+            invokeLater {
+                val selectedIndex = listDevWorkspaces.selectedIndex
+                listDWDataModel.apply {
+                    clear()
+                    addAll( devWorkspaces )
+                }
+                listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
             }
-            listDevWorkspaces.selectedIndex = selectedIndex
         } finally {
             watchManager?.start(lastResourceVersions)
         }
     }
 
-    private fun startDevWorkspace() {
-        if (!listDevWorkspaces.isSelectionEmpty) {
-            listDWDataModel.get(listDevWorkspaces.selectedIndex).also {
-                DevWorkspaces(devSpacesContext.client)
-                    .start(
-                        it.namespace,
-                        it.name
-                    )
-                ProgressManager.getInstance().runProcessWithProgressSynchronously(
-                    {
-                        if (waitDevWorkspaceNotStopped(it)) {
-                            refreshDevWorkspace(
-                                it.namespace,
-                                it.name
-                            )
-                            enableButtons()
-                        }
-                    },
-                    "Refreshing Workspace",
-                    true,
-                    null
-                )
-            }
+    private fun getValidSelectedIndex(selectedIndex: Int): Int {
+        return if (selectedIndex >= 0
+            && selectedIndex < listDWDataModel.size) {
+            selectedIndex
+        } else {
+            if (listDWDataModel.size > 0) 0 else -1
         }
     }
 
-    private fun stopDevWorkspace() {
-        if (!listDevWorkspaces.isSelectionEmpty) {
-            listDWDataModel.get(listDevWorkspaces.selectedIndex).also {
-                DevWorkspaces(devSpacesContext.client)
-                    .stop(
-                        it.namespace,
-                        it.name
+    private fun startDevWorkspace() {
+        val selectedWorkspace = getSelectedWorkspace() ?: return
+        DevWorkspaces(devSpacesContext.client)
+            .start(
+                selectedWorkspace.namespace,
+                selectedWorkspace.name
+            )
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                if (waitDevWorkspaceNotStopped(selectedWorkspace)) {
+                    refreshDevWorkspace(
+                        selectedWorkspace.namespace,
+                        selectedWorkspace.name
                     )
-                ProgressManager.getInstance().runProcessWithProgressSynchronously(
-                    {
-                        if (waitDevWorkspaceStopped(it)) {
-                            refreshDevWorkspace(
-                                it.namespace,
-                                it.name
-                            )
-                            enableButtons()
-                        }
-                    },
-                    "Refreshing Workspace",
-                    true,
-                    null
-                )
-            }
-        }
+                    enableButtons()
+                }
+            },
+            "Refreshing Workspace",
+            true,
+            null
+        )
+    }
+
+    private fun stopDevWorkspace() {
+        val selectedWorkspace = getSelectedWorkspace() ?: return
+        DevWorkspaces(devSpacesContext.client)
+            .stop(
+                selectedWorkspace.namespace,
+                selectedWorkspace.name
+            )
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                if (waitDevWorkspaceStopped(selectedWorkspace)) {
+                    refreshDevWorkspace(
+                        selectedWorkspace.namespace,
+                        selectedWorkspace.name
+                    )
+                    enableButtons()
+                }
+            },
+            "Refreshing Workspace",
+            true,
+            null
+        )
     }
 
     private fun connect() {
@@ -379,14 +385,11 @@ class DevSpacesWorkspacesStepView(
             val stopped = isStopped(workspace)
             val alreadyConnected = isAlreadyConnected(workspace)
 
-            // stop button enabled only if workspace is running
             startDevWorkspaceButton.isEnabled = stopped
             stopDevWorkspaceButton.isEnabled = running
 
-            // Enable/disable "Next" (connect) button dynamically
             refreshNextButton()
 
-            // Optional: tooltip for clarity
             if (alreadyConnected) {
                 stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
             } else {
@@ -396,8 +399,10 @@ class DevSpacesWorkspacesStepView(
     }
 
     private fun getSelectedWorkspace(): DevWorkspace? {
-        return if (listDevWorkspaces.minSelectionIndex >= 0) {
-            listDWDataModel.get(listDevWorkspaces.minSelectionIndex)
+        val selectedIndex = listDevWorkspaces.minSelectionIndex
+        return if (selectedIndex >= 0
+            && selectedIndex < listDevWorkspaces.itemsCount) {
+            listDevWorkspaces.model.getElementAt(selectedIndex)
         } else {
             null
         }
