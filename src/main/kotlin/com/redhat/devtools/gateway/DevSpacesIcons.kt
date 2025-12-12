@@ -20,7 +20,9 @@ object DevSpacesIcons {
 
     private val WORKSPACE_STARTING = IconLoader.getIcon("/icons/starting.svg", javaClass)
     private val WORKSPACE_STARTED = IconLoader.getIcon("/icons/started.svg", javaClass)
+    private val WORKSPACE_STOPPING = IconLoader.getIcon("/icons/stopping.svg", javaClass)
     private val WORKSPACE_STOPPED = IconLoader.getIcon("/icons/stopped.svg", javaClass)
+    private val WORKSPACE_TERMINATING = IconLoader.getIcon("/icons/stopping.svg", javaClass)
     private val WORKSPACE_FAILED = IconLoader.getIcon("/icons/failed.svg", javaClass)
 
     fun getWorkspacePhaseIcon(phase: String): Icon? {
@@ -32,6 +34,8 @@ object DevSpacesIcons {
             "Starting" -> WORKSPACE_STARTING
             "Running" -> WORKSPACE_STARTED
             "Stopped" -> WORKSPACE_STOPPED
+            "Stopping" -> WORKSPACE_STOPPING
+            "Terminating" -> WORKSPACE_TERMINATING
             "Failed", "Failing", "Error" -> WORKSPACE_FAILED
             else -> null
         }
