@@ -11,11 +11,12 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.progress.ProgressIndicator
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.seconds
 
-class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndicator by delegate {
+class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndicator by delegate, Disposable {
     private var job: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var baseText2: String? = null
@@ -58,7 +59,7 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
         delegate.text2 = baseText2
     }
 
-    fun dispose() {
+    override fun dispose() {
         stopCountdown()
         scope.cancel()
     }

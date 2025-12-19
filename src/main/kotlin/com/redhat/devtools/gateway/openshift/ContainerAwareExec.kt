@@ -28,8 +28,7 @@ class ContainerAwareExec(
 
     data class ExecHandle(
         val future: CompletableFuture<Int>,
-        val job: Job,
-        val io: IOTrio
+        val job: Job
     )
 
     @Throws(IOException::class)
@@ -99,7 +98,7 @@ class ContainerAwareExec(
             }
         }
 
-        return ExecHandle(future, job, io)
+        return ExecHandle(future, job)
     }
 
     private fun safeTerminateProcess(process: Process) {

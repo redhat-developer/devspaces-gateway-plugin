@@ -85,12 +85,12 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         isReadyState: Boolean,
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        try {
-            return getStatus(checkCancelled).isReady == isReadyState
+        return try {
+            getStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             thisLogger().debug("Failed to check remote IDE server state.", e)
-            return false
+            false
         }
     }
 

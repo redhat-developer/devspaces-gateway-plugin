@@ -49,8 +49,12 @@ class Pods(private val client: ApiClient) {
         timeout: Long = 60,
         checkCancelled: (() -> Unit)? = null
     ): String = suspendCancellableCoroutine { cont ->
-        val namespace = pod.metadata!!.namespace!!
-        val podName = pod.metadata!!.name!!
+        val metadata = pod.metadata
+            ?: throw IllegalArgumentException("Pod metadata is missing")
+        val namespace = metadata.namespace
+            ?: throw IllegalArgumentException("Pod namespace is missing")
+        val podName = metadata.name
+            ?: throw IllegalArgumentException("Pod name is missing")
 
         val closed = CompletableDeferred<Unit>()
         val stdout = StringBuilder()
@@ -129,10 +133,11 @@ class Pods(private val client: ApiClient) {
     }
 
     // Helpers to access private maps using reflection
-     fun ApiClient.copy(): ApiClient {
+     private fun ApiClient.copy(): ApiClient {
+        val originalDispatcher = this.httpClient.dispatcher
         val newDispatcher = okhttp3.Dispatcher().apply {
-            maxRequests = 64
-            maxRequestsPerHost = 64
+            maxRequests = originalDispatcher.maxRequests
+            maxRequestsPerHost = originalDispatcher.maxRequestsPerHost
         }
         val newPool = okhttp3.ConnectionPool()
 
@@ -211,14 +216,14 @@ class Pods(private val client: ApiClient) {
     private fun createIsolatedExecClient(base: ApiClient): ApiClient {
         val cloned = base.copy()
 
+        val originalDispatcher = base.httpClient.dispatcher
         cloned.httpClient = base.httpClient.newBuilder()
-            .connectionPool(okhttp3.ConnectionPool())
+            .connectionPool(okhttp3.ConnectionPool()) // Still need new pool for isolation
             .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = 64
-                maxRequestsPerHost = 64
+                maxRequests = originalDispatcher.maxRequests
+                maxRequestsPerHost = originalDispatcher.maxRequestsPerHost
             })
             .build()
-
         return cloned
     }
 
