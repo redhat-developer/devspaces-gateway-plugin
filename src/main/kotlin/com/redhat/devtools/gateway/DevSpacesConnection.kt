@@ -41,7 +41,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnected: () -> Unit,
         onDisconnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
-        onProgress: ((value: Any) -> Unit)? = null,
+        onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
         checkCancelled: (() -> Unit)? = null
     ): ThinClientHandle = runBlocking {
         doConnect(onConnected, onDevWorkspaceStopped, onDisconnected, onProgress, checkCancelled)
@@ -53,7 +53,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnected: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit,
-        onProgress: ((value: Any) -> Unit)? = null,
+        onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
         checkCancelled: (() -> Unit)? = null
     ): ThinClientHandle {
         val workspace = devSpacesContext.devWorkspace
@@ -120,7 +120,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 ?: throw IOException("Could not connect, remote IDE is not ready. No join link present.")
 
             checkCancelled?.invoke()
-            onProgress?.invoke("Waiting for the IDE client to start up...")
+            onProgress?.invoke(ProgressCountdown.ProgressEvent(
+                message = "Waiting for the IDE client to start up..."))
 
             val pods = Pods(devSpacesContext.client)
             val localPort = findFreePort()
