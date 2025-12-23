@@ -21,7 +21,6 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Represent an IDE server running in a CDE.
@@ -96,61 +95,36 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class)
     suspend fun waitServerTerminated(): Boolean {
-        return doWaitServerProjectExists(false)
+        return doWaitServerState(false, 10L)
     }
 
     /**
      * Waits for the server to have or not have projects according to the given parameter.
-     * Times out the wait if the expected state is not reached within 10 seconds.
+     * Times out the wait if the expected state is not reached within specified timeout (default is 60 seconds).
      *
-     * @param expected True if projects are expected, False otherwise,
+     * @param isReadyState True if server up and running with the projects all set are expected, False otherwise,
      * @return True if the expected state is achieved within the timeout, False otherwise.
      */
-    @Throws(CancellationException::class)
-    private suspend fun doWaitServerProjectExists(expected: Boolean,
-            checkCancelled: (() -> Unit)? = null): Boolean {
-        val timeout = 10.seconds
-
-        return withTimeoutOrNull(timeout) {
-            while (true) {
-                checkCancelled?.invoke() // Throws CancellationException
-                val hasProjects = try {
-                    getStatus(checkCancelled).projects?.isNotEmpty()
-                } catch (e: Exception) {
-                    thisLogger().debug("Failed to check remote IDE server state.", e)
-                    null
-                }
-
-                if (expected == hasProjects) {
-                    return@withTimeoutOrNull true
-                }
-
-                delay(500L)
-            }
-            @Suppress("UNREACHABLE_CODE")
-            null
-        } ?: false
-    }
-
     @Throws(IOException::class, CancellationException::class)
     private suspend fun doWaitServerState(
         isReadyState: Boolean,
         timeout: Long = readyTimeout,
         checkCancelled: (() -> Unit)? = null
-    ): Boolean = withTimeout(timeout * 1000) { // convert seconds → ms
-        while (true) {
-            checkCancelled?.invoke()
-            if (isServerState(isReadyState, checkCancelled)) {
-                return@withTimeout true
+    ): Boolean =
+        withTimeoutOrNull(timeout * 1000) { // seconds → ms
+            while (true) {
+                checkCancelled?.invoke()
+                if (isServerState(isReadyState, checkCancelled)) {
+                    return@withTimeoutOrNull true
+                }
+
+                yield()
+                delay(500)
             }
 
-            yield()
-            delay(500)
-        }
-
-        @Suppress("UNREACHABLE_CODE")
-        false
-    }
+            @Suppress("UNREACHABLE_CODE")
+            false
+        } ?: false
 
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
