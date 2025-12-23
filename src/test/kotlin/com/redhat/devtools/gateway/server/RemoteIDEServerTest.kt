@@ -104,7 +104,7 @@ class RemoteIDEServerTest {
         coEvery {
             remoteIDEServer.getStatus()
         } returns RemoteIDEServerStatus(
-            null,
+            "test", // Should not be 'null' for a running server
             "",
             "",
             "",
