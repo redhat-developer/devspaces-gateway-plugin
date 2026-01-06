@@ -68,10 +68,9 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             } ?: RemoteIDEServerStatus.empty()
         }
 
-
     @Throws(IOException::class)
-    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null) {
-        doWaitServerState(true, readyTimeout, checkCancelled)
+    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = readyTimeout): Boolean {
+        return doWaitServerState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
                     "Remote IDE server is not ready after $readyTimeout seconds.",
@@ -80,7 +79,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(CancellationException::class)
-    suspend fun isServerState(
+    private suspend fun isServerState(
         isReadyState: Boolean,
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
@@ -94,8 +93,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    suspend fun waitServerTerminated(): Boolean {
-        return doWaitServerState(false, 10L)
+    suspend fun waitServerTerminated(timeout: Long = 10L): Boolean {
+        return doWaitServerState(false, timeout)
     }
 
     /**

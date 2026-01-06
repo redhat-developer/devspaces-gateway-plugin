@@ -23,6 +23,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.io.IOException
 
 class RemoteIDEServerTest {
@@ -65,29 +66,57 @@ class RemoteIDEServerTest {
     }
 
     @Test
-    fun `#waitServerTerminated should return true if server terminated`() {
+    fun `#waitServerReady should throw if server status has no join link`() {
         // given
-        val withProjects = RemoteIDEServerStatus(
+        val withoutJoinLink = remoteIDEServerStatus(
             null,
-            "",
-            "",
-            "",
-            "",
             arrayOf(
-                ProjectInfo("test", "test", "test", "test", "test")
+                projectInfo("death star")
             )
-        )
-        val withoutProjects = RemoteIDEServerStatus(
-            null,
-            "",
-            "",
-            "",
-            "",
-            emptyArray()
         )
         coEvery {
             remoteIDEServer.getStatus()
-        } returns withProjects andThen withoutProjects
+        } returns withoutJoinLink
+
+        // when, then
+        assertThrows<IOException> {
+            runBlocking {
+                remoteIDEServer.waitServerReady(timeout = 1)
+            }
+        }
+    }
+
+    @Test
+    fun `#waitServerReady should throw if server status has a join link but no projects`() {
+        // given
+        val withoutProjects = remoteIDEServerStatus(
+            "https://starwars.galaxy?peridea",
+            null
+        )
+        coEvery {
+            remoteIDEServer.getStatus()
+        } returns withoutProjects
+
+        // when, then
+        assertThrows<IOException> {
+            runBlocking {
+                remoteIDEServer.waitServerReady(timeout = 1)
+            }
+        }
+    }
+
+    @Test
+    fun `#waitServerTerminated should return true if server status has no join link`() {
+        // given
+        val withoutJoinLink = remoteIDEServerStatus(
+            null,
+            arrayOf(
+                projectInfo("death star")
+            )
+        )
+        coEvery {
+            remoteIDEServer.getStatus()
+        } returns withoutJoinLink
 
         // when
         val result = runBlocking {
@@ -99,30 +128,41 @@ class RemoteIDEServerTest {
     }
 
     @Test
+    fun `#waitServerTerminated should return true if server status has a join link but no projects`() {
+        // given
+        val withoutProjects = remoteIDEServerStatus(
+            "https://starwars.galaxy?peridea",
+            null
+        )
+        coEvery {
+            remoteIDEServer.getStatus()
+        } returns withoutProjects
+
+        // when
+        val result = runBlocking {
+            remoteIDEServer.waitServerTerminated(1)
+        }
+
+        // then
+        assertThat(result).isTrue
+    }
+
+    @Test
     fun `#waitServerTerminated should return false on timeout`() {
         // given
         coEvery {
             remoteIDEServer.getStatus()
-        } returns RemoteIDEServerStatus(
-            "test", // Should not be 'null' for a running server
-            "",
-            "",
-            "",
-            "",
+        } returns remoteIDEServerStatus(
+            // running server has join link and projects
+            "https://starwars.galaxy?peridea",
             arrayOf(
-                ProjectInfo(
-                    "test",
-                    "test",
-                    "test",
-                    "test",
-                    "test"
-                )
+                projectInfo("death star")
             )
         )
 
         // when
         val result = runBlocking {
-            remoteIDEServer.waitServerTerminated()
+            remoteIDEServer.waitServerTerminated(1)
         }
 
         // then
@@ -138,10 +178,33 @@ class RemoteIDEServerTest {
 
         // when
         val result = runBlocking {
-            remoteIDEServer.waitServerTerminated()
+            remoteIDEServer.waitServerTerminated(1)
         }
 
         // then
         assertThat(result).isFalse
     }
+
+    private fun remoteIDEServerStatus(joinLink: String? = null, projects: Array<ProjectInfo>?): RemoteIDEServerStatus {
+        return RemoteIDEServerStatus(
+            joinLink,
+            "",
+            "",
+            "",
+            "",
+            projects
+        )
+    }
+
+    private fun projectInfo(name: String): ProjectInfo {
+        return ProjectInfo(
+            name,
+            name,
+            name,
+            name,
+            name
+        )
+
+    }
+
 }

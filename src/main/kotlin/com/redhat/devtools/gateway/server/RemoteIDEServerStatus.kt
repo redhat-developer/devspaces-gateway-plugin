@@ -25,6 +25,12 @@ data class RemoteIDEServerStatus(
             return RemoteIDEServerStatus("", "", "", "", "", emptyArray())
         }
     }
+
+    val isReady: Boolean
+        get() {
+            return !joinLink.isNullOrBlank()
+                && !projects.isNullOrEmpty() }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -54,8 +60,5 @@ data class RemoteIDEServerStatus(
         result = 31 * result + (projects?.contentHashCode() ?: 0)
         return result
     }
-
-    val isReady: Boolean
-        get() = !joinLink.isNullOrBlank() && !projects.isNullOrEmpty()
 }
 
