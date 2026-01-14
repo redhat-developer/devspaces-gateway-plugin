@@ -369,6 +369,110 @@ class KubeConfigUtilsTest {
     }
 
     @Test
+    fun `#getCurrentClusterName returns cluster name from first config file with current context when multiple files exist`() {
+        // given
+        val kubeConfigFile1 = createTempKubeConfigFile(
+            "config1", """
+            apiVersion: v1
+            clusters:
+            - name: tatooine-cluster
+              cluster:
+                server: https://api.tatooine.starwars.com:6443
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            current-context: tatooine-context
+        """.trimIndent()
+        )
+        val kubeConfigFile2 = createTempKubeConfigFile(
+            "config2", """
+            apiVersion: v1
+            clusters:
+            - name: dagobah-cluster
+              cluster:
+                server: https://api.dagobah.starwars.com:6443
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            current-context: dagobah-context
+        """.trimIndent()
+        )
+        val kubeConfigFile3 = createTempKubeConfigFile(
+            "config3", """
+            apiVersion: v1
+            clusters:
+            - name: hoth-cluster
+              cluster:
+                server: https://api.hoth.starwars.com:6443
+            users:
+            - name: han-solo
+              user:
+                token: smuggler-token
+            contexts:
+            - context:
+                cluster: hoth-cluster
+                user: han-solo
+              name: hoth-context
+        """.trimIndent()
+        )
+        val kubeconfigEnv = "${kubeConfigFile1}${File.pathSeparator}${kubeConfigFile2}${File.pathSeparator}${kubeConfigFile3}"
+
+        // when
+        val clusterName = KubeConfigUtils.getCurrentClusterName(kubeconfigEnv)
+
+        // then
+        assertThat(clusterName).isEqualTo("tatooine-cluster")
+    }
+
+    @Test
+    fun `#getCurrentClusterName returns cluster name when current-context is in one file and context definition is in another`() {
+        // given
+        val kubeConfigFile1 = createTempKubeConfigFile(
+            "config1", """
+            apiVersion: v1
+            current-context: dagobah-context
+        """.trimIndent()
+        )
+        val kubeConfigFile2 = createTempKubeConfigFile(
+            "config2", """
+            apiVersion: v1
+            clusters:
+            - name: dagobah-cluster
+              cluster:
+                server: https://api.dagobah.starwars.com:6443
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+        """.trimIndent()
+        )
+        val kubeconfigEnv = "${kubeConfigFile1}${File.pathSeparator}${kubeConfigFile2}"
+
+        // when
+        val clusterName = KubeConfigUtils.getCurrentClusterName(kubeconfigEnv)
+
+        // then
+        assertThat(clusterName).isEqualTo("dagobah-cluster")
+    }
+
+    @Test
     fun `#getAllConfigs returns configs with path set`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
