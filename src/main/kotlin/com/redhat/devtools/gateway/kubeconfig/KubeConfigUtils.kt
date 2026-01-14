@@ -175,17 +175,11 @@ object KubeConfigUtils {
 
     fun getCurrentClusterName(kubeconfigEnv: String? = null): String? {
         return try {
-            getAllConfigFiles(kubeconfigEnv).firstNotNullOfOrNull { path ->
-                if (!isValid(path)) {
-                    null
-                } else {
+            val allKubeConfigs = getAllConfigFiles(kubeconfigEnv)
+                .filter { isValid(it) }
+                .mapNotNull { path ->
                     try {
-                        val kubeConfig = KubeConfig.loadKubeConfig(path.toFile().bufferedReader())
-                        if (!kubeConfig.currentContext.isNullOrBlank()) {
-                            getCurrentContext(kubeConfig)?.context?.cluster
-                        } else {
-                            null
-                        }
+                        KubeConfig.loadKubeConfig(path.toFile().bufferedReader())
                     } catch (e: Throwable) {
                         logger.warn(
                             "Error parsing kubeconfig file '$path' while determining current context: ${e.message}",
@@ -194,7 +188,17 @@ object KubeConfigUtils {
                         null
                     }
                 }
-            }
+            
+            val currentContextName = allKubeConfigs
+                .firstOrNull { it.currentContext?.isNotEmpty() == true }
+                ?.currentContext
+                ?: return null
+            
+            allKubeConfigs
+                .flatMap { it.contexts ?: emptyList() }
+                .mapNotNull { KubeConfigNamedContext.fromMap(it as? Map<*, *>) }
+                .firstOrNull { it.name == currentContextName }
+                ?.context?.cluster
         } catch (e: Exception) {
             logger.warn("Failed to get current context cluster name from kubeconfig: ${e.message}", e)
             null
