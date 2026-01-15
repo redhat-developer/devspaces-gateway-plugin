@@ -50,3 +50,9 @@ object Utils {
 
 }
 
+fun <K, V> mapOfNotNull(vararg pairs: Pair<K, V?>): Map<K, V> {
+    return pairs.mapNotNull { (key, value) ->
+        value?.let { key to it }
+    }.toMap()
+}
+

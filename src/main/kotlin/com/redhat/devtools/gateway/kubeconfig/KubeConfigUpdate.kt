@@ -40,9 +40,9 @@ abstract class KubeConfigUpdate private constructor(
     abstract fun apply()
 
     protected fun save(
-        contexts: ArrayList<Any?>,
-        clusters: ArrayList<Any?>,
-        users: ArrayList<Any?>,
+        contexts: ArrayList<Any?>?,
+        clusters: ArrayList<Any?>?,
+        users: ArrayList<Any?>?,
         preferences: Any,
         currentContext: String?,
         path: Path?

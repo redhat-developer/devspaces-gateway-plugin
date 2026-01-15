@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -231,7 +232,8 @@ class DevSpacesServerStepView(
                         token.trim())
                     .apply()
             } catch (e: Exception) {
-                Dialogs.error( e.message ?: "Could not update kube config file", "Kubeconfig Update Failed")
+                thisLogger().warn(e.message ?: "Could not save configuration file", e)
+                Dialogs.error( e.message ?: "Could not save configuration file", "Save Config Failed")
             }
     }
 

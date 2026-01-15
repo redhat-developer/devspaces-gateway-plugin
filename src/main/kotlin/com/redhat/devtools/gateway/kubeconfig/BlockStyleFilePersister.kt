@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.kubeconfig
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
+import com.redhat.devtools.gateway.openshift.mapOfNotNull
 import io.kubernetes.client.persister.ConfigPersister
 import org.yaml.snakeyaml.DumperOptions
 import java.io.File
@@ -22,18 +23,17 @@ class BlockStyleFilePersister(private val file: File) : ConfigPersister {
 
     @Throws(java.io.IOException::class)
     override fun save(
-        contexts: ArrayList<Any?>,
-        clusters: ArrayList<Any?>,
-        users: ArrayList<Any?>,
+        contexts: ArrayList<Any?>?,
+        clusters: ArrayList<Any?>?,
+        users: ArrayList<Any?>?,
         preferences: Any?,
         currentContext: String?
     ) {
-        val config = mapOf(
+        val config = mapOfNotNull(
             "apiVersion" to "v1",
             "kind" to "Config",
             "current-context" to currentContext,
             "preferences" to preferences,
-
             "clusters" to clusters,
             "contexts" to contexts,
             "users" to users,
