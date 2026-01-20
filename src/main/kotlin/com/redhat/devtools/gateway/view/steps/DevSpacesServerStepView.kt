@@ -11,6 +11,8 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -25,16 +27,22 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.auth.sandbox.SandboxClusterAuthProvider
+import com.redhat.devtools.gateway.auth.code.AuthTokenKind
+import com.redhat.devtools.gateway.auth.code.TokenModel
+import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
-import com.redhat.devtools.gateway.util.message
-import com.redhat.devtools.gateway.view.ui.*
+import com.redhat.devtools.gateway.view.ui.Dialogs
+import com.redhat.devtools.gateway.view.ui.FilteringComboBox
+import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
+import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -42,6 +50,9 @@ import java.awt.event.KeyEvent
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import com.redhat.devtools.gateway.auth.session.LOGIN_TIMEOUT_MS
+import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
+import io.kubernetes.client.openapi.ApiClient
 
 class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
@@ -57,6 +68,10 @@ class DevSpacesServerStepView(
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
 
     private val updateKubeconfigCheckbox = JBCheckBox("Save configuration")
+
+    private val sessionManager =
+        ApplicationManager.getApplication()
+            .getService(RedHatAuthSessionManager::class.java)
 
     private var tfToken = JBTextField()
         .apply {
@@ -75,6 +90,19 @@ class DevSpacesServerStepView(
             (this.editor.editorComponent as JTextField).addKeyListener(createEnterKeyListener())
         }
 
+     private enum class AuthMethod {
+        TOKEN,
+        OPENSHIFT,
+        SSO
+    }
+
+    private var authMethod: AuthMethod = AuthMethod.TOKEN
+
+    private fun updateAuthUiState() {
+        tfToken.isEnabled = authMethod == AuthMethod.TOKEN
+        enableNextButton?.invoke()
+    }
+
     override val component = panel {
         row {
             label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.title")).applyToComponent {
@@ -84,9 +112,43 @@ class DevSpacesServerStepView(
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.server")) {
             cell(tfServer).align(Align.FILL)
         }
+
+        buttonsGroup {
+            row("Authentication") {
+                radioButton("Token")
+                    .applyToComponent {
+                        isSelected = true
+                        toolTipText = "Use a manually provided token from kubeconfig or oc login"
+                        addActionListener {
+                            authMethod = AuthMethod.TOKEN
+                            updateAuthUiState()
+                        }
+                    }
+
+                radioButton("OpenShift OAuth")
+                    .applyToComponent {
+                        addActionListener {
+                            toolTipText = "Authenticate via OpenShift Authenticator (oc login --web)"
+                            authMethod = AuthMethod.OPENSHIFT
+                            updateAuthUiState()
+                        }
+                    }
+
+                radioButton("Red Hat SSO (Sandbox)")
+                    .applyToComponent {
+                        addActionListener {
+                            toolTipText = "Authenticate via Red Hat SSO token (Sandbox only)"
+                            authMethod = AuthMethod.SSO
+                            updateAuthUiState()
+                        }
+                    }
+            }
+        }
+
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
             cell(tfToken).align(Align.FILL)
         }
+
         row("") {
             cell(updateKubeconfigCheckbox).applyToComponent {
                 isOpaque = false
@@ -106,6 +168,7 @@ class DevSpacesServerStepView(
 
     override fun onInit() {
         startKubeconfigMonitor()
+        updateAuthUiState()
     }
 
     private fun onClusterSelected(event: ItemEvent) {
@@ -179,41 +242,132 @@ class DevSpacesServerStepView(
     override fun onNext(): Boolean {
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
         val server = selectedCluster.url
-        val token = tfToken.text
-        val client = OpenShiftClientFactory(KubeConfigUtils).create(server, token.toCharArray())
         var success = false
 
         stopKubeconfigMonitor()
 
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
+                val indicator = ProgressManager.getInstance().progressIndicator
+
                 try {
-                    val indicator = ProgressManager.getInstance().progressIndicator
-                    saveKubeconfig(tfServer.selectedItem as? Cluster?, tfToken.text, indicator)
-                    indicator.text = "Checking connection..."
-                    Projects(client).isAuthenticated()
+                    indicator.text = "Connecting to cluster..."
+
+                    when (authMethod) {
+                        AuthMethod.TOKEN -> {
+                            indicator.text = "Validating token..."
+
+                            val token = tfToken.text
+
+                            val client = createValidatedApiClient(server, token,
+                                "Authentication failed: invalid server URL or token.")
+
+                            saveKubeconfig(selectedCluster, token, indicator)
+                            devSpacesContext.client = client
+                        }
+
+                        AuthMethod.OPENSHIFT -> {
+                            indicator.text = "Authenticating with Openshift..."
+
+                            val finalToken = runBlocking {
+                                val openshiftSSessionManager = OpenShiftAuthSessionManager()
+                                val uri = openshiftSSessionManager.startLogin(selectedCluster.url)
+                                BrowserUtil.browse(uri)
+
+                                indicator.text = "Waiting for you to complete login in your browser..."
+                                indicator.checkCanceled()
+
+                                indicator.text = "Obtaining OpenShift access..."
+                                val osToken = openshiftSSessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
+
+                                TokenModel(
+                                    accessToken = osToken.accessToken,
+                                    expiresAt = osToken.expiresAt,
+                                    accountLabel = osToken.accountLabel,
+                                    kind = AuthTokenKind.TOKEN,
+                                    clusterApiUrl = selectedCluster.url
+                                )
+                            }
+
+                            indicator.text = "Validating cluster access..."
+
+                            val client = createValidatedApiClient(server, finalToken.accessToken,
+                                "Authentication failed: token received from OpenShift Authenticator is invalid or expired.")
+
+                            tfToken.text = finalToken.accessToken
+                            saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+                            devSpacesContext.client = client
+                        }
+
+                        AuthMethod.SSO -> {
+                            indicator.text = "Authenticating with Red Hat..."
+
+                            val finalToken = runBlocking {
+                                val uri = sessionManager.startLogin()
+                                BrowserUtil.browse(uri)
+
+                                indicator.text = "Waiting for you to complete login in your browser..."
+                                indicator.checkCanceled()
+
+                                val ssoToken = sessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
+                                indicator.text = "Obtaining OpenShift access..."
+
+                                val sandboxAuth = SandboxClusterAuthProvider()
+                                sandboxAuth.authenticate(ssoToken)
+                            }
+
+                            indicator.text = "Validating cluster access..."
+
+                            val client = createValidatedApiClient(server, finalToken.accessToken,
+                                "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster.")
+
+                            // Do not save SSO tokens
+                            if (finalToken.kind == AuthTokenKind.PIPELINE) {
+                                saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+                            }
+                            devSpacesContext.client = client
+                        }
+                    }
+
                     success = true
                 } catch (e: Exception) {
-                    Dialogs.error(e.message(), "Connection failed")
+                    Dialogs.error(
+                        e.message ?: "Unable to connect to the cluster",
+                        "Connection Failed"
+                    )
                     throw e
                 }
             },
-            "Checking Connection...",
+            "Connecting to OpenShift...",
             true,
             null
         )
 
         if (success) {
-            settings.save(tfServer.selectedItem as? Cluster)
-            devSpacesContext.client = client
+            settings.save(selectedCluster)
         }
 
         return success
     }
 
+    @Throws(IllegalArgumentException::class)
+    private fun createValidatedApiClient(
+        server: String,
+        token: String,
+        errorMessage: String? = null
+    ): ApiClient = OpenShiftClientFactory(KubeConfigUtils)
+        .create(server, token.toCharArray())
+        .also { client ->
+            require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
+        }
+
     override fun isNextEnabled(): Boolean {
-        return tfServer.selectedItem != null
-                && tfToken.text.isNotEmpty()
+        if (tfServer.selectedItem == null) return false
+
+        return when (authMethod) {
+            AuthMethod.TOKEN  -> tfToken.text.isNotBlank()
+            AuthMethod.OPENSHIFT, AuthMethod.SSO -> true
+        }
     }
 
     private fun saveKubeconfig(cluster: Cluster?, token: String?, indicator: ProgressIndicator) {
