@@ -65,7 +65,7 @@ class KubeConfigMonitorTest {
     @Test
     fun `#start should initially parse and publish clusters`() = testScope.runTest {
         // given
-        val cluster1 = Cluster("skywalker", "url1", null)
+        val cluster1 = Cluster(name = "skywalker", url = "url1",  token = null)
         every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
@@ -82,8 +82,8 @@ class KubeConfigMonitorTest {
     @Test
     fun `#onFileChanged should reparse and publish updated clusters`() = testScope.runTest {
         // given
-        val cluster1 = Cluster("skywalker", "url1", null)
-        val cluster1Updated = Cluster("skywalker", "url1", "token1")
+        val cluster1 = Cluster(name = "skywalker", url = "url1", token = null)
+        val cluster1Updated = Cluster(name = "skywalker", url = "url1", token = "token1")
 
         every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
         every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
@@ -105,8 +105,8 @@ class KubeConfigMonitorTest {
     @Test
     fun `#updateMonitoredPaths should add and remove files based on KUBECONFIG env var`() = testScope.runTest {
         // given
-        val cluster1 = Cluster("skywalker", "url1")
-        val cluster2 = Cluster("obi-wan", "url2")
+        val cluster1 = Cluster(name = "skywalker", url = "url1")
+        val cluster2 = Cluster(name = "obi-wan", url = "url2")
 
         // Initial KUBECONFIG
         every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)

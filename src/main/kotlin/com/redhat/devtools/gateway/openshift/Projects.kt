@@ -15,6 +15,12 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 
+import io.kubernetes.client.openapi.apis.CoreV1Api
+import io.kubernetes.client.openapi.apis.AuthorizationV1Api
+import io.kubernetes.client.openapi.models.V1SelfSubjectAccessReview
+import io.kubernetes.client.openapi.models.V1SelfSubjectAccessReviewSpec
+import io.kubernetes.client.openapi.models.V1ResourceAttributes
+
 class Projects(private val client: ApiClient) {
     @Throws(ApiException::class)
     fun list(): List<*> {
@@ -35,4 +41,27 @@ class Projects(private val client: ApiClient) {
         return true
     }
 
+    /**
+     * Check if the token is valid and usable for the namespace.
+     * Works for user OAuth tokens and pipeline SA tokens.
+     */
+    @Throws(ApiException::class)
+    fun isAuthenticatedAlternative(): Boolean {
+        val api = AuthorizationV1Api(client)
+
+        val review = V1SelfSubjectAccessReview().apply {
+            spec = V1SelfSubjectAccessReviewSpec().apply {
+                resourceAttributes = V1ResourceAttributes().apply {
+                    verb = "get"
+                    resource = "namespaces"
+                }
+            }
+        }
+
+        val response = api
+            .createSelfSubjectAccessReview(review)
+            .execute()
+
+        return response.status?.allowed == true
+    }
 }

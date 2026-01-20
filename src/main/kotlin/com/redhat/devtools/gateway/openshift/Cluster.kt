@@ -17,8 +17,20 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toUriWithHost
 data class Cluster(
     val name: String,
     val url: String,
-    val token: String? = null
+    val certificateAuthorityData: String? = null,
+    val token: String? = null,
+    val clientCertData: String? = null,
+    val clientKeyData: String? = null
 ) {
+    init {
+        require(!(token != null && clientCertData != null)) {
+            "Cluster cannot have both token and client certificate authentication"
+        }
+
+        require((clientCertData == null) == (clientKeyData == null)) {
+            "Client certificate and key must both be provided or both be null"
+        }
+    }
 
     companion object {
         fun fromNameAndUrl(nameAndUrl: String): Cluster? {
