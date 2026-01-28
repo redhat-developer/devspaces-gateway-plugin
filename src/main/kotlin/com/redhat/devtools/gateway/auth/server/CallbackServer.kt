@@ -11,7 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.server
 
-typealias Parameters = Map<String, String>
+import com.redhat.devtools.gateway.auth.code.Parameters
 
 interface CallbackServer {
 

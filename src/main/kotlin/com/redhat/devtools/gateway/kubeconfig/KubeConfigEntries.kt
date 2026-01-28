@@ -201,6 +201,17 @@ data class KubeConfigNamedUser(
             return fromMap(userObject)?.user?.token
         }
 
+        fun getUserClientCertForCluster(clusterName: String, kubeConfig: KubeConfig): Pair<String?, String?>? {
+            val contextEntry = KubeConfigNamedContext.getByName(clusterName, kubeConfig) ?: return null
+            val userObject = (kubeConfig.users as? List<*>)?.firstOrNull { userObject ->
+                val userMap = userObject as? Map<*, *> ?: return@firstOrNull false
+                val userName = userMap["name"] as? String ?: return@firstOrNull false
+                userName == contextEntry.context.user
+            } as? Map<*,*> ?: return null
+            val user = fromMap(userObject)?.user
+            return Pair<String?, String?>(user?.clientCertificateData, user?.clientKeyData)
+        }
+
         fun isTokenAuth(kubeConfig: KubeConfig): Boolean {
             return kubeConfig.credentials?.containsKey(KubeConfig.CRED_TOKEN_KEY) == true
         }

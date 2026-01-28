@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.server
 
+import com.redhat.devtools.gateway.auth.code.Parameters
 import com.redhat.devtools.gateway.auth.config.ServerConfig
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull

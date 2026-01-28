@@ -17,22 +17,23 @@ import com.intellij.notification.Notifications
 import com.intellij.openapi.components.Service
 import com.redhat.devtools.gateway.auth.code.JBPasswordSafeTokenStorage
 import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
+import com.redhat.devtools.gateway.auth.code.Parameters
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.code.SecureTokenStorage
 import com.redhat.devtools.gateway.auth.config.AuthType
 import com.redhat.devtools.gateway.auth.server.CallbackServer
 import com.redhat.devtools.gateway.auth.server.OAuthCallbackServer
-import com.redhat.devtools.gateway.auth.server.Parameters
 import com.redhat.devtools.gateway.auth.server.RedirectUrlBuilder
 import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
 import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLContext
 
 const val OPENSHIFT_LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
-class OpenShiftAuthSessionManager : AuthSessionManager {
+class OpenShiftAuthSessionManager() : AuthSessionManager {
 
     private val tokenStorage: SecureTokenStorage = JBPasswordSafeTokenStorage()
 
@@ -76,7 +77,7 @@ class OpenShiftAuthSessionManager : AuthSessionManager {
         }
     }
 
-    override suspend fun startLogin(apiServerUrl: String?): URI {
+    override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
         if (apiServerUrl == null) {
             throw IllegalStateException("Provide API Server URL")
         }
@@ -93,8 +94,9 @@ class OpenShiftAuthSessionManager : AuthSessionManager {
             val port = callbackServer.start()
 
             authFlow = OpenShiftAuthCodeFlow(
-                apiServerUrl,
-                redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port)
+                apiServerUrl = apiServerUrl,
+                redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
+                sslContext = sslContext
             )
 
             val request = authFlow.startAuthFlow()
@@ -165,4 +167,40 @@ class OpenShiftAuthSessionManager : AuthSessionManager {
     override fun isLoggedIn(): Boolean = currentToken != null
 
     override fun currentAccount(): String? = currentToken?.accountLabel
+
+    override suspend fun loginWithCredentials(
+        apiServerUrl: String,
+        username: String,
+        password: String,
+        sslContext: SSLContext
+    ): SSOToken {
+        if (!loginInProgress.compareAndSet(false, true)) {
+            throw IllegalStateException("Login already in progress")
+        }
+
+        try {
+            notifyChanged()
+
+            authFlow = OpenShiftAuthCodeFlow(
+                apiServerUrl = apiServerUrl,
+                redirectUri = URI("$apiServerUrl/oauth/token/implicit"),
+                sslContext = sslContext
+            )
+
+            val token = authFlow.login(
+                mapOf(
+                    "username" to username,
+                    "password" to password
+                )
+            )
+
+            currentToken = token
+            return token
+        } catch (e: Exception) {
+            throw SsoLoginException.Failed(e.message ?: "OpenShift credential login failed")
+        } finally {
+            loginInProgress.set(false)
+            notifyChanged()
+        }
+    }
 }
