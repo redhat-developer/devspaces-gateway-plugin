@@ -24,7 +24,7 @@ class ClusterTest {
         val token = "empire-token-4ls"
         
         // when
-        val cluster = Cluster(name, url, token)
+        val cluster = Cluster(name = name, url = url, token = token)
         
         // then
         assertThat(cluster.name)
@@ -44,7 +44,7 @@ class ClusterTest {
         val url = "https://api.tatooine.galaxy"
         
         // when
-        val cluster = Cluster(name, url)
+        val cluster = Cluster(name = name, url = url)
         
         // then
         assertThat(cluster.name)
@@ -73,7 +73,7 @@ class ClusterTest {
 
     @Test
     fun `#id property returns formatted id removing protocol`() {
-        val cluster1 = Cluster("x-wing", "https://api.xwing.rebel")
+        val cluster1 = Cluster(name = "x-wing", url = "https://api.xwing.rebel")
         assertThat(cluster1.id)
             .isEqualTo("x-wing@api.xwing.rebel")
 
@@ -93,9 +93,9 @@ class ClusterTest {
     @Test
     fun `#equals returns true for clusters with same properties`() {
         // given
-        val cluster1 = Cluster("r2d2", "https://api.robots.galaxy", "droid-token-1")
-        val cluster2 = Cluster("r2d2", "https://api.robots.galaxy", "droid-token-1")
-        val cluster3 = Cluster("c3po", "https://api.robots.galaxy", "droid-token-1")
+        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster3 = Cluster(name = "c3po", url = "https://api.robots.galaxy", token = "droid-token-1")
         
         // when & then
         assertThat(cluster1)
@@ -107,8 +107,8 @@ class ClusterTest {
     @Test
     fun `#hashCode returns same value for clusters with same properties`() {
         // given
-        val cluster1 = Cluster("r2d2", "https://api.robots.galaxy", "droid-token-1")
-        val cluster2 = Cluster("r2d2", "https://api.robots.galaxy", "droid-token-1")
+        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
         
         // when & then
         assertThat(cluster1.hashCode())
@@ -118,7 +118,7 @@ class ClusterTest {
     @Test
     fun `#copy method creates new instance with modified properties`() {
         // given
-        val original = Cluster("obi-wan", "https://api.kenobi.jedi", "kenobi-token-1")
+        val original = Cluster(name = "obi-wan", url = "https://api.kenobi.jedi", token = "kenobi-token-1")
         
         // when
         val copy = original.copy(name = "ben-kenobi")
@@ -153,7 +153,7 @@ class ClusterTest {
 
     @Test
     fun `#id returns name@url without scheme, port nor path`() {
-        val cluster1 = Cluster("x-wing", "https://api.xwing.rebel")
+        val cluster1 = Cluster(name = "x-wing", url = "https://api.xwing.rebel")
         assertThat(cluster1.id)
             .isEqualTo("x-wing@api.xwing.rebel")
 
@@ -220,5 +220,104 @@ class ClusterTest {
             .isNotNull()
         assertThat(cluster?.url)
             .isEqualTo(url)
+    }
+
+    @Test
+    fun `#Cluster constructor creates instance with client certificate authentication`() {
+        // given
+        val name = "yavin"
+        val url = "https://api.yavin.rebel"
+        val cert = "cert-data"
+        val key = "key-data"
+
+        // when
+        val cluster = Cluster(
+            name = name,
+            url = url,
+            clientCertData = cert,
+            clientKeyData = key
+        )
+
+        // then
+        assertThat(cluster.name).isEqualTo(name)
+        assertThat(cluster.url).isEqualTo(url)
+        assertThat(cluster.token).isNull()
+        assertThat(cluster.clientCertData).isEqualTo(cert)
+        assertThat(cluster.clientKeyData).isEqualTo(key)
+    }
+
+    @Test
+    fun `#Cluster constructor allows token-only authentication`() {
+        val cluster = Cluster(
+            name = "scarif",
+            url = "https://api.scarif.empire",
+            token = "empire-token"
+        )
+
+        assertThat(cluster.token).isEqualTo("empire-token")
+        assertThat(cluster.clientCertData).isNull()
+        assertThat(cluster.clientKeyData).isNull()
+    }
+
+    @Test
+    fun `#Cluster constructor fails when both token and client certificate are provided`() {
+        assertThatThrownBy {
+            Cluster(
+                name = "mustafar",
+                url = "https://api.mustafar.sith",
+                token = "vader-token",
+                clientCertData = "cert",
+                clientKeyData = "key"
+            )
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun `#Cluster constructor fails when certificate is provided without key`() {
+        assertThatThrownBy {
+            Cluster(
+                name = "kamino",
+                url = "https://api.kamino.cloners",
+                clientCertData = "cert-only"
+            )
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun `#Cluster constructor fails when key is provided without certificate`() {
+        assertThatThrownBy {
+            Cluster(
+                name = "geonosis",
+                url = "https://api.geonosis.droids",
+                clientKeyData = "key-only"
+            )
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun `#equals and hashCode include client certificate fields`() {
+        val cluster1 = Cluster(
+            name = "endor",
+            url = "https://api.endor.rebel",
+            clientCertData = "cert",
+            clientKeyData = "key"
+        )
+
+        val cluster2 = Cluster(
+            name = "endor",
+            url = "https://api.endor.rebel",
+            clientCertData = "cert",
+            clientKeyData = "key"
+        )
+
+        val cluster3 = Cluster(
+            name = "endor",
+            url = "https://api.endor.rebel",
+            token = "ewok-token"
+        )
+
+        assertThat(cluster1).isEqualTo(cluster2)
+        assertThat(cluster1.hashCode()).isEqualTo(cluster2.hashCode())
+        assertThat(cluster1).isNotEqualTo(cluster3)
     }
 }

@@ -31,11 +31,12 @@ import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
 import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLContext
 
 const val LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
-class RedHatAuthSessionManager : AuthSessionManager {
+class RedHatAuthSessionManager(): AuthSessionManager {
 
     private val tokenStorage: SecureTokenStorage =
         JBPasswordSafeTokenStorage()
@@ -98,7 +99,7 @@ class RedHatAuthSessionManager : AuthSessionManager {
     /**
      * Starts the login process and returns browser URL.
      */
-    override suspend fun startLogin(apiServerUrl: String?): URI {
+    override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
         if (!loginInProgress.compareAndSet(false, true)) {
             throw IllegalStateException("Login already in progress")
         }
@@ -114,7 +115,8 @@ class RedHatAuthSessionManager : AuthSessionManager {
             authFlow = RedHatAuthCodeFlow(
                 clientId = authConfig.clientId,
                 redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                providerMetadata = providerMetadata
+                providerMetadata = providerMetadata,
+                sslContext = sslContext
             )
 
             val request = authFlow.startAuthFlow()
@@ -151,6 +153,15 @@ class RedHatAuthSessionManager : AuthSessionManager {
             cancelLogin()
             throw e
         }
+    }
+
+    override suspend fun loginWithCredentials(
+        apiServerUrl: String,
+        username: String,
+        password: String,
+        sslContext: SSLContext
+    ): SSOToken {
+        error("Not supported")
     }
 
     private suspend fun cancelLogin() {

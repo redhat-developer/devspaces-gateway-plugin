@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -28,11 +28,10 @@ import com.redhat.devtools.gateway.openshift.isUnauthorized
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.SelectClusterDialog
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.*
 import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -48,14 +47,22 @@ private const val DW_NAME = "dwName"
  */
 class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
-    private var clientFactory: OpenShiftClientFactory? = null
-
     @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("UnstableApiUsage")
     override suspend fun connect(
         parameters: Map<String, String>,
         requestor: ConnectionRequestor
     ): GatewayConnectionHandle? {
+        val ctx = DevSpacesContext()
+
+        val confirmed = withContext(Dispatchers.Main) {
+            SelectClusterDialog(ctx).showAndConnect()
+        }
+
+        if (!confirmed) {
+            return null
+        }
+
         return suspendCancellableCoroutine { cont ->
             ProgressManager.getInstance().runProcessWithProgressSynchronously(
                 {
@@ -194,7 +201,6 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
 
         indicator.update(message = "Initializing Kubernetes connection…")
         val factory = OpenShiftClientFactory(KubeConfigUtils)
-        this.clientFactory = factory
         ctx.client = factory.create()
 
         indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
@@ -244,12 +250,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     private fun handleUnauthorizedError(err: ApiException): Boolean {
         if (!err.isUnauthorized()) return false
 
-        val tokenNote = if (clientFactory?.isTokenAuth() == true)
-            "\n\nYou are using token-based authentication.\nUpdate your token in the kubeconfig file."
-        else ""
-
         Dialogs.error(
-            "Your session has expired.\nPlease log in again to continue.$tokenNote",
+            "Your session has expired.\n" +
+                    "Please authenticate again to continue.\n\n" +
+                    "If you are using token-based authentication, update your token in the kubeconfig file.",
             "Authentication Required"
         )
         return true
@@ -274,5 +278,4 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             runnable.invoke()
         }.start()
     }
-
 }

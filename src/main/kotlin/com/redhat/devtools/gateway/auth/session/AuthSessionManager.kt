@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.auth.session
 
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import java.net.URI
+import javax.net.ssl.SSLContext
 
 interface AuthSessionManager {
 
@@ -20,7 +21,10 @@ interface AuthSessionManager {
     suspend fun initialize()
 
     /** Starts login and returns browser URL */
-    suspend fun startLogin(apiServerUrl: String? = null): URI
+    suspend fun startLogin(apiServerUrl: String? = null, sslContext: SSLContext): URI
+
+    /** Starts login using the given credentials and returns a valid token */
+    suspend fun loginWithCredentials(apiServerUrl: String, username: String, password: String, sslContext: SSLContext): SSOToken
 
     /** Returns a valid (non-expired) token or null. Refreshes automatically if possible. */
     suspend fun getValidToken(): SSOToken?

@@ -22,7 +22,6 @@ import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.AuthenticationRequest
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
-import com.redhat.devtools.gateway.auth.server.Parameters
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -34,6 +33,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.util.*
+import javax.net.ssl.SSLContext
 
 /**
  * RedHat SSO OAuth Flow.
@@ -42,7 +42,8 @@ import java.util.*
 class RedHatAuthCodeFlow(
     private val clientId: String,
     private val redirectUri: URI,
-    private val providerMetadata: OIDCProviderMetadata
+    private val providerMetadata: OIDCProviderMetadata,
+    private val sslContext: SSLContext
 ) : AuthCodeFlow {
 
     private lateinit var codeVerifier: CodeVerifier
@@ -140,4 +141,11 @@ class RedHatAuthCodeFlow(
             accountLabel = accountLabel
         )
     }
+
+    override suspend fun login(parameters: Parameters): SSOToken =
+        error(
+            "Direct login is not supported for Red Hat SSO authentication. " +
+            "This flow requires browser-based authentication via startAuthFlow(), " +
+            "followed by token exchange with the Sandbox API."
+        )
 }

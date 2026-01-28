@@ -14,7 +14,6 @@ package com.redhat.devtools.gateway.auth.code
 import java.net.URI
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
-import com.redhat.devtools.gateway.auth.server.Parameters
 import kotlinx.serialization.Serializable
 
 /**
@@ -59,10 +58,15 @@ data class TokenModel(
     val serviceAccount: String? = null
 )
 
+typealias Parameters = Map<String, String>
+
 interface AuthCodeFlow {
-    /** Starts the auth flow and returns the info to open the browser */
+    /** Starts the 2-step auth flow and returns the info to open the browser */
     suspend fun startAuthFlow(): AuthCodeRequest
 
-    /** Handles the redirect/callback and returns the final tokens */
+    /** Handles the redirect/callback and returns the final tokens for the 2-step auth flow */
     suspend fun handleCallback(parameters: Parameters): SSOToken
+
+    /** Single-step auth flow - exchanges username/password to the final token */
+    suspend fun login(parameters: Parameters): SSOToken
 }
