@@ -1,4 +1,3 @@
-import org.gradle.kotlin.dsl.dependencies
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
@@ -124,7 +123,13 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            recommended()
+            // Gateway internal builds break verifier — DO NOT use recommended()
+            // This list of IDE versions ia to be updated manually when:
+            // - A new IDE version gets published (whatever it is: a minor, a major or a build number)
+            // - We decide to switch to a newer "since build number" (is to be converted into corresponding exact version number)
+            create("GW", "2025.1.6")
+            create("GW", "2025.2.5")
+            create("GW", "2025.3.2")
         }
     }
 }
