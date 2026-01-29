@@ -17,9 +17,8 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
-import java.io.StringReader
 
-class OpenShiftClientFactory(private val kubeConfigBuilder: KubeConfigUtils) {
+class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
     private val userName = "openshift_user"
     private val contextName = "openshift_context"
     private val clusterName = "openshift_cluster"
@@ -27,15 +26,22 @@ class OpenShiftClientFactory(private val kubeConfigBuilder: KubeConfigUtils) {
     private var lastUsedKubeConfig: KubeConfig? = null
 
     fun create(): ApiClient {
-        val mergedConfig = kubeConfigBuilder.toString(kubeConfigBuilder.getAllConfigFiles())
-            ?: run {
-                thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
-                lastUsedKubeConfig = null
-                return ClientBuilder.defaultClient()
-            }
+        val paths = configUtils.getAllConfigFiles()
+        if (paths.isEmpty()) {
+            thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
+            lastUsedKubeConfig = null
+            return ClientBuilder.defaultClient()
+        }
 
         return try {
-                val kubeConfig = KubeConfig.loadKubeConfig(StringReader(mergedConfig))
+                val allConfigs = configUtils.getAllConfigs(paths)
+                if (allConfigs.isEmpty()) {
+                    thisLogger().debug("No valid kubeconfig content found. Falling back to default ApiClient.")
+                    lastUsedKubeConfig = null
+                    return ClientBuilder.defaultClient()
+                }
+
+                val kubeConfig = configUtils.mergeConfigs(allConfigs)
                 lastUsedKubeConfig = kubeConfig
                 ClientBuilder.kubeconfig(kubeConfig).build()
             } catch (e: Exception) {

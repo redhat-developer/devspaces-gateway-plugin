@@ -1,12 +1,8 @@
 package com.redhat.devtools.gateway.kubeconfig
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.EnvironmentUtil
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.Utils
-import com.sun.jndi.toolkit.url.Uri
 import io.kubernetes.client.util.KubeConfig
 import java.io.File
 import java.net.URI
@@ -115,47 +111,17 @@ object KubeConfigUtils {
                 && paths.isRegularFile()
     }
 
-    private fun getDocuments(file: Path): List<String> {
-        return try {
-            file.toFile().readText().split("---")
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-        } catch (e: Exception) {
-            thisLogger().info("Could not read config file: $file", e)
-            emptyList()
-        }
-    }
-
-    private fun getAllDocuments(files: List<Path>): List<String> {
-        return files.flatMap { getDocuments(it) }
-    }
-
-    fun toString(files: List<Path>): String? {
-        if (files.isEmpty()) {
-            logger.debug("No kubeconfig files found.")
-            return null
-        }
-        val mergedKubeConfigs = getAllDocuments(files).joinToString("\n---\n")
-        if (mergedKubeConfigs.isEmpty()) {
-            logger.debug("No valid kubeconfig content found.")
-            return null
-        }
-        return mergedKubeConfigs
-    }
-
     fun getAllConfigs(files: List<Path>): List<KubeConfig> {
-        return files.flatMap { file ->
-            getDocuments(file).mapNotNull { document ->
-                try {
-                    val kubeConfig = KubeConfig.loadKubeConfig(document.reader())
-                    kubeConfig?.let {
-                        kubeConfig.path = file
-                    }
-                    kubeConfig
-                } catch (e: Throwable) {
-                    logger.debug("Could not parse kubeconfig document", e)
-                    null
+        return files.mapNotNull { file ->
+            try {
+                val document = file.toFile().readText()
+                val kubeConfig = KubeConfig.loadKubeConfig(document.reader())
+                kubeConfig?.apply {
+                    path = file
                 }
+            } catch (e: Throwable) {
+                logger.debug("Could not parse kubeconfig document", e)
+                null
             }
         }
     }
@@ -270,6 +236,28 @@ object KubeConfigUtils {
             .replace(Regex("[^a-z0-9-.]"), "-")
             .replace(Regex("^(-+)(\\.)*|(-+)(\\.)*$"), "")
             .take(253)
+    }
+
+    fun mergeConfigs(configs: List<KubeConfig>): KubeConfig {
+        if (configs.size == 1) {
+            return configs.first()
+        }
+
+        val allClusters = ArrayList(configs.flatMap { it.clusters ?: emptyList() }
+            .distinctBy { (it as? Map<*, *>)?.get("name") })
+        val allUsers = ArrayList(configs.flatMap { it.users ?: emptyList() }
+            .distinctBy { (it as? Map<*, *>)?.get("name") })
+        val allContexts = ArrayList(configs.flatMap { it.contexts ?: emptyList() }
+            .distinctBy { (it as? Map<*, *>)?.get("name") })
+
+        val currentContext = configs.firstNotNullOfOrNull { config ->
+            config.currentContext?.takeIf { it.isNotBlank() }
+        }
+
+        val mergedConfig = KubeConfig(allContexts, allClusters, allUsers)
+        currentContext?.let { mergedConfig.setContext(it) }
+
+        return mergedConfig
     }
 
     private val kubeConfigFiles = WeakHashMap<KubeConfig, Path>()
