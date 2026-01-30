@@ -1,6 +1,9 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestResult
+import org.gradle.kotlin.dsl.KotlinClosure2
 
 plugins {
     id("java") // Java support
@@ -172,12 +175,44 @@ tasks {
         )
         testLogging {
             // Exclude standardError, standardOut
-            events("skipped", "failed")
+            val showPassed = providers.gradleProperty("showPassed").isPresent
+            if (!showPassed) {
+                println(
+                    """
+                    ℹ️  Passed test output is hidden.
+                       Re-run with -PshowPassed to include PASSED tests in the output.
+                    """.trimIndent()
+                )
+            }
+
+            events(
+                "failed",
+                "skipped",
+                *if (showPassed) arrayOf("passed") else emptyArray() // Use''-PshowPassed' option to see PASSED tests in output
+            )
+
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             showExceptions = true
             showCauses = true
             showStackTraces = true
         }
+        afterSuite(
+            KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
+                if (desc.parent == null) {
+                    println(
+                        """
+                    ===============================
+                    Test summary:
+                      Total:   ${result.testCount}
+                      Passed:  ${result.successfulTestCount}
+                      Failed:  ${result.failedTestCount}
+                      Skipped: ${result.skippedTestCount}
+                    ===============================
+                    """.trimIndent()
+                    )
+                }
+            })
+        )
     }
 }
 
