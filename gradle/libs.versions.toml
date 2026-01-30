@@ -2,7 +2,7 @@
 # libraries
 assertj = "3.27.6"
 junit-jupiter = "6.0.2"
-mockk = "1.14.7"
+mockk = "1.14.9"
 
 # plugins
 changelog = "2.5.0"
