@@ -11,7 +11,6 @@
  */
 package com.redhat.devtools.gateway.openshift
 
-import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.custom.V1Patch
@@ -66,17 +65,20 @@ class DevWorkspaces(private val client: ApiClient) {
         } catch (e: ApiException) {
             thisLogger().info(e.message)
 
-            val response = Gson().fromJson(e.responseBody, Map::class.java)
-            // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
-            // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, etc.
-            // It doesn't make sense to show an error to the user in such cases,
-            // so let's skip it silently.
-            if ((response["code"] as Double) == 403.0) {
-                return DevWorkspaceListResult(emptyList(), null)
-            } else {
-                // The error will be shown in the Gateway UI.
-                thisLogger().error(e.message)
-                throw e
+            return when (e.code) {
+                403, 404 -> {
+                    // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
+                    // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, or the given cluster doesn't have
+                    // the RedHat DevSpaces operator installed on it, etc.
+                    //
+                    // It doesn't make sense to show an error to the user in such cases,
+                    // so let's skip it silently.
+                    DevWorkspaceListResult(emptyList(), null)
+                }
+                else -> {
+                    thisLogger().error("Kubernetes API error ${e.code}", e)
+                    throw e
+                }
             }
         }
     }

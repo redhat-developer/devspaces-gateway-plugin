@@ -268,19 +268,6 @@ class KubeConfigUtilsTest {
 
 
     @Test
-    fun `#toString returns multiple kubeconfig files merged into a string`() {
-        // given
-        val kubeConfigFile1 = createTempKubeConfigFile("config1", "content1")
-        val kubeConfigFile2 = createTempKubeConfigFile("config2", "content2")
-
-        // when
-        val merged = KubeConfigUtils.toString(listOf(kubeConfigFile1, kubeConfigFile2))
-
-        // then
-        assertThat(merged).isEqualTo("content1\n---\ncontent2")
-    }
-
-    @Test
     fun `#getCurrentContext returns current context`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
@@ -369,6 +356,110 @@ class KubeConfigUtilsTest {
     }
 
     @Test
+    fun `#getCurrentClusterName returns cluster name from first config file with current context when multiple files exist`() {
+        // given
+        val kubeConfigFile1 = createTempKubeConfigFile(
+            "config1", """
+            apiVersion: v1
+            clusters:
+            - name: tatooine-cluster
+              cluster:
+                server: https://api.tatooine.starwars.com:6443
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            current-context: tatooine-context
+        """.trimIndent()
+        )
+        val kubeConfigFile2 = createTempKubeConfigFile(
+            "config2", """
+            apiVersion: v1
+            clusters:
+            - name: dagobah-cluster
+              cluster:
+                server: https://api.dagobah.starwars.com:6443
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            current-context: dagobah-context
+        """.trimIndent()
+        )
+        val kubeConfigFile3 = createTempKubeConfigFile(
+            "config3", """
+            apiVersion: v1
+            clusters:
+            - name: hoth-cluster
+              cluster:
+                server: https://api.hoth.starwars.com:6443
+            users:
+            - name: han-solo
+              user:
+                token: smuggler-token
+            contexts:
+            - context:
+                cluster: hoth-cluster
+                user: han-solo
+              name: hoth-context
+        """.trimIndent()
+        )
+        val kubeconfigEnv = "${kubeConfigFile1}${File.pathSeparator}${kubeConfigFile2}${File.pathSeparator}${kubeConfigFile3}"
+
+        // when
+        val clusterName = KubeConfigUtils.getCurrentClusterName(kubeconfigEnv)
+
+        // then
+        assertThat(clusterName).isEqualTo("tatooine-cluster")
+    }
+
+    @Test
+    fun `#getCurrentClusterName returns cluster name when current-context is in one file and context definition is in another`() {
+        // given
+        val kubeConfigFile1 = createTempKubeConfigFile(
+            "config1", """
+            apiVersion: v1
+            current-context: dagobah-context
+        """.trimIndent()
+        )
+        val kubeConfigFile2 = createTempKubeConfigFile(
+            "config2", """
+            apiVersion: v1
+            clusters:
+            - name: dagobah-cluster
+              cluster:
+                server: https://api.dagobah.starwars.com:6443
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+        """.trimIndent()
+        )
+        val kubeconfigEnv = "${kubeConfigFile1}${File.pathSeparator}${kubeConfigFile2}"
+
+        // when
+        val clusterName = KubeConfigUtils.getCurrentClusterName(kubeconfigEnv)
+
+        // then
+        assertThat(clusterName).isEqualTo("dagobah-cluster")
+    }
+
+    @Test
     fun `#getAllConfigs returns configs with path set`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
@@ -397,34 +488,6 @@ class KubeConfigUtilsTest {
         // then
         assertThat(configs).hasSize(1)
         assertThat(configs[0].path).isEqualTo(kubeConfigFile)
-    }
-
-    @Test
-    fun `#getAllConfigs returns multiple configs from file with multiple documents`() {
-        // given
-        val kubeConfigFile = createTempKubeConfigFile(
-            "config", """
-            apiVersion: v1
-            clusters:
-            - name: mustafar-cluster
-              cluster:
-                server: https://api.mustafar.starwars.com:6443
-            ---
-            apiVersion: v1
-            clusters:
-            - name: kamino-cluster
-              cluster:
-                server: https://api.kamino.starwars.com:6443
-        """.trimIndent()
-        )
-
-        // when
-        val configs = KubeConfigUtils.getAllConfigs(listOf(kubeConfigFile))
-
-        // then
-        assertThat(configs).hasSize(2)
-        assertThat(configs[0].path).isEqualTo(kubeConfigFile)
-        assertThat(configs[1].path).isEqualTo(kubeConfigFile)
     }
 
     @Test
@@ -849,51 +912,6 @@ class KubeConfigUtilsTest {
     }
 
     @Test
-    fun `#toString returns null when given empty list`() {
-        // given
-        val emptyList = emptyList<Path>()
-
-        // when
-        val result = KubeConfigUtils.toString(emptyList)
-
-        // then
-        assertThat(result).isNull()
-    }
-
-    @Test
-    fun `#toString returns null when files contain only whitespace`() {
-        // given
-        val emptyFile = createTempKubeConfigFile("empty-config", "   \n  \t  ")
-
-        // when
-        val result = KubeConfigUtils.toString(listOf(emptyFile))
-
-        // then
-        assertThat(result).isNull()
-    }
-
-    @Test
-    fun `#toString handles files with multiple documents separated by ---`() {
-        // given
-        val kubeConfigFile = createTempKubeConfigFile(
-            "config", """
-            apiVersion: v1
-            kind: Config
-            ---
-            apiVersion: v1
-            kind: Config
-        """.trimIndent()
-        )
-
-        // when
-        val result = KubeConfigUtils.toString(listOf(kubeConfigFile))
-
-        // then
-        assertThat(result).contains("---")
-        assertThat(result).contains("apiVersion: v1")
-    }
-
-    @Test
     fun `#getCurrentContext returns null when current context is not set`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
@@ -1027,11 +1045,615 @@ class KubeConfigUtilsTest {
         assertThat(kubeConfig.path).isNull()
     }
 
+    @Test
+    fun `#mergeConfigs returns single config when given one config`() {
+        // given
+        val kubeConfig = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            current-context: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(kubeConfig))
+
+        // then
+        assertThat(merged).isSameAs(kubeConfig)
+    }
+
+    @Test
+    fun `#mergeConfigs merges clusters from multiple configs`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.clusters).hasSize(2)
+        val clusterNames = merged.clusters?.map { (it as Map<*, *>)["name"] }
+        assertThat(clusterNames).containsExactly("tatooine-cluster", "dagobah-cluster")
+    }
+
+    @Test
+    fun `#mergeConfigs merges users from multiple configs`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.users).hasSize(2)
+        val userNames = merged.users?.map { (it as Map<*, *>)["name"] }
+        assertThat(userNames).containsExactly("luke-skywalker", "yoda-master")
+    }
+
+    @Test
+    fun `#mergeConfigs merges contexts from multiple configs`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.contexts).hasSize(2)
+        val contextNames = merged.contexts?.map { (it as Map<*, *>)["name"] }
+        assertThat(contextNames).containsExactly("tatooine-context", "dagobah-context")
+    }
+
+    @Test
+    fun `#mergeConfigs uses first current-context when multiple configs have current-context set`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            current-context: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            current-context: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.currentContext).isEqualTo("tatooine-context")
+    }
+
+    @Test
+    fun `#mergeConfigs uses first non-blank current-context when first config has no current-context`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            current-context: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.currentContext).isEqualTo("dagobah-context")
+    }
+
+    @Test
+    fun `#mergeConfigs keeps first cluster when multiple configs have clusters with same name`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.first.starwars.com:6443
+              name: duplicate-cluster
+            contexts:
+            - context:
+                cluster: duplicate-cluster
+                user: luke-skywalker
+              name: first-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: first-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.second.starwars.com:6443
+              name: duplicate-cluster
+            contexts:
+            - context:
+                cluster: duplicate-cluster
+                user: yoda-master
+              name: second-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: second-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.clusters).hasSize(1)
+        val cluster = merged.clusters?.get(0) as Map<*, *>
+        assertThat(cluster["name"]).isEqualTo("duplicate-cluster")
+        val clusterDetails = cluster["cluster"] as Map<*, *>
+        assertThat(clusterDetails["server"]).isEqualTo("https://api.first.starwars.com:6443")
+    }
+
+    @Test
+    fun `#mergeConfigs keeps first user when multiple configs have users with same name`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.first.starwars.com:6443
+              name: cluster-1
+            contexts:
+            - context:
+                cluster: cluster-1
+                user: duplicate-user
+              name: first-context
+            kind: Config
+            users:
+            - name: duplicate-user
+              user:
+                token: first-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.second.starwars.com:6443
+              name: cluster-2
+            contexts:
+            - context:
+                cluster: cluster-2
+                user: duplicate-user
+              name: second-context
+            kind: Config
+            users:
+            - name: duplicate-user
+              user:
+                token: second-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.users).hasSize(1)
+        val user = merged.users?.get(0) as Map<*, *>
+        assertThat(user["name"]).isEqualTo("duplicate-user")
+        val userDetails = user["user"] as Map<*, *>
+        assertThat(userDetails["token"]).isEqualTo("first-token")
+    }
+
+    @Test
+    fun `#mergeConfigs keeps first context when multiple configs have contexts with same name`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.first.starwars.com:6443
+              name: cluster-1
+            contexts:
+            - context:
+                cluster: cluster-1
+                user: user-1
+              name: duplicate-context
+            kind: Config
+            users:
+            - name: user-1
+              user:
+                token: first-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.second.starwars.com:6443
+              name: cluster-2
+            contexts:
+            - context:
+                cluster: cluster-2
+                user: user-2
+              name: duplicate-context
+            kind: Config
+            users:
+            - name: user-2
+              user:
+                token: second-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.contexts).hasSize(1)
+        val context = merged.contexts?.get(0) as Map<*, *>
+        assertThat(context["name"]).isEqualTo("duplicate-context")
+        val contextDetails = context["context"] as Map<*, *>
+        assertThat(contextDetails["cluster"]).isEqualTo("cluster-1")
+        assertThat(contextDetails["user"]).isEqualTo("user-1")
+    }
+
+    @Test
+    fun `#mergeConfigs handles configs with no current-context set`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.currentContext).isNull()
+    }
+
+    @Test
+    fun `#mergeConfigs handles configs with empty string current-context`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            contexts:
+            - context:
+                cluster: tatooine-cluster
+                user: luke-skywalker
+              name: tatooine-context
+            current-context: ""
+            kind: Config
+            users:
+            - name: luke-skywalker
+              user:
+                token: jedi-token
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            contexts:
+            - context:
+                cluster: dagobah-cluster
+                user: yoda-master
+              name: dagobah-context
+            current-context: dagobah-context
+            kind: Config
+            users:
+            - name: yoda-master
+              user:
+                token: force-token
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2))
+
+        // then
+        assertThat(merged.currentContext).isEqualTo("dagobah-context")
+    }
+
+    @Test
+    fun `#mergeConfigs merges three configs correctly`() {
+        // given
+        val config1 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.tatooine.starwars.com:6443
+              name: tatooine-cluster
+            kind: Config
+        """.trimIndent()
+        )
+
+        val config2 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.dagobah.starwars.com:6443
+              name: dagobah-cluster
+            kind: Config
+        """.trimIndent()
+        )
+
+        val config3 = createKubeConfig(
+            """
+            apiVersion: v1
+            clusters:
+            - cluster:
+                server: https://api.hoth.starwars.com:6443
+              name: hoth-cluster
+            kind: Config
+        """.trimIndent()
+        )
+
+        // when
+        val merged = KubeConfigUtils.mergeConfigs(listOf(config1, config2, config3))
+
+        // then
+        assertThat(merged.clusters).hasSize(3)
+        val clusterNames = merged.clusters?.map { (it as Map<*, *>)["name"] }
+        assertThat(clusterNames).containsExactly("tatooine-cluster", "dagobah-cluster", "hoth-cluster")
+    }
+
+    private fun createKubeConfig(yaml: String): KubeConfig {
+        return KubeConfig.loadKubeConfig(java.io.StringReader(yaml))
+    }
+
     private fun createTempKubeConfigFile(name: String, content: String): Path {
-        val file = tempDir.resolve(name)
-        file.parent.createDirectories()
-        file.createFile()
-        file.writeText(content)
-        return file
+        return tempDir.resolve(name).apply {
+            parent.createDirectories()
+            createFile()
+            writeText(content)
+        }
     }
 }

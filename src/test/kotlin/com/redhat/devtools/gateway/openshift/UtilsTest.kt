@@ -124,4 +124,96 @@ class UtilsTest {
         // then
         assertThat(value).isNull()
     }
+
+    @Test
+    fun `#mapOfNotNull returns map with all non-null values`() {
+        // when
+        val result = mapOfNotNull(
+            "key1" to "value1",
+            "key2" to "value2",
+            "key3" to "value3"
+        )
+
+        // then
+        assertThat(result).hasSize(3)
+        assertThat(result).containsEntry("key1", "value1")
+        assertThat(result).containsEntry("key2", "value2")
+        assertThat(result).containsEntry("key3", "value3")
+    }
+
+    @Test
+    fun `#mapOfNotNull filters out null values`() {
+        // when
+        val result = mapOfNotNull(
+            "key1" to "value1",
+            "key2" to null,
+            "key3" to "value3",
+            "key4" to null
+        )
+
+        // then
+        assertThat(result).hasSize(2)
+        assertThat(result).containsEntry("key1", "value1")
+        assertThat(result).containsEntry("key3", "value3")
+        assertThat(result).doesNotContainKey("key2")
+        assertThat(result).doesNotContainKey("key4")
+    }
+
+    @Test
+    fun `#mapOfNotNull returns empty map when all values are null`() {
+        // when
+        val result = mapOfNotNull(
+            "key1" to null,
+            "key2" to null,
+            "key3" to null
+        )
+
+        // then
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `#mapOfNotNull returns empty map when no pairs provided`() {
+        // when
+        val result = mapOfNotNull<String, String>()
+
+        // then
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `#mapOfNotNull works with different value types`() {
+        // when
+        val stringResult = mapOfNotNull("key1" to "value", "key2" to null)
+        val intResult = mapOfNotNull("key1" to 42, "key2" to null, "key3" to 100)
+        val booleanResult = mapOfNotNull("key1" to true, "key2" to null, "key3" to false)
+
+        // then
+        assertThat(stringResult).hasSize(1)
+        assertThat(stringResult).containsEntry("key1", "value")
+
+        assertThat(intResult).hasSize(2)
+        assertThat(intResult).containsEntry("key1", 42)
+        assertThat(intResult).containsEntry("key3", 100)
+
+        assertThat(booleanResult).hasSize(2)
+        assertThat(booleanResult).containsEntry("key1", true)
+        assertThat(booleanResult).containsEntry("key3", false)
+    }
+
+    @Test
+    fun `#mapOfNotNull preserves order of non-null entries`() {
+        // when
+        val result = mapOfNotNull(
+            "key1" to "value1",
+            "key2" to null,
+            "key3" to "value3"
+        )
+
+        // then
+        val entries = result.entries.toList()
+        assertThat(entries).hasSize(2)
+        assertThat(entries[0].key).isEqualTo("key1")
+        assertThat(entries[1].key).isEqualTo("key3")
+    }
 }
