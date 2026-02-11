@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+## [0.0.15] - 2026-02-11
+
+ℹ️  Passed test output is hidden.
+   Re-run with -PshowPassed to include PASSED tests in the output.
+
+### ✨ New Features and Enhancements
+
+- feat: allow to save cluster + token to kubeconf (#23649) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/223
+- added tests asserting results of RemoteIDEServer#waitServerReady/Terminated by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/241
+
+### 🐛 Bug Fixes
+
+- fix: display icon when workspace is stopping, terminating (#23681) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/233
+- fix: don't throw if selected index is out of bounds (#23678) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/237
+- fix: Gateway: Make it possible to restart WS when it cannot be created and launched in a reasonable time by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/219
+- fix: Remove duplicating function doWaitServerProjectExists by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/240
+- fix: Gateway: Plugin Verifier failures on every new IDE version appearance by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/252
+- fix: return current context for a given list of kube configs (#23712) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/243
+- fix: allow updating kube config file without contexts, clusters, users (#23714) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/244
+- fix: manually merge configs to avoid parsing error (#23731) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/251
+- fix: Gateway: IllegalStateException happens when getting the list of … by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/250
+- fix: Add tests execution reporting by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/253
+
+### ⬆️ Dependency Updates
+
+- build(deps): bump org.jetbrains.kotlinx.kover from 0.9.3 to 0.9.4 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/230
+- build(deps): bump actions/cache from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/235
+- build(deps): bump org.jetbrains.qodana from 2025.2.3 to 2025.2.4 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/232
+- build(deps): bump actions/upload-artifact from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/234
+- build(deps): bump io.mockk:mockk from 1.14.6 to 1.14.7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/229
+- build(deps): Bump junit-jupiter from 6.0.1 to 6.0.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/242
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.20.1 to 2.21.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/245
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.20.1 to 2.21.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/246
+- build(deps): Bump org.jetbrains.intellij.platform from 2.10.5 to 2.11.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/249
+- build(deps): Bump gradle-wrapper from 9.2.0 to 9.3.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/248
+- build(deps): Bump mockk from 1.14.7 to 1.14.9 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/254
+- build(deps): Bump org.assertj:assertj-core from 3.27.6 to 3.27.7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/255
+- build(deps): Bump org.jetbrains.kotlinx.kover from 0.9.4 to 0.9.5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/256
+- build(deps): Bump JetBrains/qodana-action from 2025.2 to 2025.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/238
+- build(deps): Bump org.jetbrains.qodana from 2025.2.4 to 2025.3.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/239
+
 ## [0.0.14] - 2025-12-11
 
 ### ✨ New Features and Enhancements
@@ -176,7 +217,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.14...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.15...HEAD
+[0.0.15]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.14...v0.0.15
 [0.0.14]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...v0.0.12
