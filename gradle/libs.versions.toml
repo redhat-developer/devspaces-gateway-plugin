@@ -1,14 +1,14 @@
 [versions]
 # libraries
 assertj = "3.27.7"
-junit-jupiter = "6.0.2"
+junit-jupiter = "6.0.3"
 mockk = "1.14.9"
 
 # plugins
 changelog = "2.5.0"
 intelliJPlatform = "2.11.0"
 kotlin = "2.3.10"
-kover = "0.9.5"
+kover = "0.9.7"
 qodana = "2025.3.1"
 
 [libraries]
