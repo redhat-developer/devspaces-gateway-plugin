@@ -64,8 +64,8 @@ object SslContextFactory {
         return TlsContext(sslContext, trustManager)
     }
 
-    fun captureOnly(): TlsContext {
-        val capturingTrustManager = CapturingTrustManager()
+    fun captureOnly(failIfUntrusted: Boolean = true): TlsContext {
+        val capturingTrustManager = CapturingTrustManager(failIfUntrusted)
 
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(

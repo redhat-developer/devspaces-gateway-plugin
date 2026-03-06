@@ -191,7 +191,7 @@ class DevSpacesServerStepView(
             text = ""
             foreground = JBColor.BLUE
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            isVisible = false 
+            isVisible = false
             font = font.deriveFont(Font.ITALIC or Font.PLAIN)
         }
 

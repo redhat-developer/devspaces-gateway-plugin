@@ -31,28 +31,23 @@ class DefaultTlsTrustManager(
 
         val serverUri = URI(serverUrl)
 
-        // 1️⃣ Locate kubeconfig cluster
         val namedCluster =
             KubeConfigTlsUtils.findClusterByServer(
                 serverUrl,
                 kubeConfigProvider()
             )
 
-        // 2️⃣ insecure-skip-tls-verify
         if (namedCluster?.cluster?.insecureSkipTlsVerify == true) {
             return SslContextFactory.insecure()
         }
 
-        // 3️⃣ Load all trusted certs (kubeconfig + session + persistent)
         val trustedCerts = mutableListOf<X509Certificate>()
-
         namedCluster?.let {
             trustedCerts += KubeConfigTlsUtils.extractCaCertificates(it)
         }
 
         trustedCerts += sessionTrustStore.get(serverUrl)
 
-        // load persistent keystore cert for this host only
         val keyStore = persistentKeyStore.loadOrCreate()
         val persistentAlias = "host:${serverUri.host}"
 
@@ -61,7 +56,6 @@ class DefaultTlsTrustManager(
             trustedCerts += persistentCert
         }
 
-        // 4️⃣ If we have trusted certs — try normal handshake first
         if (trustedCerts.isNotEmpty()) {
             try {
                 val tlsContext = SslContextFactory.fromTrustedCerts(trustedCerts)
@@ -72,14 +66,12 @@ class DefaultTlsTrustManager(
             }
         }
 
-        // 5️⃣ Capture server certificate chain
         val captureContext = SslContextFactory.captureOnly()
 
         try {
             TlsProbe.connect(serverUri, captureContext.sslContext)
             return captureContext // should not normally succeed
         } catch (e: SSLHandshakeException) {
-
             val chain = (captureContext.trustManager as? CapturingTrustManager)
                 ?.serverCertificateChain
                 ?.toList()
@@ -100,30 +92,22 @@ class DefaultTlsTrustManager(
                 problem = problem
             )
 
-            // 6️⃣ Ask UI layer
             val decision = decisionHandler(info)
-
             if (!decision.trusted) {
                 throw TlsTrustRejectedException()
             }
 
-            // 7️⃣ Persist based on scope
             when (decision.scope) {
                 TlsTrustScope.SESSION_ONLY -> {
                     sessionTrustStore.put(serverUrl, listOf(trustAnchor))
                 }
 
                 TlsTrustScope.PERMANENT -> {
-
-                    // session
                     sessionTrustStore.put(serverUrl, listOf(trustAnchor))
 
-                    // kubeconfig
                     if (namedCluster != null) {
                         kubeConfigWriter(namedCluster, listOf(trustAnchor))
                     }
-
-                    // persistent keystore (host-scoped)
                     KeyStoreUtils.addCertificate(
                         keyStore,
                         persistentAlias,
@@ -135,7 +119,6 @@ class DefaultTlsTrustManager(
                 null -> error("Trusted decision without scope")
             }
 
-            // 8️⃣ Return final trusted SSLContext
             val finalCerts = (trustedCerts + trustAnchor)
                 .distinctBy { it.serialNumber }
 

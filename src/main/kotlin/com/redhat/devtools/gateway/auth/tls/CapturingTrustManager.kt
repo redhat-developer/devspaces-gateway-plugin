@@ -12,9 +12,12 @@
 package com.redhat.devtools.gateway.auth.tls
 
 import java.security.cert.X509Certificate
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.X509TrustManager
 
-class CapturingTrustManager : X509TrustManager {
+class CapturingTrustManager(
+    private val failIfUntrusted: Boolean = false
+) : X509TrustManager {
 
     @Volatile
     var serverCertificateChain: Array<X509Certificate>? = null
@@ -22,6 +25,9 @@ class CapturingTrustManager : X509TrustManager {
 
     override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
         serverCertificateChain = chain
+        if (failIfUntrusted) {
+            throw SSLHandshakeException("Forced handshake failure for certificate testing")
+        }
     }
 
     override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
