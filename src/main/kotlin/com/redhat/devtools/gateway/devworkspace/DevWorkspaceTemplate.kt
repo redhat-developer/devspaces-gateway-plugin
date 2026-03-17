@@ -9,8 +9,9 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.devworkspace
 
+import com.redhat.devtools.gateway.openshift.Utils
 import java.util.Collections
 
 data class DevWorkspaceTemplate (

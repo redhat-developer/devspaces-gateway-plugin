@@ -11,10 +11,10 @@
  */
 package com.redhat.devtools.gateway
 
-import com.redhat.devtools.gateway.openshift.DevWorkspace
+import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import io.kubernetes.client.openapi.ApiClient
 
-class DevSpacesContext {
+class DevSpacesContext() {
     lateinit var client: ApiClient
     lateinit var devWorkspace: DevWorkspace
     var activeWorkspaces = mutableSetOf<DevWorkspace>()

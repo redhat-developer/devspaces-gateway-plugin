@@ -11,17 +11,24 @@
  */
 package com.redhat.devtools.gateway
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
-import com.redhat.devtools.gateway.openshift.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.Pods
+import com.redhat.devtools.gateway.devworkspace.DevWorkspacePatch
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
+import com.redhat.devtools.gateway.devworkspace.RestartDevWorkspaceAnnotationWatch
+import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.ui.Dialogs
+import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.*
 import java.io.Closeable
 import java.io.IOException
@@ -33,7 +40,6 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
-    @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
     fun connect(
         onConnected: () -> Unit,
@@ -116,7 +122,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
                 message = "Waiting for the workspace IDE client to start..."))
 
-            val pods = Pods(devSpacesContext.client)
+            val pods = DevWorkspacePods(devSpacesContext.client)
             val localPort = findFreePort()
             forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
             pods.waitForForwardReady(localPort)
@@ -162,12 +168,45 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 "Could not connect, workspace IDE is not ready."
             }
 
+            // Watch for restart annotation on the DevWorkspace
+            watchRestartAnnotation(
+                workspace.namespace,
+                workspace.name,
+                devSpacesContext.client,
+                client
+            )
+
             onConnected()
             client
         } catch (e: Exception) {
             runCatching { client?.close() }
             onClientClosed(client, onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
             throw e
+        }
+    }
+
+    @Suppress("UnstableApiUsage")
+    private fun watchRestartAnnotation(namespace: String, workspaceName: String, kubeClient: ApiClient, thinClient: ThinClientHandle) {
+        val restartWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        RestartDevWorkspaceAnnotationWatch(
+            onRestartAnnotated(namespace, workspaceName, thinClient),
+            kubeClient,
+            namespace,
+            workspaceName
+        ).start(restartWatchScope)
+
+        thinClient.lifetime.onTermination {
+            restartWatchScope.cancel()
+        }
+    }
+
+    @Suppress("UnstableApiUsage")
+    private fun onRestartAnnotated(namespace: String, workspaceName: String, thinClient: ThinClientHandle): () -> Job {
+        return {
+            CoroutineScope(Dispatchers.IO).launch {
+                val restartHandler = DevWorkspaceRestart(namespace, workspaceName, devSpacesContext.client)
+                restartHandler.execute(thinClient)
+            }
         }
     }
 
@@ -181,14 +220,29 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     ) {
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { client?.close() }
-            val currentWorkspace = devSpacesContext.devWorkspace
+            val workspace = devSpacesContext.devWorkspace
+            val workspacePatch = DevWorkspacePatch(
+                workspace.namespace,
+                workspace.name,
+                devSpacesContext.client,
+                {
+                    DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
+                }
+            )
             try {
-                if (true == remoteIdeServer?.waitServerTerminated()) {
+                if (workspacePatch.hasRestartAnnotation()) {
+                    /**
+                     * user triggered restart
+                     * logic to restart workspace is in [onRestartAnnotated]
+                     * The annotation will be cleaned up by DevWorkspaceRestart
+                     */
+                    closeAllProjects()
+                } else if (true == remoteIdeServer?.waitServerTerminated()) {
+                    /**
+                     * user closed IDE and clicked "Close and Stop"
+                     */
                     DevWorkspaces(devSpacesContext.client)
-                        .stop(
-                            devSpacesContext.devWorkspace.namespace,
-                            devSpacesContext.devWorkspace.name
-                        )
+                        .stop(workspace.namespace, workspace.name)
                         .also { onDevWorkspaceStopped() }
                 }
             } finally {
@@ -197,10 +251,24 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 }.onFailure { e ->
                     thisLogger().debug("Failed to close port forwarder", e)
                 }
-                devSpacesContext.removeWorkspace(currentWorkspace)
+                devSpacesContext.removeWorkspace(workspace)
                 runCatching { onDisconnected() }
             }
         }
+    }
+
+    private fun closeAllProjects() {
+        ApplicationManager.getApplication().invokeLater(
+            {
+                val pm = ProjectManagerEx.getInstanceEx()
+                for (project in pm.openProjects.toList()) {
+                    if (!project.isDisposed) {
+                        pm.closeAndDispose(project)
+                    }
+                }
+            },
+            ModalityState.nonModal()
+        )
     }
 
     private fun findFreePort(): Int {

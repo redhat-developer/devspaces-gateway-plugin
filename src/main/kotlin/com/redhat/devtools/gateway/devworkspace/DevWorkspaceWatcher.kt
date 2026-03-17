@@ -9,9 +9,11 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.application.EDT
+import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.*

@@ -14,7 +14,7 @@ package com.redhat.devtools.gateway.server
 import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.openshift.Pods
+import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
@@ -47,7 +47,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     suspend fun getStatus(checkCancelled: (() -> Unit)? = null): RemoteIDEServerStatus =
         withContext(Dispatchers.IO) {
             checkCancelled?.invoke()
-            val output = Pods(devSpacesContext.client).exec(
+            val output = DevWorkspacePods(devSpacesContext.client).exec(
                 pod = pod,
                 container = container.name,
                 command = arrayOf(
@@ -138,7 +138,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     private fun findPod(): V1Pod {
         val selector = "controller.devfile.io/devworkspace_name=${devSpacesContext.devWorkspace.name}"
 
-        return Pods(devSpacesContext.client)
+        return DevWorkspacePods(devSpacesContext.client)
             .findFirst(
                 devSpacesContext.devWorkspace.namespace,
                 selector

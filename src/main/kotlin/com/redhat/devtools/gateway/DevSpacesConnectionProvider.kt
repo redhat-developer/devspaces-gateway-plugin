@@ -21,7 +21,7 @@ import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.openshift.DevWorkspaces
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isUnauthorized
@@ -190,7 +190,6 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             thisLogger().error("Query parameter \"$DW_NAME\" is missing")
             throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
         }
-
         val ctx = DevSpacesContext()
 
         indicator.update(message = "Initializing Kubernetes connection…")

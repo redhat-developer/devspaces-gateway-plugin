@@ -31,7 +31,12 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.DevSpacesIcons
-import com.redhat.devtools.gateway.openshift.*
+import com.redhat.devtools.gateway.devworkspace.DevWorkspace
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListener
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceWatchManager
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
+import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.isCancellationException
@@ -519,7 +524,7 @@ class DevSpacesWorkspacesStepView(
                 devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
             },
             createFilter = { ns ->
-                devWorkspaces.createFilter(ns)
+                devWorkspaces.createIdeaEditorFilter(ns)
             },
             listener = object : DevWorkspaceListener {
                 override fun onAdded(dw: DevWorkspace) {
