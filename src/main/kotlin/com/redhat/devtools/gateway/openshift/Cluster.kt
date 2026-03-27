@@ -11,23 +11,24 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toName
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toUriWithHost
 
 data class Cluster(
     val name: String,
     val url: String,
-    val certificateAuthorityData: String? = null,
+    val certificateAuthority: CertificateSource? = null,
     val token: String? = null,
-    val clientCertData: String? = null,
-    val clientKeyData: String? = null
+    val clientCert: CertificateSource? = null,
+    val clientKey: CertificateSource? = null
 ) {
     init {
-        require(!(token != null && clientCertData != null)) {
+        require(!(token != null && clientCert != null)) {
             "Cluster cannot have both token and client certificate authentication"
         }
 
-        require((clientCertData == null) == (clientKeyData == null)) {
+        require((clientCert == null) == (clientKey == null)) {
             "Client certificate and key must both be provided or both be null"
         }
     }

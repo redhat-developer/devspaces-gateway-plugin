@@ -9,6 +9,8 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
+package com.redhat.devtools.gateway.kubeconfig
+
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor

@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.kubeconfig
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.EnvironmentUtil
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.openshift.Cluster
 import io.kubernetes.client.util.KubeConfig
 import java.io.File
@@ -44,10 +45,10 @@ object KubeConfigUtils {
                 kubeConfig.clusters?.mapNotNull { cluster ->
                     val namedCluster = KubeConfigNamedCluster.fromMap(cluster as Map<*, *>) ?: return@mapNotNull null
                     val token = KubeConfigNamedUser.getUserTokenForCluster(namedCluster.name, kubeConfig)
-                    val clientCert:Pair<String?, String?>? = KubeConfigNamedUser.getUserClientCertForCluster(namedCluster.name, kubeConfig)
-                    val clientCertData = clientCert?.first
-                    val clientKeyData = clientCert?.second
-                    val cluster = toCluster(namedCluster, token, clientCertData, clientKeyData)
+                    val clientCert = KubeConfigNamedUser.getUserClientCertForCluster(namedCluster.name, kubeConfig)
+                    val clientCertSource = clientCert?.first
+                    val clientKeySource = clientCert?.second
+                    val cluster = toCluster(namedCluster, token, clientCertSource, clientKeySource)
                     logger.debug("Parsed cluster: ${cluster.name} at ${cluster.url}")
                     cluster
                 } ?: emptyList()
@@ -84,14 +85,19 @@ object KubeConfigUtils {
             }
     }
 
-    private fun toCluster(clusterEntry: KubeConfigNamedCluster, userToken: String?,
-                          clientCertData: String?, clientKeyData: String? ): Cluster {
+    private fun toCluster(
+        clusterEntry: KubeConfigNamedCluster,
+        userToken: String?,
+        clientCertSource: CertificateSource?,
+        clientKeySource: CertificateSource?
+    ): Cluster {
         return Cluster(
             url = clusterEntry.cluster.server,
             name = clusterEntry.name,
+            certificateAuthority = clusterEntry.cluster.certificateAuthority,
             token = userToken,
-            clientCertData = clientCertData,
-            clientKeyData = clientKeyData
+            clientCert = clientCertSource,
+            clientKey = clientKeySource
         )
     }
 

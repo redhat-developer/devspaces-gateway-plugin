@@ -19,6 +19,8 @@ class DevSpacesContext() {
     lateinit var devWorkspace: DevWorkspace
     var activeWorkspaces = mutableSetOf<DevWorkspace>()
 
+    fun isClientInitialized(): Boolean = ::client.isInitialized
+
     fun addWorkspace(workspace: DevWorkspace) {
         synchronized(activeWorkspaces) {
             if (activeWorkspaces.contains(workspace)) {

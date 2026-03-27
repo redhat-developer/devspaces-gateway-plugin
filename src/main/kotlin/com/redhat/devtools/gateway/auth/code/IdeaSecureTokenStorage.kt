@@ -16,6 +16,7 @@ package com.redhat.devtools.gateway.auth.code
 import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.Credentials
 import com.intellij.ide.passwordSafe.PasswordSafe
+import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -33,15 +34,18 @@ class IdeaSecureTokenStorage : SecureTokenStorage {
     override suspend fun saveToken(token: TokenModel) {
         val serialized = json.encodeToString(token)
 
-        PasswordSafe.instance.set(
-            attributes,
-            Credentials("sso", serialized)
-        )
+        withContext(Dispatchers.IO) {
+            PasswordSafe.instance.set(
+                attributes,
+                Credentials("sso", serialized)
+            )
+        }
     }
 
     override suspend fun loadToken(): TokenModel? {
-        val credentials = PasswordSafe.instance.get(attributes)
-            ?: return null
+        val credentials = withContext(Dispatchers.IO) {
+            PasswordSafe.instance.get(attributes)
+        } ?: return null
 
         val raw = credentials.password?.toString()
             ?: return null
@@ -52,6 +56,8 @@ class IdeaSecureTokenStorage : SecureTokenStorage {
     }
 
     override suspend fun clearToken() {
-        PasswordSafe.instance.set(attributes, null)
+        withContext(Dispatchers.IO) {
+            PasswordSafe.instance.set(attributes, null)
+        }
     }
 }

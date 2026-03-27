@@ -11,6 +11,8 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
+import com.redhat.devtools.gateway.auth.tls.PemUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.sanitizeName
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.urlToName
 import io.kubernetes.client.util.KubeConfig
@@ -52,15 +54,24 @@ data class KubeConfigNamedCluster(
 
 data class KubeConfigCluster(
     val server: String,
-    val certificateAuthorityData: String? = null,
+    val certificateAuthority: CertificateSource? = null,
     val insecureSkipTlsVerify: Boolean? = null
 ) {
     companion object {
         fun fromMap(map: Map<*, *>): KubeConfigCluster? {
             val server = map["server"] as? String ?: return null
+
+            val caSource = when {
+                map["certificate-authority-data"] is String ->
+                    CertificateSource.fromData(map["certificate-authority-data"] as String)
+                map["certificate-authority"] is String ->
+                    CertificateSource.fromPath(map["certificate-authority"] as String)
+                else -> null
+            }
+
             return KubeConfigCluster(
                 server = server,
-                certificateAuthorityData = map["certificate-authority-data"] as? String,
+                certificateAuthority = caSource,
                 insecureSkipTlsVerify = map["insecure-skip-tls-verify"] as? Boolean
             )
         }
@@ -69,7 +80,15 @@ data class KubeConfigCluster(
     fun toMap(): MutableMap<String, Any> {
         val map = mutableMapOf<String, Any>()
         map["server"] = server
-        certificateAuthorityData?.let { map["certificate-authority-data"] = it }
+
+        certificateAuthority?.let { ca ->
+            if (ca.isFilePath) {
+                map["certificate-authority"] = ca.value
+            } else {
+                map["certificate-authority-data"] = PemUtils.toBase64(ca.value)
+            }
+        }
+
         insecureSkipTlsVerify?.let { map["insecure-skip-tls-verify"] = it }
         return map
     }
@@ -201,7 +220,7 @@ data class KubeConfigNamedUser(
             return fromMap(userObject)?.user?.token
         }
 
-        fun getUserClientCertForCluster(clusterName: String, kubeConfig: KubeConfig): Pair<String?, String?>? {
+        fun getUserClientCertForCluster(clusterName: String, kubeConfig: KubeConfig): Pair<CertificateSource?, CertificateSource?>? {
             val contextEntry = KubeConfigNamedContext.getByName(clusterName, kubeConfig) ?: return null
             val userObject = (kubeConfig.users as? List<*>)?.firstOrNull { userObject ->
                 val userMap = userObject as? Map<*, *> ?: return@firstOrNull false
@@ -209,7 +228,7 @@ data class KubeConfigNamedUser(
                 userName == contextEntry.context.user
             } as? Map<*,*> ?: return null
             val user = fromMap(userObject)?.user
-            return Pair<String?, String?>(user?.clientCertificateData, user?.clientKeyData)
+            return Pair(user?.clientCertificate, user?.clientKey)
         }
 
         fun isTokenAuth(kubeConfig: KubeConfig): Boolean {
@@ -227,17 +246,33 @@ data class KubeConfigNamedUser(
 
 data class KubeConfigUser(
     var token: String? = null,
-    val clientCertificateData: String? = null,
-    val clientKeyData: String? = null,
+    val clientCertificate: CertificateSource? = null,
+    val clientKey: CertificateSource? = null,
     val username: String? = null,
     val password: String? = null
 ) {
     companion object {
         fun fromMap(map: Map<*, *>): KubeConfigUser {
+            val certSource = when {
+                map["client-certificate-data"] is String ->
+                    CertificateSource.fromData(map["client-certificate-data"] as String)
+                map["client-certificate"] is String ->
+                    CertificateSource.fromPath(map["client-certificate"] as String)
+                else -> null
+            }
+
+            val keySource = when {
+                map["client-key-data"] is String ->
+                    CertificateSource.fromData(map["client-key-data"] as String)
+                map["client-key"] is String ->
+                    CertificateSource.fromPath(map["client-key"] as String)
+                else -> null
+            }
+
             return KubeConfigUser(
                 token = map["token"] as? String,
-                clientCertificateData = map["client-certificate-data"] as? String,
-                clientKeyData = map["client-key-data"] as? String,
+                clientCertificate = certSource,
+                clientKey = keySource,
                 username = map["username"] as? String,
                 password = map["password"] as? String
             )
@@ -247,13 +282,27 @@ data class KubeConfigUser(
     fun toMap(): MutableMap<String, Any> {
         val map = mutableMapOf<String, Any>()
         token?.let { map["token"] = it }
-        clientCertificateData?.let { map["client-certificate-data"] = it }
-        clientKeyData?.let { map["client-key-data"] = it }
+
+        clientCertificate?.let { cert ->
+            if (cert.isFilePath) {
+                map["client-certificate"] = cert.value
+            } else {
+                map["client-certificate-data"] = PemUtils.toBase64(cert.value)
+            }
+        }
+
+        clientKey?.let { key ->
+            if (key.isFilePath) {
+                map["client-key"] = key.value
+            } else {
+                map["client-key-data"] = PemUtils.toBase64(key.value)
+            }
+        }
+
         username?.let { map["username"] = it }
         password?.let { map["password"] = it }
         return map
     }
 }
-
 
 
