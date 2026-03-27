@@ -21,6 +21,7 @@ import io.kubernetes.client.openapi.models.V1Secret
 import io.kubernetes.client.openapi.models.V1ServiceAccount
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.credentials.AccessTokenAuthentication
+import kotlinx.coroutines.*
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -30,7 +31,7 @@ class SandboxClusterAuthProvider(
         SandboxDefaults.SANDBOX_API_TIMEOUT_MS
     )
 ) {
-    fun authenticate(ssoToken: SSOToken): TokenModel {
+    suspend fun authenticate(ssoToken: SSOToken): TokenModel {
         val signup = sandboxApi.getSignUpStatus(ssoToken.idToken)
             ?: error("Sandbox not available")
 
@@ -61,24 +62,24 @@ class SandboxClusterAuthProvider(
         )
     }
 
-    private fun ensurePipelineServiceAccount(api: CoreV1Api, namespace: String): V1ServiceAccount {
+    private suspend fun ensurePipelineServiceAccount(api: CoreV1Api, namespace: String): V1ServiceAccount = withContext(Dispatchers.IO) {
         val saList = api.listNamespacedServiceAccount(namespace).execute()
             ?: error("Failed to list ServiceAccounts")
 
-        return saList.items.firstOrNull { it.metadata?.name == "pipeline" }
+        saList.items.firstOrNull { it.metadata?.name == "pipeline" }
             ?: api.createNamespacedServiceAccount(
                 namespace,
                 V1ServiceAccount().metadata(V1ObjectMeta().name("pipeline"))
             ).execute() ?: error("Failed to create pipeline ServiceAccount")
     }
 
-    private fun ensurePipelineTokenSecret(api: CoreV1Api, namespace: String, sa: V1ServiceAccount): V1Secret {
+    private suspend fun ensurePipelineTokenSecret(api: CoreV1Api, namespace: String, sa: V1ServiceAccount): V1Secret = withContext(Dispatchers.IO) {
         val secretName = "pipeline-secret-${sa.metadata?.name}"
         val secretList = api.listNamespacedSecret(namespace).execute()
             ?: error("Failed to list Secrets")
 
         secretList.items.firstOrNull { it.metadata?.name == secretName && it.data?.containsKey("token") == true }
-            ?.let { return it }
+            ?.let { return@withContext it }
 
         val secret = V1Secret().metadata(
             V1ObjectMeta()
@@ -91,8 +92,8 @@ class SandboxClusterAuthProvider(
 
         repeat(30) {
             val s = api.readNamespacedSecret(secretName, namespace).execute()
-            if (s.data?.containsKey("token") == true) return s
-            Thread.sleep(1000)
+            if (s.data?.containsKey("token") == true) return@withContext s
+            delay(1000)
         }
 
         error("Pipeline token secret not populated")

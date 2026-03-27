@@ -13,13 +13,14 @@ package com.redhat.devtools.gateway.auth.tls
 
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
 import io.kubernetes.client.util.KubeConfig
+import kotlinx.coroutines.*
 import java.net.URI
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLHandshakeException
 
 class DefaultTlsTrustManager(
-    private val kubeConfigProvider: () -> List<KubeConfig>,
-    private val kubeConfigWriter: (KubeConfigNamedCluster, List<X509Certificate>) -> Unit,
+    private val kubeConfigProvider: suspend () -> List<KubeConfig>,
+    private val kubeConfigWriter: suspend (KubeConfigNamedCluster, List<X509Certificate>) -> Unit,
     private val sessionTrustStore: SessionTlsTrustStore,
     private val persistentKeyStore: PersistentKeyStore
 ) : TlsTrustManager {
@@ -59,7 +60,9 @@ class DefaultTlsTrustManager(
         if (trustedCerts.isNotEmpty()) {
             try {
                 val tlsContext = SslContextFactory.fromTrustedCerts(trustedCerts)
-                TlsProbe.connect(serverUri, tlsContext.sslContext)
+                withContext(Dispatchers.IO) {
+                    TlsProbe.connect(serverUri, tlsContext.sslContext)
+                }
                 return tlsContext
             } catch (e: SSLHandshakeException) {
                 // Certificate changed or invalid → continue to capture
@@ -69,7 +72,9 @@ class DefaultTlsTrustManager(
         val captureContext = SslContextFactory.captureOnly()
 
         try {
-            TlsProbe.connect(serverUri, captureContext.sslContext)
+            withContext(Dispatchers.IO) {
+                TlsProbe.connect(serverUri, captureContext.sslContext)
+            }
             return captureContext // should not normally succeed
         } catch (e: SSLHandshakeException) {
             val chain = (captureContext.trustManager as? CapturingTrustManager)

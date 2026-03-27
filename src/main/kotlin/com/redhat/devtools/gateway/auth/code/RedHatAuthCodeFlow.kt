@@ -22,6 +22,7 @@ import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.AuthenticationRequest
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
+import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -106,7 +107,7 @@ class RedHatAuthCodeFlow(
             .POST(HttpRequest.BodyPublishers.ofString(form))
             .build()
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
         if (response.statusCode() !in 200..299) {
             error("Token request failed: ${response.statusCode()}\n${response.body()}")
         }

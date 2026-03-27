@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.sandbox
 
+import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.http.HttpClient
@@ -31,17 +32,17 @@ class SandboxApi(
         ignoreUnknownKeys = true
     }
 
-    fun getSignUpStatus(ssoToken: String): SandboxSignupResponse? {
+    suspend fun getSignUpStatus(ssoToken: String): SandboxSignupResponse? {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("$baseUrl/api/v1/signup"))
             .header("Authorization", "Bearer $ssoToken")
             .GET()
             .build()
 
-        val response = httpClient.send(
+        val response = httpClient.sendAsync(
             request,
             HttpResponse.BodyHandlers.ofString()
-        )
+        ).await()
 
         if (response.statusCode() != 200) {
             return null
@@ -50,17 +51,17 @@ class SandboxApi(
         return json.decodeFromString(response.body())
     }
 
-    fun signUp(ssoToken: String): Boolean {
+    suspend fun signUp(ssoToken: String): Boolean {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("$baseUrl/api/v1/signup"))
             .header("Authorization", "Bearer $ssoToken")
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        val response = httpClient.send(
+        val response = httpClient.sendAsync(
             request,
             HttpResponse.BodyHandlers.discarding()
-        )
+        ).await()
 
         return response.statusCode() in 200..299
     }

@@ -18,6 +18,8 @@ import com.nimbusds.oauth2.sdk.id.State
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
+import kotlinx.coroutines.*
+import kotlinx.coroutines.future.await
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -86,7 +88,7 @@ class OpenShiftAuthCodeFlow(
             .GET()
             .build()
 
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
         if (response.statusCode() !in 200..299) {
             error("OAuth discovery failed: ${response.statusCode()}\n${response.body()}")
         }
@@ -155,7 +157,7 @@ class OpenShiftAuthCodeFlow(
             .POST(HttpRequest.BodyPublishers.ofString(form))
             .build()
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
         if (response.statusCode() !in 200..299) {
             error("Token request failed: ${response.statusCode()}\n${response.body()}")
         }
@@ -208,7 +210,7 @@ class OpenShiftAuthCodeFlow(
             .GET()
             .build()
 
-        var response = httpClient.send(request, HttpResponse.BodyHandlers.discarding())
+        var response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()).await()
 
         // Retry with Basic auth
         if (response.statusCode() == 401) {
@@ -219,7 +221,7 @@ class OpenShiftAuthCodeFlow(
                 .GET()
                 .build()
 
-            response = httpClient.send(request, HttpResponse.BodyHandlers.discarding())
+            response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()).await()
         }
 
         if (response.statusCode() !in listOf(302, 303)) {
@@ -269,7 +271,7 @@ class OpenShiftAuthCodeFlow(
             .POST(HttpRequest.BodyPublishers.ofString(form))
             .build()
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
         if (response.statusCode() != 200) {
             error("Token exchange failed: ${response.statusCode()} ${response.body()}")
         }

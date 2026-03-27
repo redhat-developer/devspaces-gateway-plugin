@@ -15,6 +15,7 @@ import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.Credentials
 import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
+import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -35,17 +36,23 @@ class JBPasswordSafeTokenStorage : SecureTokenStorage {
             json
         )
 
-        PasswordSafe.instance.set(attributes, credentials)
+        withContext(Dispatchers.IO) {
+            PasswordSafe.instance.set(attributes, credentials)
+        }
     }
 
     override suspend fun loadToken(): TokenModel? {
-        val credentials = PasswordSafe.instance.get(attributes) ?: return null
+        val credentials = withContext(Dispatchers.IO) {
+            PasswordSafe.instance.get(attributes)
+        } ?: return null
         val json = credentials.getPasswordAsString() ?: return null
         return Json.decodeFromString(json)
     }
 
     override suspend fun clearToken() {
-        PasswordSafe.instance.set(attributes, null)
+        withContext(Dispatchers.IO) {
+            PasswordSafe.instance.set(attributes, null)
+        }
     }
 }
 

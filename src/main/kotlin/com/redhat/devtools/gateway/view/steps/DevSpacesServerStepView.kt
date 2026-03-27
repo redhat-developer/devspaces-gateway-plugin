@@ -519,9 +519,11 @@ class DevSpacesServerStepView(
     private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = { updatedClusters ->
         this.allClusters = updatedClusters
         if (updatedClusters.isNotEmpty()) {
+            val kubeConfigCurrentCluster = withContext(Dispatchers.IO) {
+                KubeConfigUtils.getCurrentClusterName()
+            }
             ApplicationManager.getApplication().invokeLater(
                 {
-                    val kubeConfigCurrentCluster = KubeConfigUtils.getCurrentClusterName()
                     val previouslySelected = tfServer.selectedItem as? Cluster?
                     setClusters(updatedClusters)
                     setSelectedCluster(
@@ -794,12 +796,16 @@ class DevSpacesServerStepView(
 
     private val tlsTrustManager = DefaultTlsTrustManager(
         kubeConfigProvider = {
-            KubeConfigUtils.getAllConfigs(
-                KubeConfigUtils.getAllConfigFiles()
-            )
+            withContext(Dispatchers.IO) {
+                KubeConfigUtils.getAllConfigs(
+                    KubeConfigUtils.getAllConfigFiles()
+                )
+            }
         },
         kubeConfigWriter = { namedCluster, certs ->
-            KubeConfigTlsWriter.write(namedCluster, certs)
+            withContext(Dispatchers.IO) {
+                KubeConfigTlsWriter.write(namedCluster, certs)
+            }
         },
         sessionTrustStore = sessionTrustStore,
         persistentKeyStore = persistentKeyStore
