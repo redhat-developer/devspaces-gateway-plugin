@@ -22,6 +22,7 @@ import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.AuthenticationRequest
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
+import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -42,18 +43,19 @@ import javax.net.ssl.SSLContext
 class RedHatAuthCodeFlow(
     private val clientId: String,
     private val redirectUri: URI,
-    private val providerMetadata: OIDCProviderMetadata,
-    private val sslContext: SSLContext
+    private val providerMetadata: OIDCProviderMetadata
 ) : AuthCodeFlow {
 
     private lateinit var codeVerifier: CodeVerifier
     private lateinit var nonce: Nonce
     private lateinit var state: State
 
-    private val httpClient = HttpClient.newBuilder()
-        .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build()
+    private val httpClient by lazy {
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build()
+    }
 
     override suspend fun startAuthFlow(): AuthCodeRequest {
         codeVerifier = CodeVerifier()
@@ -82,11 +84,6 @@ class RedHatAuthCodeFlow(
     override suspend fun handleCallback(parameters: Parameters): SSOToken {
         val code = parameters["code"] ?: error("Missing 'code' parameter in callback")
 
-        fun encodeForm(vararg pairs: Pair<String, String>): String =
-            pairs.joinToString("&") { (k, v) ->
-                "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
-            }
-
         val form = encodeForm(
             "grant_type" to "authorization_code",
             "client_id" to clientId,
@@ -106,33 +103,28 @@ class RedHatAuthCodeFlow(
             .POST(HttpRequest.BodyPublishers.ofString(form))
             .build()
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendAsync(
+            request,
+            HttpResponse.BodyHandlers.ofString()
+        ).await()
+
         if (response.statusCode() !in 200..299) {
             error("Token request failed: ${response.statusCode()}\n${response.body()}")
         }
 
+        return createSSOToken(response.body())
+    }
+
+    private fun createSSOToken(response: String): SSOToken {
         val json = Json { ignoreUnknownKeys = true }
-        val body = json.parseToJsonElement(response.body()).jsonObject
+        val body = json.parseToJsonElement(response).jsonObject
 
         val accessToken = body["access_token"]?.jsonPrimitive?.content
             ?: error("Missing access_token in token response")
 
         val idToken = body["id_token"]?.jsonPrimitive?.content.orEmpty()
         val expiresInSeconds = body["expires_in"]?.jsonPrimitive?.longOrNull ?: 3600
-        val accountLabel = if (idToken.isNotBlank()) {
-            try {
-                val jwt = JWTParser.parse(idToken) as SignedJWT
-                val claims = jwt.jwtClaimsSet
-
-                claims.getStringClaim("preferred_username")
-                    ?: claims.getStringClaim("email")
-                    ?: "unknown-user"
-            } catch (e: Exception) {
-                "unknown-user"
-            }
-        } else {
-            "unknown-user"
-        }
+        val accountLabel = createAccountLabel(idToken)
 
         return SSOToken(
             accessToken = accessToken,
@@ -145,7 +137,28 @@ class RedHatAuthCodeFlow(
     override suspend fun login(parameters: Parameters): SSOToken =
         error(
             "Direct login is not supported for Red Hat SSO authentication. " +
-            "This flow requires browser-based authentication via startAuthFlow(), " +
-            "followed by token exchange with the Sandbox API."
+                    "This flow requires browser-based authentication via startAuthFlow(), " +
+                    "followed by token exchange with the Sandbox API."
         )
+
+    private fun createAccountLabel(idToken: String): String = if (idToken.isNotBlank()) {
+        try {
+            val jwt = JWTParser.parse(idToken) as SignedJWT
+            val claims = jwt.jwtClaimsSet
+
+            claims.getStringClaim("preferred_username")
+                ?: claims.getStringClaim("email")
+                ?: "unknown-user"
+        } catch (e: Exception) {
+            "unknown-user"
+        }
+    } else {
+        "unknown-user"
+    }
+
+    private fun encodeForm(vararg pairs: Pair<String, String>): String =
+        pairs.joinToString("&") { (k, v) ->
+            "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
+        }
+
 }

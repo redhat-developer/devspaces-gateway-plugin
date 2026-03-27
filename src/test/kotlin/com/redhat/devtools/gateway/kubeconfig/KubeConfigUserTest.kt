@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
@@ -28,8 +29,8 @@ class KubeConfigUserTest {
 
         // then
         assertThat(user.token).isEqualTo("my-secret-token")
-        assertThat(user.clientCertificateData).isNull()
-        assertThat(user.clientKeyData).isNull()
+        assertThat(user.clientCertificate).isNull()
+        assertThat(user.clientKey).isNull()
         assertThat(user.username).isNull()
         assertThat(user.password).isNull()
     }
@@ -50,8 +51,10 @@ class KubeConfigUserTest {
 
         // then
         assertThat(user.token).isEqualTo("my-secret-token")
-        assertThat(user.clientCertificateData).isEqualTo("cert-data")
-        assertThat(user.clientKeyData).isEqualTo("key-data")
+        assertThat(user.clientCertificate?.value).isEqualTo("cert-data")
+        assertThat(user.clientCertificate?.isFilePath).isFalse()
+        assertThat(user.clientKey?.value).isEqualTo("key-data")
+        assertThat(user.clientKey?.isFilePath).isFalse()
         assertThat(user.username).isEqualTo("admin")
         assertThat(user.password).isEqualTo("secret")
     }
@@ -59,14 +62,14 @@ class KubeConfigUserTest {
     @Test
     fun `#fromMap returns empty user for empty map`() {
         // given
-        // empty map
-
-        // when
         val user = KubeConfigUser.fromMap(emptyMap<String, Any>())
 
+        // when
+
+        // then
         assertThat(user.token).isNull()
-        assertThat(user.clientCertificateData).isNull()
-        assertThat(user.clientKeyData).isNull()
+        assertThat(user.clientCertificate).isNull()
+        assertThat(user.clientKey).isNull()
         assertThat(user.username).isNull()
         assertThat(user.password).isNull()
     }
@@ -75,19 +78,20 @@ class KubeConfigUserTest {
     fun `#fromMap is handling non-string values gracefully`() {
         // given
         val map = mapOf(
-            "token" to 12345,  // non-string
-            "client-certificate-data" to listOf("not", "string"),  // non-string
-            "client-key-data" to true,  // non-string
-            "username" to mapOf("not" to "string"),  // non-string
-            "password" to 3.14  // non-string
+            "token" to 12345,
+            "client-certificate-data" to listOf("not", "string"),
+            "client-key-data" to true,
+            "username" to mapOf("not" to "string"),
+            "password" to 3.14
         )
 
+        // when
         val user = KubeConfigUser.fromMap(map)
 
-        // All should be null since they're not strings
+        // then
         assertThat(user.token).isNull()
-        assertThat(user.clientCertificateData).isNull()
-        assertThat(user.clientKeyData).isNull()
+        assertThat(user.clientCertificate).isNull()
+        assertThat(user.clientKey).isNull()
         assertThat(user.username).isNull()
         assertThat(user.password).isNull()
     }
@@ -97,8 +101,8 @@ class KubeConfigUserTest {
         // given
         val user = KubeConfigUser(
             token = "DeathStar-token",
-            clientCertificateData = "Vader-cert",
-            clientKeyData = "Vader-key",
+            clientCertificate = CertificateSource.fromData("Vader-cert"),
+            clientKey = CertificateSource.fromData("Vader-key"),
             username = "DarthVader",
             password = "DarkSide"
         )
@@ -114,6 +118,24 @@ class KubeConfigUserTest {
             .containsEntry("client-key-data", "Vader-key")
             .containsEntry("username", "DarthVader")
             .containsEntry("password", "DarkSide")
+    }
+
+    @Test
+    fun `#toMap returns map with certificate-authority path`() {
+        // given
+        val user = KubeConfigUser(
+            clientCertificate = CertificateSource.fromPath("/home/user/client.crt"),
+            clientKey = CertificateSource.fromPath("/home/user/client.key")
+        )
+
+        // when
+        val map = user.toMap()
+
+        // then
+        assertThat(map)
+            .hasSize(2)
+            .containsEntry("client-certificate", "/home/user/client.crt")
+            .containsEntry("client-key", "/home/user/client.key")
     }
 
     @Test

@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.kubeconfig
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.text.UniqueNameGenerator
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.util.KubeConfig
@@ -299,8 +300,8 @@ abstract class KubeConfigUpdate private constructor(
             return KubeConfigNamedUser(
                 KubeConfigUser(
                     token = null,
-                    clientCertificateData = clientCertPem,
-                    clientKeyData = clientKeyPem
+                    clientCertificate = CertificateSource.fromData(clientCertPem),
+                    clientKey = CertificateSource.fromData(clientKeyPem)
                 ),
                 uniqueUserName
             )

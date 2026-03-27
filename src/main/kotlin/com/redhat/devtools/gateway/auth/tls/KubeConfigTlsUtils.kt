@@ -17,6 +17,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
 
+import kotlin.io.path.readText
+
 object KubeConfigTlsUtils {
 
     fun findClusterByServer(
@@ -31,12 +33,17 @@ object KubeConfigTlsUtils {
     fun extractCaCertificates(
         namedCluster: KubeConfigNamedCluster
     ): List<X509Certificate> {
-        val caData = namedCluster.cluster.certificateAuthorityData ?: return emptyList()
-        val decoded = Base64.getDecoder().decode(caData)
+        val caSource = namedCluster.cluster.certificateAuthority ?: return emptyList()
+        val caContent = if (caSource.isFilePath) {
+            caSource.toPath().readText()
+        } else {
+            Base64.getDecoder().decode(caSource.value).toString(Charsets.UTF_8)
+        }
+
         val factory = CertificateFactory.getInstance("X.509")
 
         return factory
-            .generateCertificates(decoded.inputStream())
+            .generateCertificates(caContent.byteInputStream())
             .filterIsInstance<X509Certificate>()
     }
 }

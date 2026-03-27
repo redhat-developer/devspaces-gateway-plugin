@@ -17,10 +17,9 @@ import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.components.Service
-import com.redhat.devtools.gateway.auth.code.JBPasswordSafeTokenStorage
+import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.auth.code.RedHatAuthCodeFlow
 import com.redhat.devtools.gateway.auth.code.SSOToken
-import com.redhat.devtools.gateway.auth.code.SecureTokenStorage
 import com.redhat.devtools.gateway.auth.config.AuthConfig
 import com.redhat.devtools.gateway.auth.config.AuthType
 import com.redhat.devtools.gateway.auth.oidc.OidcProviderMetadataResolver
@@ -30,22 +29,18 @@ import com.redhat.devtools.gateway.auth.server.RedirectUrlBuilder
 import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
 import kotlinx.coroutines.*
 import java.net.URI
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 
 const val LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
-class RedHatAuthSessionManager(): AuthSessionManager {
-
-    private val tokenStorage: SecureTokenStorage =
-        JBPasswordSafeTokenStorage()
+class RedHatAuthSessionManager : AbstractAuthSessionManager() {
 
     private val serverConfig = runBlocking {
         ServerConfigProvider.getServerConfig(AuthType.SSO_REDHAT)
     }
 
-    private val callbackServer: CallbackServer = OAuthCallbackServer(serverConfig)
+    override val callbackServer: CallbackServer = OAuthCallbackServer(serverConfig)
 
     private val authConfig = AuthConfig()
 
@@ -55,45 +50,12 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
     private lateinit var authFlow: RedHatAuthCodeFlow
 
-    private val listeners = mutableSetOf<AuthSessionListener>()
-    private var currentToken: SSOToken? = null
-
-    private val loginInProgress = AtomicBoolean(false)
-
-    fun isLoginInProgress(): Boolean = loginInProgress.get()
-
-    fun addListener(listener: AuthSessionListener) {
-        listeners += listener
-    }
-
-    fun removeListener(listener: AuthSessionListener) {
-        listeners -= listener
-    }
-
-    private fun notifyChanged() {
-        listeners.forEach { it.sessionChanged() }
-    }
-
     /**
      * Called once on plugin startup.
      */
     override suspend fun initialize() {
+        thisLogger().info("RedHatAuthSessionManager initialized")
         notifyChanged()
-    }
-
-    private var pendingLogin: CompletableDeferred<SSOToken>? = null
-
-    suspend fun awaitLoginResult(timeoutMs: Long): SSOToken {
-        val deferred = pendingLogin
-            ?: throw IllegalStateException("Login was not started")
-
-        return try {
-            withTimeout(timeoutMs) {
-                deferred.await()
-            }
-        } catch (_: TimeoutCancellationException) {
-            throw SsoLoginException.Timeout
-        }
     }
 
     /**
@@ -101,9 +63,11 @@ class RedHatAuthSessionManager(): AuthSessionManager {
      */
     override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
         if (!loginInProgress.compareAndSet(false, true)) {
+            thisLogger().warn("Login already in progress")
             throw IllegalStateException("Login already in progress")
         }
 
+        thisLogger().info("Starting Red Hat SSO login")
         pendingLogin = CompletableDeferred()
 
         try {
@@ -111,32 +75,39 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
             callbackServer.stop()
             val port = callbackServer.start()
+            thisLogger().debug("Callback server started on port: $port")
 
             authFlow = RedHatAuthCodeFlow(
                 clientId = authConfig.clientId,
                 redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                providerMetadata = providerMetadata,
-                sslContext = sslContext
+                providerMetadata = providerMetadata
             )
 
             val request = authFlow.startAuthFlow()
+            thisLogger().debug("Auth flow started, authorization URI: ${request.authorizationUri}")
+
             CoroutineScope(Dispatchers.IO).launch {
                 try {
+                    thisLogger().debug("Waiting for OAuth callback...")
                     val params = callbackServer.awaitCallback(LOGIN_TIMEOUT_MS)
                     if (params == null) {
+                        thisLogger().warn("OAuth callback timed out or was cancelled")
                         pendingLogin?.completeExceptionally(
-                            SsoLoginException.Timeout
+                            SsoLoginException.Timeout()
                         )
                         notifyLoginCancelled()
 
                         return@launch
                     }
 
+                    thisLogger().debug("OAuth callback received, handling...")
                     val token = authFlow.handleCallback(params)
                     currentToken = token
+                    thisLogger().info("Red Hat SSO login successful for account: ${token.accountLabel}")
 
                     pendingLogin?.complete(token)
                 } catch (e: Exception) {
+                    thisLogger().error("Red Hat SSO login failed", e)
                     pendingLogin?.completeExceptionally(
                         SsoLoginException.Failed(e.message ?: "SSO login failed")
                     )
@@ -148,6 +119,7 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
             return request.authorizationUri
         } catch (e: Exception) {
+            thisLogger().error("Failed to start Red Hat SSO login", e)
             pendingLogin?.completeExceptionally(e)
             pendingLogin = null
             cancelLogin()
@@ -161,13 +133,8 @@ class RedHatAuthSessionManager(): AuthSessionManager {
         password: String,
         sslContext: SSLContext
     ): SSOToken {
+        thisLogger().warn("Credential login not supported for Red Hat SSO")
         error("Not supported")
-    }
-
-    private suspend fun cancelLogin() {
-        loginInProgress.set(false)
-        notifyChanged()
-        callbackServer.stop()
     }
 
     private fun notifyLoginCancelled() {
@@ -180,29 +147,4 @@ class RedHatAuthSessionManager(): AuthSessionManager {
             )
         )
     }
-
-    /**
-     * Returns a valid (non-expired) token or null.
-     * Refreshes automatically if possible.
-     */
-    override suspend fun getValidToken(): SSOToken? {
-        val token = currentToken ?: return null
-
-        if (!token.isExpired()) {
-            return token
-        }
-
-        logout()
-        return null
-    }
-
-    override suspend fun logout() {
-        currentToken = null
-        tokenStorage.clearToken()
-        notifyChanged()
-    }
-
-    override fun isLoggedIn(): Boolean = currentToken != null
-
-    override fun currentAccount(): String? = currentToken?.accountLabel
 }

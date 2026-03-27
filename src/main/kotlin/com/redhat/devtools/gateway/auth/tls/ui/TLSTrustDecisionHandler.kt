@@ -75,14 +75,14 @@ class TLSTrustDecisionHandler(
 
     override fun createActions(): Array<Action> {
         return arrayOf(
-            object : DialogWrapperAction("Trust permanently") {
+            object : DialogWrapperAction("Trust Permanently") {
                 override fun doAction(e: ActionEvent) {
                     isTrusted = true
                     rememberDecision = true
                     close(OK_EXIT_CODE)
                 }
             },
-            object : DialogWrapperAction("Trust for this session only") {
+            object : DialogWrapperAction("Trust for This Session Only") {
                 override fun doAction(e: ActionEvent) {
                     isTrusted = true
                     rememberDecision = false

@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.auth.tls.PemUtils
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
@@ -19,14 +20,14 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
+import java.io.IOException
+import kotlin.io.path.readText
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManager
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
-import java.io.ByteArrayInputStream
-import java.security.cert.CertificateFactory
-import java.util.Base64
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
@@ -36,6 +37,33 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
     private val clusterName = "openshift_cluster"
 
     private var lastUsedKubeConfig: KubeConfig? = null
+
+    class Builder internal constructor(
+        private val factory: OpenShiftClientFactory,
+        private val server: String,
+        private val token: String
+    ) {
+        private var readTimeoutSeconds: Long = 0
+
+        fun readTimeout(timeout: Long, unit: TimeUnit): Builder {
+            this.readTimeoutSeconds = unit.toSeconds(timeout)
+            return this
+        }
+
+        fun build(): ApiClient {
+            val client = factory.create(server, token)
+            if (readTimeoutSeconds > 0) {
+                client.httpClient = client.httpClient.newBuilder()
+                    .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+                    .build()
+            }
+            return client
+        }
+    }
+
+    fun builder(server: String, token: String): Builder {
+        return Builder(this, server, token)
+    }
 
     fun create(): ApiClient {
         val paths = configUtils.getAllConfigFiles()
@@ -63,50 +91,35 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         }
     }
 
+    fun create(server: String, token: String): ApiClient {
+        val kubeConfig = createKubeConfig(server, null, token.toCharArray(), null, null)
+        lastUsedKubeConfig = kubeConfig
+        return Config.fromConfig(kubeConfig)
+    }
+
     fun create(
         server: String,
-        certificateAuthorityData: CharArray? = null,
+        certificateAuthority: CertificateSource? = null,
         token: CharArray? = null,
-        clientCertData: CharArray? = null,
-        clientKeyData: CharArray? = null,
+        clientCert: CertificateSource? = null,
+        clientKey: CertificateSource? = null,
         tlsContext: TlsContext
     ): ApiClient {
 
-        val usingToken = token != null && token.isNotEmpty()
-        val usingClientCert = clientCertData != null && clientCertData.isNotEmpty()
-                && clientKeyData != null && clientKeyData.isNotEmpty()
-        val usingCertificateAuthorityData = certificateAuthorityData != null && certificateAuthorityData.isNotEmpty()
+        val usingToken = token?.isNotEmpty() == true
+        val usingClientCert = clientCert != null
+                && clientKey != null
 
         require(usingToken.xor(usingClientCert)) {
-            "Provide either token OR clientCertData + clientKeyData."
+            "Provide either token OR clientCert + clientKey."
         }
 
-        val kubeConfig = createKubeConfig(server, certificateAuthorityData, token, clientCertData, clientKeyData)
+        val kubeConfig = createKubeConfig(server, certificateAuthority, token, clientCert, clientKey)
         lastUsedKubeConfig = kubeConfig
 
         val client = Config.fromConfig(kubeConfig)
-
-        val trustManager: X509TrustManager =
-            if (usingCertificateAuthorityData) {
-                buildTrustManagerFromCaData(certificateAuthorityData)
-            } else {
-                tlsContext.trustManager
-            }
-
-        val keyManagers: Array<KeyManager>? =
-            if (usingClientCert) {
-                buildKeyManagers(clientCertData, clientKeyData)
-            } else {
-                null
-            }
-
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(
-            keyManagers,
-            arrayOf(trustManager),
-            SecureRandom()
-        )
-
+        val trustManager: X509TrustManager = createTrustManager(certificateAuthority, tlsContext)
+        val sslContext = createSSLContext(trustManager, usingClientCert, clientCert, clientKey)
         client.httpClient = client.httpClient.newBuilder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
             .build()
@@ -114,16 +127,43 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         return client
     }
 
-    private fun buildTrustManagerFromCaData(
-        caData: CharArray
+    private fun createTrustManager(
+        certificateAuthority: CertificateSource?,
+        tlsContext: TlsContext
+    ): X509TrustManager = if (certificateAuthority != null) {
+        createTrustManager(certificateAuthority)
+    } else {
+        tlsContext.trustManager
+    }
+
+    private fun createSSLContext(
+        trustManager: X509TrustManager,
+        usingClientCert: Boolean,
+        clientCert: CertificateSource?,
+        clientKey: CertificateSource?
+    ): SSLContext {
+        val keyManagers: Array<KeyManager>? =
+            if (usingClientCert && clientCert != null && clientKey != null) {
+                createKeyManagers(clientCert, clientKey)
+            } else {
+                null
+            }
+
+        return SSLContext.getInstance("TLS").apply {
+            init(
+                keyManagers,
+                arrayOf(trustManager),
+                SecureRandom()
+            )
+        }
+    }
+
+    private fun createTrustManager(
+        caSource: CertificateSource
     ): X509TrustManager {
 
-        val decoded = Base64.getDecoder().decode(String(caData))
-
-        val certificateFactory = CertificateFactory.getInstance("X.509")
-        val caCert = certificateFactory.generateCertificate(
-            ByteArrayInputStream(decoded)
-        )
+        val caContent = resolve(caSource)
+        val caCert = PemUtils.parseCertificate(caContent)
 
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
         keyStore.load(null, null)
@@ -139,20 +179,16 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
             .first()
     }
 
-    private fun buildKeyManagers(
-        certData: CharArray,
-        keyData: CharArray
+    private fun createKeyManagers(
+        certSource: CertificateSource,
+        keySource: CertificateSource
     ): Array<KeyManager> {
 
-        val certBytes = Base64.getDecoder().decode(String(certData))
-        val keyBytes = Base64.getDecoder().decode(String(keyData))
+        val certContent = resolve(certSource)
+        val keyContent = resolve(keySource)
 
-        val certificateFactory = CertificateFactory.getInstance("X.509")
-        val certificate = certificateFactory.generateCertificate(
-            ByteArrayInputStream(certBytes)
-        )
-
-        val privateKey = PemUtils.parsePrivateKey(String(keyBytes))
+        val certificate = PemUtils.parseCertificate(certContent)
+        val privateKey = PemUtils.parsePrivateKey(keyContent)
 
         val keyStore = KeyStore.getInstance("PKCS12")
         keyStore.load(null)
@@ -172,50 +208,39 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         return kmf.keyManagers
     }
 
-    private fun createKubeConfig(server: String, certificateAuthorityData: CharArray? = null, token: CharArray? = null,
-        clientCertData: CharArray? = null, clientKeyData: CharArray? = null
+    /**
+     * Resolves CertificateSource to actual content.
+     * If it's a file path, reads the file. Otherwise returns the value.
+     */
+    private fun resolve(source: CertificateSource): String {
+        return if (source.isFilePath) {
+            try {
+                source.toPath().readText()
+            } catch (e: Exception) {
+                throw IOException("Failed to read certificate file: ${source.value}", e)
+            }
+        } else {
+            source.value
+        }
+    }
+
+    private fun createKubeConfig(
+        server: String,
+        certificateAuthority: CertificateSource? = null,
+        token: CharArray? = null,
+        clientCert: CertificateSource? = null,
+        clientKey: CertificateSource? = null
     ): KubeConfig {
 
         val usingToken = token != null
-        val usingClientCert = clientCertData != null && clientKeyData != null
+        val usingClientCert = clientCert != null && clientKey != null
 
         require(usingToken.xor(usingClientCert)) {
-            "Provide either token OR clientCertData + clientKeyData."
+            "Provide either token OR clientCert + clientKey."
         }
 
-        val cluster = mutableMapOf<String, Any>(
-            "server" to server.trim()
-        )
-
-        val caData = certificateAuthorityData
-            ?.let { String(it).trim() }
-            ?.takeIf { it.isNotEmpty() }
-
-        if (caData != null) {
-            cluster["certificate-authority-data"] = caData
-        }
-
-        val clusterEntry = mapOf(
-            "name" to clusterName,
-            "cluster" to cluster
-        )
-
-        val userAuth = mutableMapOf<String, Any>()
-
-        if (usingToken) {
-            userAuth["token"] = String(token).trim()
-        } else {
-            userAuth["client-certificate-data"] =
-                String(clientCertData!!).trim()
-            userAuth["client-key-data"] =
-                String(clientKeyData!!).trim()
-        }
-
-        val userEntry = mapOf(
-            "name" to userName,
-            "user" to userAuth
-        )
-
+        val clusterEntry = createCluster(server, certificateAuthority)
+        val userEntry = createUser(usingToken, token, clientCert, clientKey)
         val contextEntry = mapOf(
             "name" to contextName,
             "context" to mapOf(
@@ -228,5 +253,58 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         kubeConfig.setContext(contextName)
 
         return kubeConfig
+    }
+
+    private fun createCluster(
+        server: String,
+        certificateAuthority: CertificateSource?
+    ): Map<String, Any> {
+        val cluster = mutableMapOf<String, Any>(
+            "server" to server.trim()
+        )
+
+        certificateAuthority?.let { ca ->
+            if (ca.isFilePath) {
+                cluster["certificate-authority"] = ca.value.trim()
+            } else {
+                cluster["certificate-authority-data"] = PemUtils.toBase64(ca.value.trim())
+            }
+        }
+
+        val clusterEntry = mapOf(
+            "name" to clusterName,
+            "cluster" to cluster
+        )
+        return clusterEntry
+    }
+
+    private fun createUser(usingToken: Boolean, token: CharArray?, clientCert: CertificateSource?, clientKey: CertificateSource?): Map<String, Any> {
+        val userAuth = mutableMapOf<String, Any>()
+
+        if (usingToken
+            && token != null
+            && token.isNotEmpty()) {
+            userAuth["token"] = String(token).trim()
+        } else {
+            clientCert?.let { cert ->
+                if (cert.isFilePath) {
+                    userAuth["client-certificate"] = cert.value.trim()
+                } else {
+                    userAuth["client-certificate-data"] = PemUtils.toBase64(cert.value.trim())
+                }
+            }
+            clientKey?.let { key ->
+                if (key.isFilePath) {
+                    userAuth["client-key"] = key.value.trim()
+                } else {
+                    userAuth["client-key-data"] = PemUtils.toBase64(key.value.trim())
+                }
+            }
+        }
+
+        return mapOf(
+            "name" to userName,
+            "user" to userAuth
+        )
     }
 }

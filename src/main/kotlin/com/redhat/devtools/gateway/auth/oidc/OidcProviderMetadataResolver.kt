@@ -14,6 +14,8 @@ package com.redhat.devtools.gateway.auth.oidc
 import com.nimbusds.oauth2.sdk.id.Issuer
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderConfigurationRequest
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class OidcProviderMetadataResolver(
     authUrl: String
@@ -27,7 +29,9 @@ class OidcProviderMetadataResolver(
         cached?.let { return it }
 
         val request = OIDCProviderConfigurationRequest(issuer)
-        val httpResponse = request.toHTTPRequest().send()
+        val httpResponse = withContext(Dispatchers.IO) {
+            request.toHTTPRequest().send()
+        }
         val metadata = OIDCProviderMetadata.parse(httpResponse.bodyAsJSONObject)
 
         cached = metadata

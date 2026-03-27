@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
@@ -30,8 +31,23 @@ class KubeConfigClusterTest {
         // then
         assertThat(cluster).isNotNull
         assertThat(cluster?.server).isEqualTo("https://api.example.com:6443")
-        assertThat(cluster?.certificateAuthorityData).isEqualTo("LS0tLS1CRUdJTi...")
+        assertThat(cluster?.certificateAuthority?.value).isEqualTo("LS0tLS1CRUdJTi...")
+        assertThat(cluster?.certificateAuthority?.isFilePath).isFalse()
         assertThat(cluster?.insecureSkipTlsVerify).isTrue()
+    }
+
+    @Test
+    fun `#fromMap parses cluster with certificate-authority path`() {
+        val map = mapOf(
+            "server" to "https://api.example.com:6443",
+            "certificate-authority" to "/home/user/.minikube/ca.crt"
+        )
+
+        val cluster = KubeConfigCluster.fromMap(map)
+
+        assertThat(cluster).isNotNull
+        assertThat(cluster?.certificateAuthority?.value).isEqualTo("/home/user/.minikube/ca.crt")
+        assertThat(cluster?.certificateAuthority?.isFilePath).isTrue()
     }
 
     @Test
@@ -47,7 +63,7 @@ class KubeConfigClusterTest {
         // then
         assertThat(cluster).isNotNull
         assertThat(cluster?.server).isEqualTo("https://api.example.com:6443")
-        assertThat(cluster?.certificateAuthorityData).isNull()
+        assertThat(cluster?.certificateAuthority).isNull()
         assertThat(cluster?.insecureSkipTlsVerify).isNull()
     }
 
@@ -112,7 +128,7 @@ class KubeConfigClusterTest {
         // given
         val cluster = KubeConfigCluster(
             server = "https://tatooine.starwars.galaxy:6443",
-            certificateAuthorityData = "LS0tLS1CRUdJTi1MSUdIVF..." /* A long time ago in a galaxy far, far away... */,
+            certificateAuthority = CertificateSource.fromData("LS0tLS1CRUdJTi1MSUdIVF..."),
             insecureSkipTlsVerify = true
         )
 
@@ -125,6 +141,21 @@ class KubeConfigClusterTest {
             .containsEntry("server", "https://tatooine.starwars.galaxy:6443")
             .containsEntry("certificate-authority-data", "LS0tLS1CRUdJTi1MSUdIVF...")
             .containsEntry("insecure-skip-tls-verify", true)
+    }
+
+    @Test
+    fun `#toMap writes certificate-authority path when isFilePath is true`() {
+        val cluster = KubeConfigCluster(
+            server = "https://tatooine.starwars.galaxy:6443",
+            certificateAuthority = CertificateSource.fromPath("/home/user/.minikube/ca.crt")
+        )
+
+        val map = cluster.toMap()
+
+        assertThat(map)
+            .hasSize(2)
+            .containsEntry("server", "https://tatooine.starwars.galaxy:6443")
+            .containsEntry("certificate-authority", "/home/user/.minikube/ca.crt")
     }
 
     @Test
