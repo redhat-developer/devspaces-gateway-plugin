@@ -17,6 +17,7 @@ import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.auth.code.JBPasswordSafeTokenStorage
 import com.redhat.devtools.gateway.auth.code.RedHatAuthCodeFlow
 import com.redhat.devtools.gateway.auth.code.SSOToken
@@ -32,6 +33,7 @@ import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
+import kotlin.time.Duration.Companion.milliseconds
 
 const val LOGIN_TIMEOUT_MS = 2 * 60_000L
 
@@ -78,6 +80,7 @@ class RedHatAuthSessionManager(): AuthSessionManager {
      * Called once on plugin startup.
      */
     override suspend fun initialize() {
+        thisLogger().info("RedHatAuthSessionManager initialized")
         notifyChanged()
     }
 
@@ -87,11 +90,15 @@ class RedHatAuthSessionManager(): AuthSessionManager {
         val deferred = pendingLogin
             ?: throw IllegalStateException("Login was not started")
 
+        thisLogger().debug("Awaiting login result with timeout ${timeoutMs}ms")
         return try {
-            withTimeout(timeoutMs) {
+            val token = withTimeout(timeoutMs.milliseconds) {
                 deferred.await()
             }
-        } catch (_: TimeoutCancellationException) {
+            thisLogger().info("Login result received successfully")
+            token
+        } catch (e: TimeoutCancellationException) {
+            thisLogger().warn("Login timed out after ${timeoutMs}ms")
             throw SsoLoginException.Timeout
         }
     }
@@ -101,9 +108,11 @@ class RedHatAuthSessionManager(): AuthSessionManager {
      */
     override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
         if (!loginInProgress.compareAndSet(false, true)) {
+            thisLogger().warn("Login already in progress")
             throw IllegalStateException("Login already in progress")
         }
 
+        thisLogger().info("Starting Red Hat SSO login")
         pendingLogin = CompletableDeferred()
 
         try {
@@ -111,6 +120,7 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
             callbackServer.stop()
             val port = callbackServer.start()
+            thisLogger().debug("Callback server started on port: $port")
 
             authFlow = RedHatAuthCodeFlow(
                 clientId = authConfig.clientId,
@@ -120,10 +130,14 @@ class RedHatAuthSessionManager(): AuthSessionManager {
             )
 
             val request = authFlow.startAuthFlow()
+            thisLogger().debug("Auth flow started, authorization URI: ${request.authorizationUri}")
+
             CoroutineScope(Dispatchers.IO).launch {
                 try {
+                    thisLogger().debug("Waiting for OAuth callback...")
                     val params = callbackServer.awaitCallback(LOGIN_TIMEOUT_MS)
                     if (params == null) {
+                        thisLogger().warn("OAuth callback timed out or was cancelled")
                         pendingLogin?.completeExceptionally(
                             SsoLoginException.Timeout
                         )
@@ -132,11 +146,14 @@ class RedHatAuthSessionManager(): AuthSessionManager {
                         return@launch
                     }
 
+                    thisLogger().debug("OAuth callback received, handling...")
                     val token = authFlow.handleCallback(params)
                     currentToken = token
+                    thisLogger().info("Red Hat SSO login successful for account: ${token.accountLabel}")
 
                     pendingLogin?.complete(token)
                 } catch (e: Exception) {
+                    thisLogger().error("Red Hat SSO login failed", e)
                     pendingLogin?.completeExceptionally(
                         SsoLoginException.Failed(e.message ?: "SSO login failed")
                     )
@@ -148,6 +165,7 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
             return request.authorizationUri
         } catch (e: Exception) {
+            thisLogger().error("Failed to start Red Hat SSO login", e)
             pendingLogin?.completeExceptionally(e)
             pendingLogin = null
             cancelLogin()
@@ -161,10 +179,12 @@ class RedHatAuthSessionManager(): AuthSessionManager {
         password: String,
         sslContext: SSLContext
     ): SSOToken {
+        thisLogger().warn("Credential login not supported for Red Hat SSO")
         error("Not supported")
     }
 
     private suspend fun cancelLogin() {
+        thisLogger().debug("Cancelling login")
         loginInProgress.set(false)
         notifyChanged()
         callbackServer.stop()
@@ -186,17 +206,25 @@ class RedHatAuthSessionManager(): AuthSessionManager {
      * Refreshes automatically if possible.
      */
     override suspend fun getValidToken(): SSOToken? {
-        val token = currentToken ?: return null
+        val token = currentToken
+        if (token == null) {
+            thisLogger().debug("No current token available")
+            return null
+        }
 
         if (!token.isExpired()) {
+            thisLogger().debug("Returning valid token for account: ${token.accountLabel}")
             return token
         }
 
+        thisLogger().info("Token expired for account: ${token.accountLabel}, logging out")
         logout()
         return null
     }
 
     override suspend fun logout() {
+        val account = currentToken?.accountLabel
+        thisLogger().info("Logging out${if (account != null) " account: $account" else ""}")
         currentToken = null
         tokenStorage.clearToken()
         notifyChanged()
