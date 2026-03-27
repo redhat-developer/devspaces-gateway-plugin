@@ -49,6 +49,7 @@ import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
+import com.redhat.devtools.gateway.util.ClipboardTokenMonitor
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
@@ -58,8 +59,6 @@ import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.*
 import java.awt.Cursor
 import java.awt.Font
-import java.awt.Toolkit
-import java.awt.datatransfer.DataFlavor
 import java.awt.event.*
 import java.nio.file.Paths
 import javax.swing.JComponent
@@ -117,72 +116,18 @@ class DevSpacesServerStepView(
         ApplicationManager.getApplication()
             .getService(RedHatAuthSessionManager::class.java)
 
-    private var lastClipboardValue: String? = null
-    private var clipboardPollingJob: Job? = null
+    private val clipboardMonitor = ClipboardTokenMonitor()
 
-    fun startClipboardPolling() {
-        clipboardPollingJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                val value = readClipboardText()
+    private var lastDetectedToken: String? = null
 
-                if (value != null && value != lastClipboardValue) {
-                    lastClipboardValue = value
-
-                    suggestToken(value)
-                }
-
-                delay(500)
-            }
-        }
-    }
-
-    fun readClipboardText(): String? {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        val contents = clipboard.getContents(null) ?: return null
-
-        return try {
-            if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
-                contents.getTransferData(DataFlavor.stringFlavor) as? String
-            } else {
-                null
-            }
-        } catch (_: Exception) {
-            null
-        }?.trim()
-    }
-
-    fun stopClipboardPolling() {
-        clipboardPollingJob?.cancel()
-        clipboardPollingJob = null
-    }
-
-    private val OPENSHIFT_TOKEN_REGEX =
-        Regex("^sha256~[A-Za-z0-9_-]{20,}$")
-
-    fun String?.isOpenShiftToken(): Boolean =
-        this?.let { OPENSHIFT_TOKEN_REGEX.matches(it.trim()) } == true
-
-    private fun checkClipboardForToken() {
-        val token = readClipboardText()
-        if (token.isOpenShiftToken()) {
-            suggestToken(token)
-        }
-    }
-
-    private fun suggestToken(token: String?) {
+    private fun suggestToken(token: String) {
+        lastDetectedToken = token
         ApplicationManager.getApplication().invokeLater (
             {
-                if (token.isOpenShiftToken()) {
-                    tokenSuggestionLabel.apply {
-                        text = "Token detected in clipboard. Click here to use it."
-                        isVisible = true
-                        isEnabled = true
-                    }
-                } else {
-                    tokenSuggestionLabel.apply {
-                        isVisible = false
-                        isEnabled = false
-                    }
+                tokenSuggestionLabel.apply {
+                    text = "Token detected in clipboard. Click here to use it."
+                    isVisible = true
+                    isEnabled = true
                 }
             },
             ModalityState.stateForComponent(component)
@@ -201,9 +146,13 @@ class DevSpacesServerStepView(
     private var tokenLabelListener: MouseAdapter? = null
 
     private fun setupTokenSuggestionLabel() {
+        clipboardMonitor.addListener { token ->
+            suggestToken(token)
+        }
+
         tokenLabelListener = object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent?) {
-                val token = lastClipboardValue ?: return
+                val token = lastDetectedToken ?: return
                 tfToken.text = token
                 tokenSuggestionLabel.isVisible = false
             }
@@ -435,8 +384,8 @@ class DevSpacesServerStepView(
         startKubeconfigMonitor()
         updateAuthUiState()
         setupTokenSuggestionLabel()
-        startClipboardPolling()
-        checkClipboardForToken()
+        clipboardMonitor.start()
+        clipboardMonitor.checkNow()?.let { suggestToken(it) }
 
         showTokenCheckbox.addActionListener {
             tfToken.echoChar = if (showTokenCheckbox.isSelected) 0.toChar() else '•'
@@ -451,7 +400,7 @@ class DevSpacesServerStepView(
         tokenLabelListener?.let {
             tokenSuggestionLabel.removeMouseListener(it)
         }
-        stopClipboardPolling()
+        clipboardMonitor.stop()
         stopKubeconfigMonitor()
         super.onDispose()
     }
