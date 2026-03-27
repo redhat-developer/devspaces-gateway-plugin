@@ -172,7 +172,7 @@ class DevSpacesServerStepView(
     private fun suggestToken(token: String?) {
         ApplicationManager.getApplication().invokeLater (
             {
-                if (token.isOpenShiftToken() == true) {
+                if (token.isOpenShiftToken()) {
                     tokenSuggestionLabel.apply {
                         text = "Token detected in clipboard. Click here to use it."
                         isVisible = true
