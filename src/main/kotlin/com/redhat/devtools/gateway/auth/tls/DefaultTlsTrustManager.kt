@@ -135,6 +135,6 @@ class DefaultTlsTrustManager(
     private fun sha256Fingerprint(cert: X509Certificate): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(cert.encoded)
-        return digest.joinToString(":") { "%02X".format(it) }
+        return digest.joinToString(":") { "%02x".format(it) }
     }
 }
