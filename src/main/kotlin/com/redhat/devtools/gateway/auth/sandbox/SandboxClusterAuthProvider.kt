@@ -22,8 +22,8 @@ import io.kubernetes.client.openapi.models.V1ServiceAccount
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.credentials.AccessTokenAuthentication
 import kotlinx.coroutines.*
-import java.util.*
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.milliseconds
 
 class SandboxClusterAuthProvider(
     private val sandboxApi: SandboxApi = SandboxApi(
@@ -90,13 +90,22 @@ class SandboxClusterAuthProvider(
 
         api.createNamespacedSecret(namespace, secret).execute()
 
-        repeat(30) {
-            val s = api.readNamespacedSecret(secretName, namespace).execute()
-            if (s.data?.containsKey("token") == true) return@withContext s
-            delay(1000)
+        if (requestSecret(secretName, namespace, api)) {
+            return@withContext secret
         }
 
         error("Pipeline token secret not populated")
+    }
+
+    private suspend fun requestSecret(secretName: String, namespace: String, api: CoreV1Api): Boolean {
+        repeat(30) {
+            val secret = api.readNamespacedSecret(secretName, namespace).execute()
+            if (secret.data?.containsKey("token") == true) {
+                return true
+            }
+            delay(1000.milliseconds)
+        }
+        return false
     }
 
     private fun extractToken(secret: V1Secret): String {
