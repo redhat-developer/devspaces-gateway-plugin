@@ -25,12 +25,11 @@ import com.intellij.platform.util.progress.RawProgressReporter
 import com.intellij.platform.util.progress.reportRawProgress
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
-import com.intellij.ui.dsl.builder.Align
-import com.intellij.ui.dsl.builder.AlignX
-import com.intellij.ui.dsl.builder.AlignY
-import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.dsl.builder.*
+import com.intellij.ui.dsl.gridLayout.UnscaledGaps
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
@@ -63,6 +62,7 @@ import java.awt.event.*
 import java.nio.file.Paths
 import javax.swing.JComponent
 import javax.swing.JTextField
+import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -353,9 +353,18 @@ class DevSpacesServerStepView(
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.certificate_authority")) {
             cell(tfCertAuthorityData).align(Align.FILL)
         }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.authentication")) {
-            cell(authTabs).align(Align.FILL)
-        }
+        val tabInsets = UIManager.getInsets("TabbedPane.tabInsets") ?: JBUI.insets(0)
+
+        row {
+            label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.authentication"))
+                .align(AlignY.TOP)
+                // This is the standard "nudge" to align a label with
+                // the text baseline of a adjacent component.
+                .customize(UnscaledGaps(top = JBUI.scale(16)))
+
+            cell(authTabs)
+                .align(AlignX.FILL + AlignY.TOP)
+        }.layout(RowLayout.LABEL_ALIGNED)
     }.apply {
         isOpaque = false
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
