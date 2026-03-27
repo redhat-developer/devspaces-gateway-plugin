@@ -17,10 +17,12 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
+import com.intellij.platform.ide.progress.ModalTaskOwner
+import com.intellij.platform.ide.progress.runWithModalProgressBlocking
+import com.intellij.platform.util.progress.RawProgressReporter
+import com.intellij.platform.util.progress.reportRawProgress
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.ui.dsl.builder.Align
@@ -47,6 +49,7 @@ import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
+import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
@@ -551,58 +554,58 @@ class DevSpacesServerStepView(
 
         onDispose()
 
-        ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            {
-                val indicator = ProgressManager.getInstance().progressIndicator
+        try {
+            runWithModalProgressBlocking(ModalTaskOwner.component(component), "Connecting to OpenShift...") {
+                withContext(Dispatchers.IO) {
+                    reportRawProgress { reporter ->
+                        reporter.text("Connecting to cluster...")
 
-                try {
-                    indicator.text = "Connecting to cluster..."
+                        val tlsContext = resolveSslContext(server)
 
-                    val tlsContext = runBlocking {
-                        resolveSslContext(server)
-                    }
+                        val certAuthorityData = tfCertAuthorityData.text
 
-                    val certAuthorityData = tfCertAuthorityData.text
+                        when (authMethod) {
+                            AuthMethod.TOKEN -> {
+                                reporter.text("Validating token...")
 
-                    when (authMethod) {
-                        AuthMethod.TOKEN -> {
-                            indicator.text = "Validating token..."
+                                val token = String(tfToken.password)
 
-                            val token = String(tfToken.password)
+                                val client = createValidatedApiClient(
+                                    server, certAuthorityData,
+                                    token, null, null, tlsContext,
+                                    "Authentication failed: invalid server URL or token."
+                                )
 
-                            val client = createValidatedApiClient(server, certAuthorityData,
-                                token, null, null, tlsContext,
-                                "Authentication failed: invalid server URL or token.")
-
-                            saveKubeconfig(selectedCluster, token, indicator)
-                            devSpacesContext.client = client
-                        }
-
-                        AuthMethod.CLIENT_CERTIFICATE -> {
-                            indicator.text = "Validating client certificate..."
-
-                            val clientCertPem = tfClientCert.text
-                            val clientKeyPem = tfClientKey.text
-
-                            val client = createValidatedApiClient(server, certAuthorityData,
-                                null, clientCertPem, clientKeyPem, tlsContext,
-                                "Authentication failed: invalid server URL or token.")
-
-                            require(Projects(client).isAuthenticated()) {
-                                "Authentication failed: invalid client certificate or key."
+                                saveKubeconfig(selectedCluster, token, reporter)
+                                devSpacesContext.client = client
                             }
 
-                            saveKubeconfig(selectedCluster, clientCertPem, clientKeyPem, indicator)
-                            devSpacesContext.client = client
-                        }
+                            AuthMethod.CLIENT_CERTIFICATE -> {
+                                reporter.text("Validating client certificate...")
 
-                        AuthMethod.OPENSHIFT_CREDENTIALS -> {
-                            indicator.text = "Authenticating with OpenShift credentials..."
+                                val clientCertPem = tfClientCert.text
+                                val clientKeyPem = tfClientKey.text
 
-                            val username = tfUsername.text
-                            val password = String(tfPassword.password)
+                                val client = createValidatedApiClient(
+                                    server, certAuthorityData,
+                                    null, clientCertPem, clientKeyPem, tlsContext,
+                                    "Authentication failed: invalid server URL or token."
+                                )
 
-                            val finalToken = runBlocking {
+                                require(Projects(client).isAuthenticated()) {
+                                    "Authentication failed: invalid client certificate or key."
+                                }
+
+                                saveKubeconfig(selectedCluster, clientCertPem, clientKeyPem, reporter)
+                                devSpacesContext.client = client
+                            }
+
+                            AuthMethod.OPENSHIFT_CREDENTIALS -> {
+                                reporter.text("Authenticating with OpenShift credentials...")
+
+                                val username = tfUsername.text
+                                val password = String(tfPassword.password)
+
                                 val sessionManager = OpenShiftAuthSessionManager()
 
                                 val osToken = sessionManager.loginWithCredentials(
@@ -612,105 +615,114 @@ class DevSpacesServerStepView(
                                     tlsContext.sslContext
                                 )
 
-                                TokenModel(
+                                val finalToken = TokenModel(
                                     accessToken = osToken.accessToken,
                                     expiresAt = osToken.expiresAt,
                                     accountLabel = osToken.accountLabel,
                                     kind = AuthTokenKind.TOKEN,
                                     clusterApiUrl = selectedCluster.url
                                 )
+
+                                reporter.text("Validating cluster access...")
+
+                                val client = createValidatedApiClient(
+                                    server, certAuthorityData,
+                                    finalToken.accessToken, null, null, tlsContext,
+                                    "Authentication failed: invalid OpenShift credentials."
+                                )
+
+                                withContext(Dispatchers.Main) {
+                                    tfToken.text = finalToken.accessToken
+                                }
+                                saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
+                                devSpacesContext.client = client
                             }
 
-                            indicator.text = "Validating cluster access..."
+                            AuthMethod.OPENSHIFT -> {
+                                reporter.text("Authenticating with Openshift...")
 
-                            val client = createValidatedApiClient(server, certAuthorityData,
-                                finalToken.accessToken, null, null, tlsContext,
-                                "Authentication failed: invalid OpenShift credentials."
-                            )
-
-                            tfToken.text = finalToken.accessToken
-                            saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
-                            devSpacesContext.client = client
-                        }
-
-                        AuthMethod.OPENSHIFT -> {
-                            indicator.text = "Authenticating with Openshift..."
-
-                            val finalToken = runBlocking {
                                 val openshiftSSessionManager = OpenShiftAuthSessionManager()
-                                val uri = openshiftSSessionManager.startLogin(selectedCluster.url, tlsContext.sslContext)
-                                BrowserUtil.browse(uri)
+                                val uri = openshiftSSessionManager.startLogin(
+                                    selectedCluster.url,
+                                    tlsContext.sslContext
+                                )
+                                withContext(Dispatchers.Main) {
+                                    BrowserUtil.browse(uri)
+                                }
 
-                                indicator.text = "Waiting for you to complete login in your browser..."
-                                indicator.checkCanceled()
+                                reporter.text("Waiting for you to complete login in your browser...")
+                                ensureActive()
 
-                                indicator.text = "Obtaining OpenShift access..."
+                                reporter.text("Obtaining OpenShift access...")
                                 val osToken = openshiftSSessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
 
-                                TokenModel(
+                                val finalToken = TokenModel(
                                     accessToken = osToken.accessToken,
                                     expiresAt = osToken.expiresAt,
                                     accountLabel = osToken.accountLabel,
                                     kind = AuthTokenKind.TOKEN,
                                     clusterApiUrl = selectedCluster.url
                                 )
+
+                                reporter.text("Validating cluster access...")
+
+                                val client = createValidatedApiClient(
+                                    server, certAuthorityData,
+                                    finalToken.accessToken, null, null, tlsContext,
+                                    "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
+                                )
+
+                                withContext(Dispatchers.Main) {
+                                    tfToken.text = finalToken.accessToken
+                                }
+                                saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
+                                devSpacesContext.client = client
                             }
 
-                            indicator.text = "Validating cluster access..."
+                            AuthMethod.REDHAT_SSO -> {
+                                reporter.text("Authenticating with Red Hat...")
 
-                            val client = createValidatedApiClient(server, certAuthorityData,
-                                finalToken.accessToken, null, null, tlsContext,
-                                "Authentication failed: token received from OpenShift Authenticator is invalid or expired.")
-
-                            tfToken.text = finalToken.accessToken
-                            saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
-                            devSpacesContext.client = client
-                        }
-
-                        AuthMethod.REDHAT_SSO -> {
-                            indicator.text = "Authenticating with Red Hat..."
-
-                            val finalToken = runBlocking {
                                 val uri = sessionManager.startLogin(sslContext = tlsContext.sslContext)
-                                BrowserUtil.browse(uri)
+                                withContext(Dispatchers.Main) {
+                                    BrowserUtil.browse(uri)
+                                }
 
-                                indicator.text = "Waiting for you to complete login in your browser..."
-                                indicator.checkCanceled()
+                                reporter.text("Waiting for you to complete login in your browser...")
+                                ensureActive()
 
                                 val ssoToken = sessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
-                                indicator.text = "Obtaining OpenShift access..."
+                                reporter.text("Obtaining OpenShift access...")
 
                                 val sandboxAuth = SandboxClusterAuthProvider()
-                                sandboxAuth.authenticate(ssoToken)
+                                val finalToken = sandboxAuth.authenticate(ssoToken)
+
+                                reporter.text("Validating cluster access...")
+
+                                val client = createValidatedApiClient(
+                                    server, certAuthorityData,
+                                    finalToken.accessToken, null, null, tlsContext,
+                                    "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
+                                )
+
+                                // Do not save SSO tokens
+                                if (finalToken.kind == AuthTokenKind.PIPELINE) {
+                                    saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
+                                }
+                                devSpacesContext.client = client
                             }
-
-                            indicator.text = "Validating cluster access..."
-
-                            val client = createValidatedApiClient(server, certAuthorityData,
-                                finalToken.accessToken, null, null, tlsContext,
-                                "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster.")
-
-                            // Do not save SSO tokens
-                            if (finalToken.kind == AuthTokenKind.PIPELINE) {
-                                saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
-                            }
-                            devSpacesContext.client = client
                         }
                     }
-
-                    success = true
-                } catch (e: Exception) {
-                    Dialogs.error(
-                        e.message ?: "Unable to connect to the cluster",
-                        "Connection Failed"
-                    )
-                    throw e
                 }
-            },
-            "Connecting to OpenShift...",
-            true,
-            null
-        )
+            }
+            success = true
+        } catch (e: Exception) {
+            if (!e.isCancellationException()) {
+                Dialogs.error(
+                    e.message ?: "Unable to connect to the cluster",
+                    "Connection Failed"
+                )
+            }
+        }
 
         if (success) {
             settings.save(selectedCluster)
@@ -818,11 +830,11 @@ class DevSpacesServerStepView(
         )
     }
 
-    private fun saveKubeconfig(cluster: Cluster?, token: String?, indicator: ProgressIndicator) {
+    private fun saveKubeconfig(cluster: Cluster?, token: String?, reporter: RawProgressReporter) {
         if (!saveToKubeconfig || cluster == null || token.isNullOrBlank()) return
 
         try {
-            indicator.text = "Updating Kube config..."
+            reporter.text("Updating Kube config...")
             KubeConfigUpdate
                 .create(
                     cluster.name.trim(),
@@ -835,11 +847,11 @@ class DevSpacesServerStepView(
         }
     }
 
-    private fun saveKubeconfig(cluster: Cluster?, clientCertPem: String?, clientKeyPem: String?, indicator: ProgressIndicator) {
+    private fun saveKubeconfig(cluster: Cluster?, clientCertPem: String?, clientKeyPem: String?, reporter: RawProgressReporter) {
         if (!saveToKubeconfig || cluster == null || clientCertPem.isNullOrBlank() || clientKeyPem.isNullOrBlank()) return
 
         try {
-            indicator.text = "Updating Kube config..."
+            reporter.text("Updating Kube config...")
             KubeConfigUpdate
                 .create(
                     cluster.name.trim(),
