@@ -48,19 +48,21 @@ class OpenShiftAuthCodeFlow(
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun discoveryClient(): HttpClient =
+    private val discoveryClient: HttpClient by lazy {
         HttpClient.newBuilder()
             .sslContext(sslContext)
             .version(HttpClient.Version.HTTP_1_1)
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build()
+    }
 
-    private fun noRedirectClient(): HttpClient =
+    private val noRedirectClient: HttpClient by lazy {
         HttpClient.newBuilder()
             .sslContext(sslContext)
             .version(HttpClient.Version.HTTP_1_1)
             .followRedirects(HttpClient.Redirect.NEVER)
             .build()
+    }
 
     @Serializable
     private data class OAuthMetadata(
@@ -77,7 +79,7 @@ class OpenShiftAuthCodeFlow(
      * Discover OAuth endpoints from the cluster.
      */
     private suspend fun discoverOAuthMetadata(): OAuthMetadata {
-        val client = discoveryClient()
+        val client = discoveryClient
 
         val request = HttpRequest.newBuilder()
             .uri(URI.create("$apiServerUrl/.well-known/oauth-authorization-server"))
@@ -132,7 +134,7 @@ class OpenShiftAuthCodeFlow(
         }
 
     private suspend fun exchangeCodeForToken(code: String): SSOToken {
-        val httpClient = discoveryClient()
+        val httpClient = discoveryClient
 
         val basicAuth = "Basic " + Base64.getEncoder()
             .encodeToString("openshift-cli-client:".toByteArray(StandardCharsets.UTF_8))
@@ -178,7 +180,7 @@ class OpenShiftAuthCodeFlow(
         codeVerifier = CodeVerifier()
         state = State()
 
-        val httpClient = noRedirectClient()
+        val httpClient = noRedirectClient
 
         val redirectUri = URI(
             metadata.tokenEndpoint.replace(
