@@ -18,10 +18,8 @@ import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
-import com.redhat.devtools.gateway.auth.code.JBPasswordSafeTokenStorage
 import com.redhat.devtools.gateway.auth.code.RedHatAuthCodeFlow
 import com.redhat.devtools.gateway.auth.code.SSOToken
-import com.redhat.devtools.gateway.auth.code.SecureTokenStorage
 import com.redhat.devtools.gateway.auth.config.AuthConfig
 import com.redhat.devtools.gateway.auth.config.AuthType
 import com.redhat.devtools.gateway.auth.oidc.OidcProviderMetadataResolver
@@ -31,23 +29,18 @@ import com.redhat.devtools.gateway.auth.server.RedirectUrlBuilder
 import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
 import kotlinx.coroutines.*
 import java.net.URI
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
-import kotlin.time.Duration.Companion.milliseconds
 
 const val LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
-class RedHatAuthSessionManager(): AuthSessionManager {
-
-    private val tokenStorage: SecureTokenStorage =
-        JBPasswordSafeTokenStorage()
+class RedHatAuthSessionManager : AbstractAuthSessionManager() {
 
     private val serverConfig = runBlocking {
         ServerConfigProvider.getServerConfig(AuthType.SSO_REDHAT)
     }
 
-    private val callbackServer: CallbackServer = OAuthCallbackServer(serverConfig)
+    override val callbackServer: CallbackServer = OAuthCallbackServer(serverConfig)
 
     private val authConfig = AuthConfig()
 
@@ -57,50 +50,12 @@ class RedHatAuthSessionManager(): AuthSessionManager {
 
     private lateinit var authFlow: RedHatAuthCodeFlow
 
-    private val listeners = mutableSetOf<AuthSessionListener>()
-    private var currentToken: SSOToken? = null
-
-    private val loginInProgress = AtomicBoolean(false)
-
-    fun isLoginInProgress(): Boolean = loginInProgress.get()
-
-    fun addListener(listener: AuthSessionListener) {
-        listeners += listener
-    }
-
-    fun removeListener(listener: AuthSessionListener) {
-        listeners -= listener
-    }
-
-    private fun notifyChanged() {
-        listeners.forEach { it.sessionChanged() }
-    }
-
     /**
      * Called once on plugin startup.
      */
     override suspend fun initialize() {
         thisLogger().info("RedHatAuthSessionManager initialized")
         notifyChanged()
-    }
-
-    private var pendingLogin: CompletableDeferred<SSOToken>? = null
-
-    suspend fun awaitLoginResult(timeoutMs: Long): SSOToken {
-        val deferred = pendingLogin
-            ?: throw IllegalStateException("Login was not started")
-
-        thisLogger().debug("Awaiting login result with timeout ${timeoutMs}ms")
-        return try {
-            val token = withTimeout(timeoutMs.milliseconds) {
-                deferred.await()
-            }
-            thisLogger().info("Login result received successfully")
-            token
-        } catch (e: TimeoutCancellationException) {
-            thisLogger().warn("Login timed out after ${timeoutMs}ms")
-            throw SsoLoginException.Timeout
-        }
     }
 
     /**
@@ -183,13 +138,6 @@ class RedHatAuthSessionManager(): AuthSessionManager {
         error("Not supported")
     }
 
-    private suspend fun cancelLogin() {
-        thisLogger().debug("Cancelling login")
-        loginInProgress.set(false)
-        notifyChanged()
-        callbackServer.stop()
-    }
-
     private fun notifyLoginCancelled() {
         Notifications.Bus.notify(
             Notification(
@@ -200,37 +148,4 @@ class RedHatAuthSessionManager(): AuthSessionManager {
             )
         )
     }
-
-    /**
-     * Returns a valid (non-expired) token or null.
-     * Refreshes automatically if possible.
-     */
-    override suspend fun getValidToken(): SSOToken? {
-        val token = currentToken
-        if (token == null) {
-            thisLogger().debug("No current token available")
-            return null
-        }
-
-        if (!token.isExpired()) {
-            thisLogger().debug("Returning valid token for account: ${token.accountLabel}")
-            return token
-        }
-
-        thisLogger().info("Token expired for account: ${token.accountLabel}, logging out")
-        logout()
-        return null
-    }
-
-    override suspend fun logout() {
-        val account = currentToken?.accountLabel
-        thisLogger().info("Logging out${if (account != null) " account: $account" else ""}")
-        currentToken = null
-        tokenStorage.clearToken()
-        notifyChanged()
-    }
-
-    override fun isLoggedIn(): Boolean = currentToken != null
-
-    override fun currentAccount(): String? = currentToken?.accountLabel
 }
