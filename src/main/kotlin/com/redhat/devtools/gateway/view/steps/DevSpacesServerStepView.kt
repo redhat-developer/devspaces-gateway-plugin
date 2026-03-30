@@ -11,7 +11,6 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
-import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
@@ -23,20 +22,15 @@ import com.intellij.platform.ide.progress.ModalTaskOwner
 import com.intellij.platform.ide.progress.runWithModalProgressBlocking
 import com.intellij.platform.util.progress.RawProgressReporter
 import com.intellij.platform.util.progress.reportRawProgress
-import com.intellij.ui.JBColor
-import com.intellij.ui.components.*
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBTabbedPane
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.*
 import com.intellij.ui.dsl.gridLayout.UnscaledGaps
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
-import com.intellij.util.ui.UIUtil
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.auth.code.AuthTokenKind
-import com.redhat.devtools.gateway.auth.code.TokenModel
-import com.redhat.devtools.gateway.auth.sandbox.SandboxClusterAuthProvider
-import com.redhat.devtools.gateway.auth.session.LOGIN_TIMEOUT_MS
-import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
 import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.*
 import com.redhat.devtools.gateway.auth.tls.ui.UiTlsDecisionAdapter
@@ -45,19 +39,14 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
-import com.redhat.devtools.gateway.util.ClipboardTokenMonitor
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.view.steps.auth.*
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
-import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.*
-import java.awt.Cursor
-import java.awt.Font
 import java.awt.event.*
 import java.nio.file.Paths
 import javax.swing.JComponent
@@ -65,9 +54,6 @@ import javax.swing.JTextField
 import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
-
-private const val SAVE_REQUIRES_TOKEN_DIFF =
-    "devspaces.save.requires.token.diff"
 
 class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
@@ -83,128 +69,26 @@ class DevSpacesServerStepView(
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
 
     private var saveToKubeconfig: Boolean = false
-    private val saveKubeconfigCheckboxes = mutableListOf<JBCheckBox>()
 
-    private fun syncSaveKubeconfigCheckboxes(source: JBCheckBox) {
-        saveKubeconfigCheckboxes
-            .filter { it !== source }
-            .forEach { it.isSelected = saveToKubeconfig }
-    }
-
-    private fun createSaveKubeconfigCheckbox(
-        requiresTokenDiff: Boolean? = false
-    ): JBCheckBox =
-        JBCheckBox(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration")).apply {
-            isOpaque = false
-            background = null
-
-            isSelected = saveToKubeconfig
-
-            putClientProperty(SAVE_REQUIRES_TOKEN_DIFF, requiresTokenDiff)
-
-            addActionListener {
-                saveToKubeconfig = isSelected
-                syncSaveKubeconfigCheckboxes(this)
-            }
-
-            saveKubeconfigCheckboxes += this
+    private val saveKubeconfigCheckbox = JBCheckBox(
+        DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration")
+    ).apply {
+        isOpaque = false
+        background = null
+        isSelected = saveToKubeconfig
+        addActionListener {
+            saveToKubeconfig = isSelected
         }
-
-    private val updateKubeconfigCheckbox = JBCheckBox(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration"))
+    }
 
     private val sessionManager =
         ApplicationManager.getApplication()
             .getService(RedHatAuthSessionManager::class.java)
 
-    private val clipboardMonitor = ClipboardTokenMonitor()
-
-    private var lastDetectedToken: String? = null
-
-    private fun suggestToken(token: String) {
-        lastDetectedToken = token
-        ApplicationManager.getApplication().invokeLater (
-            {
-                tokenSuggestionLabel.apply {
-                    text = "Token detected in clipboard. Click here to use it."
-                    isVisible = true
-                    isEnabled = true
-                }
-            },
-            ModalityState.stateForComponent(component)
-        )
-    }
-
-    private val tokenSuggestionLabel = JBLabel()
-        .apply {
-            text = ""
-            foreground = JBColor.BLUE
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            isVisible = false
-            font = font.deriveFont(Font.ITALIC or Font.PLAIN)
-        }
-
-    private var tokenLabelListener: MouseAdapter? = null
-
-    private fun setupTokenSuggestionLabel() {
-        clipboardMonitor.addListener { token ->
-            suggestToken(token)
-        }
-
-        tokenLabelListener = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent?) {
-                val token = lastDetectedToken ?: return
-                tfToken.text = token
-                tokenSuggestionLabel.isVisible = false
-            }
-        }
-        tokenSuggestionLabel.addMouseListener(tokenLabelListener)
-        tokenSuggestionLabel.isVisible = false
-    }
-
-    private var tfToken = JBPasswordField()
-        .apply {
-            document.addDocumentListener(onFieldChanged())
-            PasteClipboardMenu.addTo(this)
-            addKeyListener(createEnterKeyListener())
-        }
-
     private var tfCertAuthorityData = JBTextField()
         .apply {
             document.addDocumentListener(onFieldChanged())
             PasteClipboardMenu.addTo(this)
-        }
-
-    private val tfUsername = JBTextField()
-        .apply {
-            document.addDocumentListener(onFieldChanged())
-            PasteClipboardMenu.addTo(this)
-            addKeyListener(createEnterKeyListener())
-        }
-    private val tfPassword = JBPasswordField()
-        .apply {
-            document.addDocumentListener(onFieldChanged())
-            PasteClipboardMenu.addTo(this)
-            addKeyListener(createEnterKeyListener())
-        }
-    private val tfClientCert = JBTextField()
-        .apply {
-            document.addDocumentListener(onFieldChanged())
-            PasteClipboardMenu.addTo(this)
-        }
-    private val tfClientKey = JBTextField()
-        .apply {
-            document.addDocumentListener(onFieldChanged())
-            PasteClipboardMenu.addTo(this)
-        }
-    private val showTokenCheckbox = JBCheckBox(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_token"))
-        .apply {
-            isOpaque = false
-            background = null
-        }
-    private val showPasswordCheckbox = JBCheckBox(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_password"))
-        .apply {
-            isOpaque = false
-            background = null
         }
 
     private var tfServer =
@@ -214,94 +98,68 @@ class DevSpacesServerStepView(
         )
         .apply {
             addItemListener(::onClusterSelected)
-            PasteClipboardMenu.addTo(this.editor.editorComponent as JTextField)
-            (this.editor.editorComponent as JTextField).addKeyListener(createEnterKeyListener())
+            val editor = this.editor.editorComponent as JTextField
+            PasteClipboardMenu.addTo(editor)
+            editor.addKeyListener(createEnterKeyListener())
         }
 
-    private enum class AuthMethod {
-        TOKEN,                  // User token
-        CLIENT_CERTIFICATE,     // Client certificate
-        OPENSHIFT,              // browser PKCE
-        OPENSHIFT_CREDENTIALS,  // username/password
-        REDHAT_SSO              // RH SSO (Sandbox)
+    private val authStrategies: List<AuthenticationStrategy> by lazy {
+        val tokenStrategy = TokenAuthenticationStrategy(
+            tfServer,
+            ::saveKubeconfig,
+            ::saveKubeconfig,
+            ::onFieldChanged,
+            ::createEnterKeyListener
+        )
+
+        val setTokenDisplay: suspend (String) -> Unit = { token ->
+            withContext(Dispatchers.Main) {
+                tokenStrategy.tfToken.text = token
+            }
+        }
+
+        listOf(
+            tokenStrategy,
+            ClientCertificateAuthenticationStrategy(
+                tfServer,
+                ::saveKubeconfig,
+                ::saveKubeconfig,
+                ::onFieldChanged
+            ),
+            OpenShiftOAuthAuthenticationStrategy(
+                tfServer,
+                ::saveKubeconfig,
+                ::saveKubeconfig,
+                setTokenDisplay
+            ),
+            OpenShiftCredentialsAuthenticationStrategy(
+                tfServer,
+                ::saveKubeconfig,
+                ::saveKubeconfig,
+                ::onFieldChanged,
+                ::createEnterKeyListener,
+                setTokenDisplay
+            ),
+            RedHatSSOAuthenticationStrategy(
+                tfServer,
+                ::saveKubeconfig,
+                ::saveKubeconfig,
+                sessionManager
+            )
+        )
     }
 
-    private var authMethod: AuthMethod = AuthMethod.TOKEN
+    private var currentStrategy: AuthenticationStrategy? = null
+        get() = field ?: authStrategies.firstOrNull().also { field = it }
 
-
-    private fun updateAuthUiState() {
-        enableNextButton?.invoke()
-    }
+    private inline fun <reified T : AuthenticationStrategy> findStrategy(): T? =
+        authStrategies.firstOrNull { it is T } as? T
 
     private fun getCurrentAuthTokenValue(): CharArray? =
-        when (authMethod) {
-            AuthMethod.TOKEN -> tfToken.password
+        when (currentStrategy?.getAuthMethod()) {
+            AuthMethod.TOKEN -> (currentStrategy as? TokenAuthenticationStrategy)?.tfToken?.password
             else -> null // other tabs don't have a token yet
         }
-
-    private fun tokenPanel() = panel {
-        row {
-            cell(tokenSuggestionLabel).align(Align.FILL)
-        }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
-            cell(tfToken).align(Align.FILL)
-        }
-        row {
-            cell(showTokenCheckbox)
-        }
-        row {
-            cell(createSaveKubeconfigCheckbox(true).also { saveKubeconfigCheckboxes += it })
-        }
-    }
-
-    private fun clientCertificatePanel() = panel {
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.client_certificate")) {
-            cell(tfClientCert).align(Align.FILL)
-        }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.client_key")) {
-            cell(tfClientKey).align(Align.FILL)
-        }
-        row {
-            cell(createSaveKubeconfigCheckbox().also { saveKubeconfigCheckboxes += it })
-        }
-    }
-
-    private fun openShiftOAuthPanel() = panel {
-        row {
-            label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.openshift_oauth_info"))
-        }
-        row {
-            cell(createSaveKubeconfigCheckbox().also { saveKubeconfigCheckboxes += it })
-        }
-    }
-
-    private fun credentialsPanel() = panel {
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.username")) {
-            cell(tfUsername).align(Align.FILL)
-        }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.password")) {
-            cell(tfPassword).align(Align.FILL)
-        }
-        row {
-            cell(showPasswordCheckbox)
-        }
-        row {
-            cell(createSaveKubeconfigCheckbox().also { saveKubeconfigCheckboxes += it })
-        }
-    }
-
-    private fun redHatSSOPanel() = panel {
-        row {
-            label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.redhat_sso_info"))
-        }
-        row {
-            label(
-                DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.redhat_sso_token_note")
-            ).comment(
-                DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.pipeline_token_comment")
-            )
-        }
-    }
 
     private fun tabPanel(p: JComponent): JComponent =
         p.apply {
@@ -313,34 +171,16 @@ class DevSpacesServerStepView(
         isOpaque = false
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
 
-        addTab(
-            DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.token"),
-            tabPanel(tokenPanel()))
-        addTab(
-            DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.client_certificate"),
-            tabPanel(clientCertificatePanel())
-        )
-        addTab(
-            DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.openshift_oauth"),
-            tabPanel(openShiftOAuthPanel()))
-        addTab(
-            DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.credentials"),
-            tabPanel(credentialsPanel()))
-        addTab(
-            DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.redhat_sso"),
-            tabPanel(redHatSSOPanel()))
+        // Add tabs for each strategy
+        authStrategies.forEach { strategy ->
+            addTab(strategy.getTabTitle(), tabPanel(strategy.createPanel()))
+        }
 
         addChangeListener {
-            authMethod = when (selectedIndex) {
-                0 -> AuthMethod.TOKEN
-                1 -> AuthMethod.CLIENT_CERTIFICATE
-                2 -> AuthMethod.OPENSHIFT
-                3 -> AuthMethod.OPENSHIFT_CREDENTIALS
-                else -> AuthMethod.REDHAT_SSO
-            }
+            currentStrategy = authStrategies.getOrNull(selectedIndex)
 
-            updateKubeconfigCheckbox.isVisible =
-                authMethod != AuthMethod.REDHAT_SSO
+            saveKubeconfigCheckbox.isVisible =
+                currentStrategy?.getAuthMethod() != AuthMethod.REDHAT_SSO
 
             enableNextButton?.invoke()
         }
@@ -365,6 +205,9 @@ class DevSpacesServerStepView(
             cell(authTabs)
                 .align(AlignX.FILL + AlignY.TOP)
         }.layout(RowLayout.LABEL_ALIGNED)
+        row {
+            cell(saveKubeconfigCheckbox)
+        }
     }.apply {
         isOpaque = false
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
@@ -391,25 +234,14 @@ class DevSpacesServerStepView(
 
     override fun onInit() {
         startKubeconfigMonitor()
-        updateAuthUiState()
-        setupTokenSuggestionLabel()
-        clipboardMonitor.start()
-        clipboardMonitor.checkNow()?.let { suggestToken(it) }
+        enableNextButton?.invoke()
 
-        showTokenCheckbox.addActionListener {
-            tfToken.echoChar = if (showTokenCheckbox.isSelected) 0.toChar() else '•'
-        }
-
-        showPasswordCheckbox.addActionListener {
-            tfPassword.echoChar = if (showPasswordCheckbox.isSelected) 0.toChar() else '•'
-        }
+        findStrategy<TokenAuthenticationStrategy>()?.startMonitoring(component)
     }
 
     override fun onDispose() {
-        tokenLabelListener?.let {
-            tokenSuggestionLabel.removeMouseListener(it)
-        }
-        clipboardMonitor.stop()
+        findStrategy<TokenAuthenticationStrategy>()?.stopMonitoring()
+
         stopKubeconfigMonitor()
         super.onDispose()
     }
@@ -419,10 +251,14 @@ class DevSpacesServerStepView(
             (event.item as? Cluster)?.let { selectedCluster ->
                 if (allClusters.contains(selectedCluster)) {
                     tfCertAuthorityData.text = selectedCluster.certificateAuthorityData
-                    tfToken.text = selectedCluster.token
-                    tfClientCert.text = selectedCluster.clientCertData
-                    tfClientKey.text = selectedCluster.clientKeyData
-                    updateKubeconfigCheckbox.isSelected = false
+                    findStrategy<TokenAuthenticationStrategy>()?.tfToken?.apply {
+                        text = selectedCluster.token
+                    }
+                    findStrategy<ClientCertificateAuthenticationStrategy>()?.apply {
+                        tfClientCert.text = selectedCluster.clientCertData
+                        tfClientKey.text = selectedCluster.clientKeyData
+                    }
+                    saveKubeconfigCheckbox.isSelected = false
                 }
             }
         }
@@ -455,15 +291,13 @@ class DevSpacesServerStepView(
                     && currentToken?.isNotEmpty() == true
                     && !cluster.token.toCharArray().contentEquals(currentToken)
 
-        saveKubeconfigCheckboxes.forEach { checkbox ->
-            val requiresTokenDiff =
-                checkbox.getClientProperty(SAVE_REQUIRES_TOKEN_DIFF) as? Boolean ?: false
+        // Only TokenAuthenticationStrategy requires token diff to enable save
+        val requiresTokenDiff = currentStrategy is TokenAuthenticationStrategy
 
-            checkbox.isEnabled =
-                !allClusters.contains(cluster)
-                        || !requiresTokenDiff
-                        || tokenChanged
-        }
+        saveKubeconfigCheckbox.isEnabled =
+            !allClusters.contains(cluster)
+                    || !requiresTokenDiff
+                    || tokenChanged
     }
 
 
@@ -506,6 +340,7 @@ class DevSpacesServerStepView(
     override fun onNext(): Boolean {
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
         val server = selectedCluster.url
+        val strategy = currentStrategy ?: return false
         var success = false
 
         if (!confirmAuthSwitchIfNeeded()) return false
@@ -519,156 +354,16 @@ class DevSpacesServerStepView(
                         reporter.text("Connecting to cluster...")
 
                         val tlsContext = resolveSslContext(server)
-
                         val certAuthorityData = tfCertAuthorityData.text
 
-                        when (authMethod) {
-                            AuthMethod.TOKEN -> {
-                                reporter.text("Validating token...")
-
-                                val token = String(tfToken.password)
-
-                                val client = createValidatedApiClient(
-                                    server, certAuthorityData,
-                                    token, null, null, tlsContext,
-                                    "Authentication failed: invalid server URL or token."
-                                )
-
-                                saveKubeconfig(selectedCluster, token, reporter)
-                                devSpacesContext.client = client
-                            }
-
-                            AuthMethod.CLIENT_CERTIFICATE -> {
-                                reporter.text("Validating client certificate...")
-
-                                val clientCertPem = tfClientCert.text
-                                val clientKeyPem = tfClientKey.text
-
-                                val client = createValidatedApiClient(
-                                    server, certAuthorityData,
-                                    null, clientCertPem, clientKeyPem, tlsContext,
-                                    "Authentication failed: invalid server URL or token."
-                                )
-
-                                require(Projects(client).isAuthenticated()) {
-                                    "Authentication failed: invalid client certificate or key."
-                                }
-
-                                saveKubeconfig(selectedCluster, clientCertPem, clientKeyPem, reporter)
-                                devSpacesContext.client = client
-                            }
-
-                            AuthMethod.OPENSHIFT_CREDENTIALS -> {
-                                reporter.text("Authenticating with OpenShift credentials...")
-
-                                val username = tfUsername.text
-                                val password = String(tfPassword.password)
-
-                                val sessionManager = OpenShiftAuthSessionManager()
-
-                                val osToken = sessionManager.loginWithCredentials(
-                                    apiServerUrl = selectedCluster.url,
-                                    username = username,
-                                    password = password,
-                                    tlsContext.sslContext
-                                )
-
-                                val finalToken = TokenModel(
-                                    accessToken = osToken.accessToken,
-                                    expiresAt = osToken.expiresAt,
-                                    accountLabel = osToken.accountLabel,
-                                    kind = AuthTokenKind.TOKEN,
-                                    clusterApiUrl = selectedCluster.url
-                                )
-
-                                reporter.text("Validating cluster access...")
-
-                                val client = createValidatedApiClient(
-                                    server, certAuthorityData,
-                                    finalToken.accessToken, null, null, tlsContext,
-                                    "Authentication failed: invalid OpenShift credentials."
-                                )
-
-                                withContext(Dispatchers.Main) {
-                                    tfToken.text = finalToken.accessToken
-                                }
-                                saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
-                                devSpacesContext.client = client
-                            }
-
-                            AuthMethod.OPENSHIFT -> {
-                                reporter.text("Authenticating with Openshift...")
-
-                                val openshiftSSessionManager = OpenShiftAuthSessionManager()
-                                val uri = openshiftSSessionManager.startLogin(
-                                    selectedCluster.url,
-                                    tlsContext.sslContext
-                                )
-                                withContext(Dispatchers.Main) {
-                                    BrowserUtil.browse(uri)
-                                }
-
-                                reporter.text("Waiting for you to complete login in your browser...")
-                                ensureActive()
-
-                                reporter.text("Obtaining OpenShift access...")
-                                val osToken = openshiftSSessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
-
-                                val finalToken = TokenModel(
-                                    accessToken = osToken.accessToken,
-                                    expiresAt = osToken.expiresAt,
-                                    accountLabel = osToken.accountLabel,
-                                    kind = AuthTokenKind.TOKEN,
-                                    clusterApiUrl = selectedCluster.url
-                                )
-
-                                reporter.text("Validating cluster access...")
-
-                                val client = createValidatedApiClient(
-                                    server, certAuthorityData,
-                                    finalToken.accessToken, null, null, tlsContext,
-                                    "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
-                                )
-
-                                withContext(Dispatchers.Main) {
-                                    tfToken.text = finalToken.accessToken
-                                }
-                                saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
-                                devSpacesContext.client = client
-                            }
-
-                            AuthMethod.REDHAT_SSO -> {
-                                reporter.text("Authenticating with Red Hat...")
-
-                                val uri = sessionManager.startLogin(sslContext = tlsContext.sslContext)
-                                withContext(Dispatchers.Main) {
-                                    BrowserUtil.browse(uri)
-                                }
-
-                                reporter.text("Waiting for you to complete login in your browser...")
-                                ensureActive()
-
-                                val ssoToken = sessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
-                                reporter.text("Obtaining OpenShift access...")
-
-                                val sandboxAuth = SandboxClusterAuthProvider()
-                                val finalToken = sandboxAuth.authenticate(ssoToken)
-
-                                reporter.text("Validating cluster access...")
-
-                                val client = createValidatedApiClient(
-                                    server, certAuthorityData,
-                                    finalToken.accessToken, null, null, tlsContext,
-                                    "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
-                                )
-
-                                // Do not save SSO tokens
-                                if (finalToken.kind == AuthTokenKind.PIPELINE) {
-                                    saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
-                                }
-                                devSpacesContext.client = client
-                            }
-                        }
+                        strategy.authenticate(
+                            selectedCluster,
+                            server,
+                            certAuthorityData,
+                            tlsContext,
+                            reporter,
+                            devSpacesContext
+                        )
                     }
                 }
             }
@@ -690,10 +385,12 @@ class DevSpacesServerStepView(
     }
 
     private fun confirmAuthSwitchIfNeeded(): Boolean {
-        val tokenPresent = tfToken.password.isNotEmpty()
-        val certPresent = tfClientCert.text.isNotBlank() || tfClientKey.text.isNotBlank()
+        val tokenPresent = findStrategy<TokenAuthenticationStrategy>()?.tfToken?.password?.isNotEmpty() == true
+        val certStrategy = findStrategy<ClientCertificateAuthenticationStrategy>()
+        val certPresent = certStrategy?.tfClientCert?.text?.isNotBlank() == true
+                || certStrategy?.tfClientKey?.text?.isNotBlank() == true
 
-        val (message, shouldAsk) = when (authMethod) {
+        val (message, shouldAsk) = when (currentStrategy?.getAuthMethod()) {
             AuthMethod.TOKEN -> {
                 if (certPresent) {
                     "Switching to token authentication will remove the configured client certificate. Continue?" to true
@@ -721,38 +418,8 @@ class DevSpacesServerStepView(
             .ask(component)
     }
 
-    @Throws(IllegalArgumentException::class)
-    private fun createValidatedApiClient(
-        server: String,
-        certificateAuthorityData: String? = null,
-        token: String? = null,
-        clientCertPem: String? = null,
-        clientKeyPem: String? = null,
-        tlsContext: TlsContext,
-        errorMessage: String? = null
-    ): ApiClient = OpenShiftClientFactory(KubeConfigUtils)
-        .create(server, certificateAuthorityData?.toCharArray(), token?.toCharArray(),
-            clientCertPem?.toCharArray(), clientKeyPem?.toCharArray(), tlsContext)
-        .also { client ->
-            require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
-        }
-
     override fun isNextEnabled(): Boolean =
-        when (authMethod) {
-            AuthMethod.TOKEN ->
-                tfToken.password?.isNotEmpty() == true
-
-            AuthMethod.CLIENT_CERTIFICATE ->
-                tfClientCert.text.isNotBlank() && tfClientKey.text.isNotBlank()
-
-            AuthMethod.OPENSHIFT_CREDENTIALS ->
-                tfUsername.text.isNotBlank() &&
-                        tfPassword.password?.isNotEmpty() == true
-
-            AuthMethod.OPENSHIFT,
-            AuthMethod.REDHAT_SSO ->
-                tfServer.selectedItem != null
-        }
+        currentStrategy?.isNextEnabled() ?: false
 
     private val sessionTrustStore = SessionTlsTrustStore()
     private val persistentKeyStore = PersistentKeyStore(
@@ -838,9 +505,13 @@ class DevSpacesServerStepView(
             ?: clusters.firstOrNull()
         tfServer.selectedItem = toSelect
         tfCertAuthorityData.text = toSelect?.certificateAuthorityData ?: ""
-        tfToken.text = toSelect?.token ?: ""
-        tfClientCert.text = toSelect?.clientCertData ?: ""
-        tfClientKey.text = toSelect?.clientKeyData ?: ""
+        findStrategy<TokenAuthenticationStrategy>()?.tfToken?.apply {
+            text = toSelect?.token ?: ""
+        }
+        findStrategy<ClientCertificateAuthenticationStrategy>()?.apply {
+            tfClientCert.text = toSelect?.clientCertData ?: ""
+            tfClientKey.text = toSelect?.clientKeyData ?: ""
+        }
     }
 
     private fun startKubeconfigMonitor() {
