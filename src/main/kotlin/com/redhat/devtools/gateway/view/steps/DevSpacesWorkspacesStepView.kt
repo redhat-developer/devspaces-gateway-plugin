@@ -32,6 +32,7 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.DevSpacesIcons
 import com.redhat.devtools.gateway.openshift.*
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.terminal.WorkspaceTerminal
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
 import kotlinx.coroutines.runBlocking
@@ -54,8 +55,10 @@ class DevSpacesWorkspacesStepView(
 
     private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
+    private var openTerminalCheckbox: JCheckBox? = null
 
     private var watchManager: DevWorkspaceWatchManager? = null
+    private var terminalOpened = false
 
     override fun dispose() {
     }
@@ -102,6 +105,12 @@ class DevSpacesWorkspacesStepView(
             ) {
                 refreshAllDevWorkspaces()
             }.gap(RightGap.SMALL).align(AlignX.RIGHT)
+        }.bottomGap(BottomGap.SMALL)
+
+        row {
+            openTerminalCheckbox = checkBox("Open local terminal to workspace")
+                .comment("Opens a terminal window connected to the workspace pod after connecting")
+                .component
         }
     }.apply {
         background = WelcomeScreenUIManager.getMainAssociatedComponentBackground()
@@ -318,6 +327,9 @@ class DevSpacesWorkspacesStepView(
             }
         }
 
+        val shouldOpenTerminal = openTerminalCheckbox?.isSelected ?: false
+        terminalOpened = false // Reset flag for new connection
+
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
@@ -328,6 +340,12 @@ class DevSpacesWorkspacesStepView(
                                 devSpacesContext.devWorkspace.name
                             )
                             enableButtons()
+
+                            // Open terminal if checkbox was checked (only once)
+                            if (shouldOpenTerminal && !terminalOpened) {
+                                terminalOpened = true
+                                openWorkspaceTerminal()
+                            }
                         },
                         {
                             enableButtons()
@@ -356,6 +374,20 @@ class DevSpacesWorkspacesStepView(
             true,
             null
         )
+    }
+
+    private fun openWorkspaceTerminal() {
+        try {
+            val namespace = devSpacesContext.devWorkspace.namespace
+            val workspaceName = devSpacesContext.devWorkspace.name
+
+            val success = WorkspaceTerminal.open(namespace, workspaceName)
+            if (!success) {
+                thisLogger().warn("Failed to open workspace terminal for $namespace/$workspaceName")
+            }
+        } catch (e: Exception) {
+            thisLogger().error("Error opening workspace terminal", e)
+        }
     }
 
     private fun waitDevWorkspaceNotStopped(devWorkspace: DevWorkspace): Boolean {
