@@ -91,9 +91,7 @@ class TokenAuthenticationStrategy(
             cell(tokenSuggestionLabel).align(Align.FILL)
         }
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
-            cell(tfToken).align(Align.FILL)
-        }
-        row {
+            cell(tfToken).resizableColumn().align(Align.FILL)
             cell(showTokenCheckbox)
         }
     }
