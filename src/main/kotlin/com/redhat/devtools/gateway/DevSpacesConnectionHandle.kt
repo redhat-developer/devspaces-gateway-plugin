@@ -26,12 +26,12 @@ class DevSpacesConnectionHandle(
     private val wsName: String
 ) : GatewayConnectionHandle(lifetime, clientHandle) {
     override fun customComponentProvider(lifetime: Lifetime) = object : CustomConnectionFrameComponentProvider {
-        override val closeConfirmationText = "Disconnect from DevWorkspace ${wsName}?"
+        override val closeConfirmationText = "Disconnect from workspace ${wsName}?"
         override fun createComponent(context: CustomConnectionFrameContext) = componentProvider.invoke()
     }
 
     override fun getTitle(): String {
-        return "DevWorkspace $wsName"
+        return "Workspace $wsName"
     }
 
     override fun hideToTrayOnStart(): Boolean {

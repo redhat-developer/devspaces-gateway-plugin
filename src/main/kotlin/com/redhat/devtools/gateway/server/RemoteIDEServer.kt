@@ -21,6 +21,8 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.util.concurrent.CancellationException
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Represent an IDE server running in a CDE.
@@ -30,7 +32,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     private var container: V1Container
 
     companion object {
-        var readyTimeout: Long = 60
+        var readyTimeout: Long = 60 // seconds
     }
 
     init {
@@ -68,12 +70,19 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             } ?: RemoteIDEServerStatus.empty()
         }
 
+    /**
+     * Waits for the server to be ready for the given timeout period.
+     *
+     * @param checkCancelled the check for user cancellation.
+     * @param timeout maximum waiting period in seconds
+     * @return True if the server is ready within the timeout, False otherwise.
+     */
     @Throws(IOException::class)
     suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = readyTimeout): Boolean {
         return doWaitServerState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
-                    "Remote IDE server is not ready after $readyTimeout seconds.",
+                    "Workspace IDE is not ready after $readyTimeout seconds.",
                 )
             }
     }
@@ -87,7 +96,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             getStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
-            thisLogger().debug("Failed to check remote IDE server state.", e)
+            thisLogger().debug("Failed to check workspace IDE state.", e)
             false
         }
     }
@@ -110,7 +119,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         timeout: Long = readyTimeout,
         checkCancelled: (() -> Unit)? = null
     ): Boolean =
-        withTimeoutOrNull(timeout * 1000) { // seconds → ms
+        withTimeoutOrNull(timeout.seconds) { // seconds → ms
             while (true) {
                 checkCancelled?.invoke()
                 if (isServerState(isReadyState, checkCancelled)) {
@@ -118,7 +127,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                 }
 
                 yield()
-                delay(500)
+                delay(500.milliseconds)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -140,9 +149,11 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class)
     private fun findContainer(): V1Container {
-        return pod.spec!!.containers.find { container -> container.ports?.any { port -> port.name == "idea-server" } != null }
+        return pod.spec!!.containers.find { container ->
+            container.ports?.any { port -> port.name == "idea-server" } != null
+        }
             ?: throw IOException(
-                "Remote server container not found in the Pod: ${pod.metadata?.name}"
+                "Workspace IDE container not found in the Pod: ${pod.metadata?.name}"
             )
     }
 }

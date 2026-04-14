@@ -68,7 +68,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         val thinClient = handle.clientHandle
                             ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
-                        indicator.text = "Waiting for remote IDE to start..."
+                        indicator.text = "Waiting for workspace IDE to start..."
 
                         val ready = CompletableDeferred<GatewayConnectionHandle?>()
 
@@ -115,7 +115,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         indicator.dispose()
                     }
                 },
-                "Connecting to Remote IDE...",
+                "Connecting to Workspace IDE...",
                 true,
                 null
             )
@@ -129,7 +129,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     ): (Unit) -> Unit = {
         ApplicationManager.getApplication().invokeLater {
             if (!ready.isCompleted) {
-                indicator.text = "Remote IDE has started successfully"
+                indicator.text = "Workspace IDE has started successfully"
                 indicator.text2 = "Opening project window…"
                 runDelayed(3000) {
                     if (indicator.isRunning) indicator.stop()
@@ -160,7 +160,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     ): (Unit) -> Unit = {
         ApplicationManager.getApplication().invokeLater {
             if (!ready.isCompleted) {
-                indicator.text = "Remote IDE closed unexpectedly."
+                indicator.text = "Workspace IDE closed unexpectedly."
                 runDelayed(2000) {
                     if (indicator.isRunning) indicator.stop()
                     if (ready.isActive) ready.complete(null)
@@ -198,10 +198,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         this.clientFactory = factory
         ctx.client = factory.create()
 
-        indicator.update(message = "Fetching DevWorkspace “$dwName” from namespace “$dwNamespace”…")
+        indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
-        indicator.update(message = "Establishing remote IDE connection…")
+        indicator.update(message = "Connecting to workspace IDE…")
         val thinClient = DevSpacesConnection(ctx)
             .connect({}, {}, {},
                 onProgress = { value ->
@@ -260,7 +260,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         if (!err.isNotFound()) return false
 
         val message = """
-            Workspace or DevWorkspace support not found.
+            Workspace support not found.
             You're likely connected to a cluster that doesn't have the DevWorkspace Operator installed, or the specified workspace doesn't exist.
         
             Please verify your Kubernetes context, namespace, and that the DevWorkspace Operator is installed and running.

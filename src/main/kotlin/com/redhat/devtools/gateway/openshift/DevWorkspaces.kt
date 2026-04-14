@@ -20,9 +20,11 @@ import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 data class DevWorkspaceListResult(
@@ -166,6 +168,44 @@ class DevWorkspaces(private val client: ApiClient) {
         doPatch(namespace, name, patch)
     }
 
+    @Throws(IOException::class, ApiException::class, CancellationException::class)
+    fun startAndWait(
+        namespace: String,
+        name: String,
+        timeout: Long = RUNNING_TIMEOUT,
+        checkCancelled: (() -> Unit)? = null
+    ) {
+        val devWorkspace = get(namespace, name)
+
+        if (!devWorkspace.started) {
+            checkCancelled?.invoke()
+            start(namespace, name)
+        }
+
+        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeout, checkCancelled) }) {
+            throw IOException("Workspace '$name' is not running after $timeout seconds")
+        }
+    }
+
+    @Throws(IOException::class, ApiException::class, CancellationException::class)
+    fun stopAndWait(
+        namespace: String,
+        name: String,
+        timeout: Long = RUNNING_TIMEOUT,
+        checkCancelled: (() -> Unit)? = null
+    ) {
+        val devWorkspace = get(namespace, name)
+
+        if (devWorkspace.started) {
+            checkCancelled?.invoke()
+            stop(namespace, name)
+        }
+
+        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeout, checkCancelled) }) {
+            throw IOException("Workspace '$name' has not stopped after $timeout seconds")
+        }
+    }
+
     @Throws(ApiException::class, IOException::class, CancellationException::class)
     suspend fun waitPhase(
         namespace: String,
@@ -180,7 +220,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: Exception) {
-                    delay(500)
+                    delay(500.milliseconds)
                     continue
                 }
 
@@ -190,7 +230,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     FAILED, STOPPED, STOPPING -> return@withTimeoutOrNull false
                 }
 
-                delay(500)
+                delay(500.milliseconds)
             }
 
             @Suppress("UNREACHABLE_CODE")
