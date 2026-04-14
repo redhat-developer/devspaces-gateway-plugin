@@ -29,7 +29,12 @@ data class RemoteIDEServerStatus(
     val isReady: Boolean
         get() {
             return !joinLink.isNullOrBlank()
-                && !projects.isNullOrEmpty() }
+        }
+
+    val hasProject: Boolean
+        get() {
+            return !projects.isNullOrEmpty()
+        }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

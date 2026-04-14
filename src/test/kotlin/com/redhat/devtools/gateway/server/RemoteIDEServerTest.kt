@@ -23,6 +23,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
 import java.io.IOException
 
@@ -66,7 +67,7 @@ class RemoteIDEServerTest {
     }
 
     @Test
-    fun `#waitServerReady should throw if server status has no join link`() {
+    fun `#waitServerReady should reach timeout and throw if server status has no join link`() {
         // given
         val withoutJoinLink = remoteIDEServerStatus(
             null,
@@ -87,7 +88,7 @@ class RemoteIDEServerTest {
     }
 
     @Test
-    fun `#waitServerReady should throw if server status has a join link but no projects`() {
+    fun `#waitServerReady should NOT reach timeout and throw if server status has a join link but no projects`() {
         // given
         val withoutProjects = remoteIDEServerStatus(
             "https://starwars.galaxy?peridea",
@@ -98,7 +99,7 @@ class RemoteIDEServerTest {
         } returns withoutProjects
 
         // when, then
-        assertThrows<IOException> {
+        assertDoesNotThrow {
             runBlocking {
                 remoteIDEServer.waitServerReady(timeout = 1)
             }
@@ -128,7 +129,7 @@ class RemoteIDEServerTest {
     }
 
     @Test
-    fun `#waitServerTerminated should return true if server status has a join link but no projects`() {
+    fun `#waitServerTerminated should return false if server status has a join link but no projects`() {
         // given
         val withoutProjects = remoteIDEServerStatus(
             "https://starwars.galaxy?peridea",
@@ -144,7 +145,7 @@ class RemoteIDEServerTest {
         }
 
         // then
-        assertThat(result).isTrue
+        assertThat(result).isFalse
     }
 
     @Test

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2026 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -17,6 +17,7 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.ColoredListCellRenderer
@@ -31,6 +32,9 @@ import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.DevSpacesIcons
 import com.redhat.devtools.gateway.openshift.*
+import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
+import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
@@ -38,7 +42,11 @@ import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.runBlocking
 import java.awt.Dimension
 import java.awt.FontMetrics
-import javax.swing.*
+import java.util.concurrent.CancellationException
+import javax.swing.DefaultListModel
+import javax.swing.JButton
+import javax.swing.JList
+import javax.swing.ListModel
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
 
@@ -100,10 +108,8 @@ class DevSpacesWorkspacesStepView(
     override fun onInit() {
         listDWDataModel.clear() // avoid glitch where user would see old list content before it's cleared
         listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
-        listDevWorkspaces.onDoubleClick { 
-            if (isRunning(getSelectedWorkspace())) {
-                connect()
-            }
+        listDevWorkspaces.onDoubleClick {
+            onNext()
         }
         listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
@@ -120,11 +126,41 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun onNext(): Boolean {
-        watchManager?.stop()
-        if (!listDevWorkspaces.isSelectionEmpty) {
-            connect()
+        val workspace = getSelectedWorkspace() ?: return false
+        if (!isRunning(workspace)) {
+            return false
         }
-        return false
+        devSpacesContext.devWorkspace = workspace
+        val serverStatus = try {
+            getServerStatus()
+        } catch (e: Exception) {
+            if (e.isCancellationException()) {
+                return false // canceled, stay on this step
+            }
+            thisLogger().error("Could not check workspace IDE status", e)
+            if (Dialogs.ideNotResponding()) {
+                stopDevWorkspace()
+                connect()
+            }
+            return false
+        } ?: return false // Canceled, stay on this step
+
+        if (!serverStatus.hasProject) {
+            val proceed = MessageDialogBuilder
+                .yesNo(
+                    "Workspace IDE Without Project",
+                    "The Workspace IDE has no project.\nWould you like to connect anyway?"
+                )
+                .asWarning()
+                .yesText("Connect Anyway")
+                .noText("Cancel")
+                .ask(component)
+
+            if (!proceed) return false // Stay on this step
+        }
+
+        connect()
+        return false // Stay on this step after connection
     }
 
     private fun initListListeners(disposable: Disposable) {
@@ -208,22 +244,25 @@ class DevSpacesWorkspacesStepView(
 
     private fun startDevWorkspace() {
         val selectedWorkspace = getSelectedWorkspace() ?: return
-        DevWorkspaces(devSpacesContext.client)
-            .start(
-                selectedWorkspace.namespace,
-                selectedWorkspace.name
-            )
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
-                if (waitDevWorkspaceNotStopped(selectedWorkspace)) {
+                try {
+                    DevWorkspaces(devSpacesContext.client).start(
+                        selectedWorkspace.namespace,
+                        selectedWorkspace.name
+                    )
                     refreshDevWorkspace(
                         selectedWorkspace.namespace,
                         selectedWorkspace.name
                     )
                     enableButtons()
+                } catch (e: Exception) {
+                    thisLogger().error("Failed to start workspace", e)
+                    // UI already shows current state, just enable buttons
+                    enableButtons()
                 }
             },
-            "Refreshing Workspace",
+            "Starting Workspace",
             true,
             null
         )
@@ -231,34 +270,81 @@ class DevSpacesWorkspacesStepView(
 
     private fun stopDevWorkspace() {
         val selectedWorkspace = getSelectedWorkspace() ?: return
-        DevWorkspaces(devSpacesContext.client)
-            .stop(
-                selectedWorkspace.namespace,
-                selectedWorkspace.name
-            )
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
-                if (waitDevWorkspaceStopped(selectedWorkspace)) {
+                try {
+                    DevWorkspaces(devSpacesContext.client).stop(
+                        selectedWorkspace.namespace,
+                        selectedWorkspace.name
+                    )
                     refreshDevWorkspace(
                         selectedWorkspace.namespace,
                         selectedWorkspace.name
                     )
                     enableButtons()
+                } catch (e: Exception) {
+                    thisLogger().error("Failed to stop workspace", e)
+                    // UI already shows current state, just enable buttons
+                    enableButtons()
                 }
             },
-            "Refreshing Workspace",
+            "Stopping Workspace",
             true,
             null
         )
     }
 
-    private fun connect() {
-        getSelectedWorkspace().apply {
-            if (this != null) {
-                devSpacesContext.devWorkspace = this
-            }
-        }
+    private fun getServerStatus(): RemoteIDEServerStatus? {
+        var status: RemoteIDEServerStatus? = null
+        var errorToThrow: Exception? = null
 
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                try {
+                    val progressIndicator = ProgressManager.getInstance().progressIndicator
+                    progressIndicator.text = "Checking workspace IDE Status..."
+                    val checkCancelled = {
+                        if (progressIndicator.isCanceled) throw CancellationException()
+                    }
+
+                    if (!verifyWorkspaceRunning(checkCancelled)) {
+                        return@runProcessWithProgressSynchronously
+                    }
+
+                    val remoteIdeServer = RemoteIDEServer(devSpacesContext)
+                    status = runBlocking {
+                        remoteIdeServer.waitServerReady(checkCancelled)
+                        remoteIdeServer.getStatus()
+                    }
+                } catch (e: Exception) {
+                    if (e.isCancellationException()) {
+                        return@runProcessWithProgressSynchronously
+                    }
+                    errorToThrow = e
+                }
+            },
+            "Connect to Workspace IDE",
+            true,
+            null
+        )
+
+        errorToThrow?.let { throw it }
+        return status
+    }
+
+    private fun verifyWorkspaceRunning(checkCancelled: (() -> Unit)? = null): Boolean {
+        return runBlocking {
+            DevWorkspaces(devSpacesContext.client).waitPhase(
+                devSpacesContext.devWorkspace.namespace,
+                devSpacesContext.devWorkspace.name,
+                DevWorkspaces.RUNNING,
+                DevWorkspaces.RUNNING_TIMEOUT,
+                checkCancelled
+            )
+        }
+    }
+
+    private fun connect() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
@@ -289,24 +375,14 @@ class DevSpacesWorkspacesStepView(
                         devSpacesContext.devWorkspace.name
                     )
                     enableButtons()
-                    thisLogger().error("Remote server connection failed.", e)
-                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace", "Connection Error")
+                    thisLogger().error("Workspace IDE connection failed.", e)
+                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace IDE", "Connection Error")
                 }
             },
             DevSpacesBundle.message("connector.loader.devspaces.connecting.text"),
             true,
             null
         )
-    }
-
-    private fun waitDevWorkspaceNotStopped(devWorkspace: DevWorkspace): Boolean {
-        return runBlocking { DevWorkspaces(devSpacesContext.client)
-            .waitPhaseChanges(
-                devWorkspace.namespace,
-                devWorkspace.name,
-                listOf(DevWorkspaces.STOPPED, DevWorkspaces.FAILED),
-                30
-            ) }
     }
 
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
