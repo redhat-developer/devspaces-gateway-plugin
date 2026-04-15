@@ -58,6 +58,7 @@ class DevSpacesWorkspacesStepView(
     private var watchManager: DevWorkspaceWatchManager? = null
 
     override fun dispose() {
+        watchManager?.stop()
     }
 
     fun DefaultListModel<DevWorkspace>.indexOfFirst(
@@ -235,12 +236,11 @@ class DevSpacesWorkspacesStepView(
         watchManager?.stop()
         val lastResourceVersions = mutableMapOf<String, String?>()
         try {
-            val devWorkspaces = ArrayList<DevWorkspace>()
-            Projects(devSpacesContext.client).list().forEach { project ->
+            val devWorkspaces = Projects(devSpacesContext.client).list().flatMap { project ->
                 val namespace = Utils.getValue(project, arrayOf("metadata", "name")) as String
-                val dwListResult = DevWorkspaces(devSpacesContext.client).listWithResult(namespace)
-                lastResourceVersions[namespace] = dwListResult.resourceVersion
-                devWorkspaces.addAll(dwListResult.items)
+                DevWorkspaces(devSpacesContext.client).listWithResult(namespace).also { dwListResult ->
+                    lastResourceVersions[namespace] = dwListResult.resourceVersion
+                }.items
             }
 
             invokeLater {
