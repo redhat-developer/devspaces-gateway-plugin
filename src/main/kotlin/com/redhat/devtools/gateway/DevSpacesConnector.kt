@@ -26,7 +26,7 @@ class DevSpacesConnector : GatewayConnector {
         get() = DevSpacesIcons.LOGO
 
     override fun createView(lifetime: Lifetime): GatewayConnectorView {
-        return DevSpacesMainView()
+        return DevSpacesMainView(lifetime)
     }
 
     override fun getActionText(): String {

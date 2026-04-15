@@ -16,6 +16,7 @@ import com.redhat.devtools.gateway.view.steps.DevSpacesWorkspacesStepView
 import com.redhat.devtools.gateway.view.steps.DevSpacesServerStepView
 import com.redhat.devtools.gateway.view.steps.DevSpacesWizardStep
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.RightGap
@@ -35,7 +36,9 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
 
     init {
         steps.add(DevSpacesServerStepView(devSpacesContext, { enableNextButton() }) { nextStep() })
-        steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNextButton() })
+        steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNextButton() }.also {
+            Disposer.register(this, it)
+        })
 
         addToBottom(createButtons())
         applyStep(0)
