@@ -30,29 +30,34 @@ class DevWorkspaceWatcher(
     private val scope: CoroutineScope,
 ) {
     private var job: Job? = null
+    @Volatile
+    private var stopped = false
 
     fun start(latestResourceVersion: String? = null) {
+        stopped = false
         job = scope.launch {
             watchLoop(latestResourceVersion)
         }
     }
 
     fun stop() {
+        stopped = true
         job?.cancel()
         job = null
     }
 
     private suspend fun watchLoop(latestResourceVersion: String? = null) {
-        while (scope.isActive) {
+        while (scope.isActive && !stopped) {
             val watcher = createWatcher(namespace, latestResourceVersion)
             val matches = createFilter(namespace)
 
             try {
                 for (event in watcher) {
-                    if (!scope.isActive) break
+                    if (!scope.isActive || stopped) break
 
                     val dw = DevWorkspace.from(event.`object`)
                     withContext(Dispatchers.EDT) {
+                        if (stopped) return@withContext
                         when (event.type) {
                             "ADDED"    -> if(matches(dw)) listener.onAdded(dw)
                             "MODIFIED" -> if(matches(dw)) listener.onUpdated(dw) else listener.onDeleted(dw)
