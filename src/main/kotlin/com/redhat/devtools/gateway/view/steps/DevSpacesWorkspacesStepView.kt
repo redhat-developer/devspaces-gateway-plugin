@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -34,6 +34,7 @@ import com.redhat.devtools.gateway.openshift.*
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
+import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.runBlocking
 import java.awt.Dimension
 import java.awt.FontMetrics
@@ -55,20 +56,7 @@ class DevSpacesWorkspacesStepView(
     private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
 
-    private var watchManager: DevWorkspaceWatchManager? = null
-
-    override fun dispose() {
-        watchManager?.stop()
-    }
-
-    fun DefaultListModel<DevWorkspace>.indexOfFirst(
-        predicate: (DevWorkspace) -> Boolean
-    ): Int {
-        for (i in 0 until size()) {
-            if (predicate(get(i))) return i
-        }
-        return -1
-    }
+    private var watchManager: WorkspacesWatch? = null
 
     override val component = panel {
         row {
@@ -101,7 +89,7 @@ class DevSpacesWorkspacesStepView(
             button(
                 DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.refresh")
             ) {
-                refreshAllDevWorkspaces()
+                refreshAndWatchAllDevWorkspaces()
             }.gap(RightGap.SMALL).align(AlignX.RIGHT)
         }
     }.apply {
@@ -110,6 +98,7 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun onInit() {
+        listDWDataModel.clear() // avoid glitch where user would see old list content before it's cleared
         listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
         listDevWorkspaces.onDoubleClick { 
             if (isRunning(getSelectedWorkspace())) {
@@ -120,59 +109,9 @@ class DevSpacesWorkspacesStepView(
         listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
 
         initListListeners(this)
-        refreshAllDevWorkspaces()
 
-        val devWorkspaces = DevWorkspaces(devSpacesContext.client)
-        watchManager = DevWorkspaceWatchManager(
-            client = devSpacesContext.client,
-            createWatcher = { ns, latestResourceVersion -> devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion) },
-            createFilter = { ns -> devWorkspaces.createFilter(ns) },
-            listener = object : DevWorkspaceListener {
-                override fun onAdded(dw: DevWorkspace) {
-                    onUpdated(dw)
-                }
-
-                override fun onUpdated(dw: DevWorkspace) {
-                    SwingUtilities.invokeLater {
-                        val idx = listDWDataModel.indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
-                        if (idx == -1) {
-                            val index = findInsertIndex(dw)
-                            listDWDataModel.add(index, dw)
-                        } else {
-                            listDWDataModel.set(idx, dw)
-                        }
-                    }
-                }
-
-                override fun onDeleted(dw: DevWorkspace) {
-                    SwingUtilities.invokeLater {
-                        val idx = listDWDataModel.indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
-                        if (idx >= 0) {
-                            listDWDataModel.remove(idx)
-                        }
-                    }
-                }
-
-                private fun findInsertIndex(dw: DevWorkspace): Int {
-                    val n = listDWDataModel.size
-                    val groupStart = (0 until n).firstOrNull {
-                        listDWDataModel[it].namespace >= dw.namespace
-                    } ?: n
-
-                    val insertIndex = (groupStart until n).firstOrNull {
-                        listDWDataModel[it].namespace == dw.namespace && listDWDataModel[it].name >= dw.name
-                    } ?: run {
-                        var endOfGroup = groupStart
-                        while (endOfGroup < n && listDWDataModel[endOfGroup].namespace == dw.namespace) endOfGroup++
-                        endOfGroup
-                    }
-
-                    return insertIndex
-                }
-
-            }
-        )
-        watchManager!!.start()
+        watchManager = WorkspacesWatch(devSpacesContext.client, listDWDataModel)
+        refreshAndWatchAllDevWorkspaces()
     }
 
     override fun onPrevious(): Boolean {
@@ -205,21 +144,56 @@ class DevSpacesWorkspacesStepView(
         }
     }
 
-    private fun refreshAllDevWorkspaces() {
+    private fun refreshAndWatchAllDevWorkspaces() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
+                watchManager?.stop()
+                var lastResourceVersions = emptyMap<String, String?>()
                 try {
-                    doRefreshAllDevWorkspaces()
+                    lastResourceVersions = refreshAllDevWorkspaces()
                     enableButtons()
                 } catch (e: Exception) {
                     thisLogger().error("Refreshing workspaces failed.", e)
                     Dialogs.error("Could not refresh workspaces: " + e.messageWithoutPrefix(), "Error Refreshing")
+                } finally {
+                    watchManager?.start(lastResourceVersions)
                 }
             },
             DevSpacesBundle.message("connector.loader.devspaces.fetching.text"),
             true,
             null
         )
+    }
+
+    private fun refreshAllDevWorkspaces(): Map<String, String?> {
+        val lastResourceVersions = mutableMapOf<String, String?>()
+        val devWorkspaces = Projects(devSpacesContext.client).list()
+            .map { Utils.getValue(it, arrayOf("metadata", "name")) as String }
+            .flatMap { namespace ->
+                val dwListResult = DevWorkspaces(devSpacesContext.client).listWithResult(namespace)
+                lastResourceVersions[namespace] = dwListResult.resourceVersion
+                dwListResult.items
+            }
+
+        invokeLater {
+            val selectedIndex = listDevWorkspaces.selectedIndex
+            listDWDataModel.apply {
+                clear()
+                addAll(devWorkspaces)
+            }
+            listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
+        }
+
+        return lastResourceVersions
+    }
+
+    private fun getValidSelectedIndex(selectedIndex: Int): Int {
+        return if (selectedIndex >= 0
+            && selectedIndex < listDWDataModel.size) {
+            selectedIndex
+        } else {
+            if (listDWDataModel.size > 0) 0 else -1
+        }
     }
 
     private fun refreshDevWorkspace(namespace: String, name: String) {
@@ -230,39 +204,6 @@ class DevSpacesWorkspacesStepView(
             .also {
                 if (it != -1) listDWDataModel[it] = refreshedDevWorkspace
             }
-    }
-
-    private fun doRefreshAllDevWorkspaces() {
-        watchManager?.stop()
-        val lastResourceVersions = mutableMapOf<String, String?>()
-        try {
-            val devWorkspaces = Projects(devSpacesContext.client).list().flatMap { project ->
-                val namespace = Utils.getValue(project, arrayOf("metadata", "name")) as String
-                DevWorkspaces(devSpacesContext.client).listWithResult(namespace).also { dwListResult ->
-                    lastResourceVersions[namespace] = dwListResult.resourceVersion
-                }.items
-            }
-
-            invokeLater {
-                val selectedIndex = listDevWorkspaces.selectedIndex
-                listDWDataModel.apply {
-                    clear()
-                    addAll( devWorkspaces )
-                }
-                listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
-            }
-        } finally {
-            watchManager?.start(lastResourceVersions)
-        }
-    }
-
-    private fun getValidSelectedIndex(selectedIndex: Int): Int {
-        return if (selectedIndex >= 0
-            && selectedIndex < listDWDataModel.size) {
-            selectedIndex
-        } else {
-            if (listDWDataModel.size > 0) 0 else -1
-        }
     }
 
     private fun startDevWorkspace() {
@@ -381,16 +322,13 @@ class DevSpacesWorkspacesStepView(
     private fun enableButtons() {
         runInEdt {
             val workspace = getSelectedWorkspace()
-            val running = isRunning(workspace)
-            val stopped = isStopped(workspace)
-            val alreadyConnected = isAlreadyConnected(workspace)
 
-            startDevWorkspaceButton.isEnabled = stopped
-            stopDevWorkspaceButton.isEnabled = running
+            startDevWorkspaceButton.isEnabled = isStopped(workspace)
+            stopDevWorkspaceButton.isEnabled = isRunning(workspace)
 
             refreshNextButton()
 
-            if (alreadyConnected) {
+            if (isAlreadyConnected(workspace)) {
                 stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
             } else {
                 stopDevWorkspaceButton.toolTipText = null
@@ -477,10 +415,88 @@ class DevSpacesWorkspacesStepView(
         enableNextButton?.invoke()
     }
 
+    override fun dispose() {
+        watchManager?.stop()
+    }
+
     inner class DevWorkspaceSelection : ListSelectionListener {
         override fun valueChanged(e: ListSelectionEvent) {
             enableButtons()
             refreshNextButton()
+        }
+    }
+
+    private class WorkspacesWatch(
+        private val client: ApiClient,
+        private val workspacesDataModel: DefaultListModel<DevWorkspace>
+    ) {
+        private val devWorkspaces = DevWorkspaces(client)
+        private val watchManager = DevWorkspaceWatchManager(
+            client = client,
+            createWatcher = { ns, latestResourceVersion ->
+                devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
+            },
+            createFilter = { ns ->
+                devWorkspaces.createFilter(ns)
+            },
+            listener = object : DevWorkspaceListener {
+                override fun onAdded(dw: DevWorkspace) {
+                    onUpdated(dw)
+                }
+
+                override fun onUpdated(dw: DevWorkspace) {
+                    runInEdt {
+                        val idx = indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
+                        if (idx == -1) {
+                            val index = findInsertIndex(dw)
+                            workspacesDataModel.add(index, dw)
+                        } else {
+                            workspacesDataModel.set(idx, dw)
+                        }
+                    }
+                }
+
+                override fun onDeleted(dw: DevWorkspace) {
+                    runInEdt {
+                        val idx = indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
+                        if (idx >= 0) {
+                            workspacesDataModel.remove(idx)
+                        }
+                    }
+                }
+
+                private fun findInsertIndex(dw: DevWorkspace): Int {
+                    val n = workspacesDataModel.size
+                    val groupStart = (0 until n).firstOrNull {
+                        workspacesDataModel[it].namespace >= dw.namespace
+                    } ?: n
+
+                    val insertIndex = (groupStart until n).firstOrNull {
+                        workspacesDataModel[it].namespace == dw.namespace && workspacesDataModel[it].name >= dw.name
+                    } ?: run {
+                        var endOfGroup = groupStart
+                        while (endOfGroup < n && workspacesDataModel[endOfGroup].namespace == dw.namespace) endOfGroup++
+                        endOfGroup
+                    }
+
+                    return insertIndex
+                }
+            }
+        )
+
+        private fun indexOfFirst(predicate: (DevWorkspace) -> Boolean): Int {
+            for (i in 0 until workspacesDataModel.size()) {
+                if (predicate(workspacesDataModel.get(i))) return i
+            }
+            return -1
+        }
+
+        fun start(lastResourceVersions: Map<String, String?> = emptyMap()) {
+            watchManager.start(lastResourceVersions)
+        }
+
+        fun stop() {
+            watchManager.stop()
         }
     }
 }
