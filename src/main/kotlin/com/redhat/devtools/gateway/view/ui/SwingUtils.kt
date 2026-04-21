@@ -13,8 +13,8 @@ package com.redhat.devtools.gateway.view.ui
 
 import com.intellij.openapi.application.invokeLater
 import com.intellij.ui.AncestorListenerAdapter
+import com.intellij.ui.DoubleClickListener
 import com.redhat.devtools.gateway.openshift.Cluster
-import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.JComboBox
 import javax.swing.JList
@@ -22,13 +22,12 @@ import javax.swing.JPanel
 import javax.swing.event.AncestorEvent
 
 fun <T> JList<T>.onDoubleClick(action: (T) -> Unit) {
-    addMouseListener(object : MouseAdapter() {
-        override fun mouseClicked(e: MouseEvent) {
-            if (e.clickCount == 2) {
-                selectedValue?.let { action(it) }
-            }
+    object : DoubleClickListener() {
+        override fun onDoubleClick(e: MouseEvent): Boolean {
+            selectedValue?.let { action(it) }
+            return true
         }
-    })
+    }.installOn(this)
 }
 
 fun JPanel.requestInitialFocus(component: JComboBox<Cluster>) {
