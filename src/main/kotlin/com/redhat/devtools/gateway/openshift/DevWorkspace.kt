@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -48,6 +48,11 @@ data class DevWorkspace(
             return status.running
         }
 
+    val labels: Any?
+        get() {
+            return metadata.labels
+        }
+
     val cheEditor: String?
         get() {
             return metadata.cheEditor
@@ -92,6 +97,7 @@ data class DevWorkspaceObjectMeta(
     val name: String,
     val namespace: String,
     val uid: String,
+    val labels: Any?,
     val cheEditor: String?
 ) {
     companion object {
@@ -99,12 +105,14 @@ data class DevWorkspaceObjectMeta(
             val name = Utils.getValue(map, arrayOf("name"))
             val namespace = Utils.getValue(map, arrayOf("namespace"))
             val uid = Utils.getValue(map, arrayOf("uid"))
+            val labels = Utils.getValue(map, arrayOf("labels"))
             val cheEditor = Utils.getValue(map, arrayOf("annotations", "che.eclipse.org/che-editor"))
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
                 namespace as String,
                 uid as String,
+                labels,
                 cheEditor as String?
             )
         }.data

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -49,6 +49,12 @@ import javax.swing.JList
 import javax.swing.ListModel
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
+
+val DevWorkspace.displayName: String
+    get() {
+        val label = Utils.getValue(this.labels, arrayOf("kubernetes.io/metadata.name")) as String?
+        return label ?: this.name
+    }
 
 class DevSpacesWorkspacesStepView(
     private var devSpacesContext: DevSpacesContext,
@@ -457,7 +463,7 @@ class DevSpacesWorkspacesStepView(
             border = JBUI.Borders.emptyLeft(6)
             font = JBFont.h4().asPlain()
 
-            append(devWorkspace.name, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+            append(devWorkspace.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
             if (hasMultipleWorkspaces(list.model)) {
                 val fm = getFontMetrics(font)
                 val maxNameWidth = calculateMaxNameWidth(list.model, fm)
