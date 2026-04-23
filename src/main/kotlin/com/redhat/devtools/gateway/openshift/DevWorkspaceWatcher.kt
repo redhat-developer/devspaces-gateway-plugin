@@ -49,7 +49,7 @@ class DevWorkspaceWatcher(
     private suspend fun watchLoop(latestResourceVersion: String? = null) {
         while (scope.isActive && !stopped) {
             val watcher = createWatcher(namespace, latestResourceVersion)
-            val matches = createFilter(namespace)
+            var matches = createFilter(namespace)
 
             try {
                 for (event in watcher) {
@@ -59,7 +59,10 @@ class DevWorkspaceWatcher(
                     withContext(Dispatchers.EDT) {
                         if (stopped) return@withContext
                         when (event.type) {
-                            "ADDED"    -> if(matches(dw)) listener.onAdded(dw)
+                            "ADDED"    -> {
+                                matches = createFilter(namespace) // Need this to make it read the new templates list
+                                if(matches(dw)) listener.onAdded(dw)
+                            }
                             "MODIFIED" -> if(matches(dw)) listener.onUpdated(dw) else listener.onDeleted(dw)
                             "DELETED"  -> listener.onDeleted(dw)
                         }
