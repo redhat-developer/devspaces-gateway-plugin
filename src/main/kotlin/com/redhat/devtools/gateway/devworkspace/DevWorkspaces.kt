@@ -31,6 +31,11 @@ data class DevWorkspaceListResult(
     val resourceVersion: String?
 )
 
+val DevWorkspace.cheEditor: String
+    get() {
+        return Utils.getValue(this.annotations, arrayOf("che.eclipse.org/che-editor")) as? String ?: "unknown"
+    }
+
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
@@ -92,7 +97,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
         // Quick editor ID check
-        val segment = devWorkspace.cheEditor?.split("/")?.getOrNull(1)
+        val segment = devWorkspace.cheEditor.split("/").getOrNull(1)
         if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
              return true
         }

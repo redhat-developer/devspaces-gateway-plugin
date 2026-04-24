@@ -337,8 +337,8 @@ class DevWorkspacePatchTest {
             name = name,
             namespace = namespace,
             uid = "test-uid",
-            cheEditor = null,
-            annotations = annotations
+            annotations = annotations,
+            labels = emptyMap()
         )
         val spec = DevWorkspaceSpec(started = true)
         val status = DevWorkspaceStatus(phase = "Running")

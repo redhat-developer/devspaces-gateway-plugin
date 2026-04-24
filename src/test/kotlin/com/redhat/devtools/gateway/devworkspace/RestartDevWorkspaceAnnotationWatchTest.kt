@@ -15,6 +15,8 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.Watch
 import io.mockk.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -30,6 +32,8 @@ class RestartDevWorkspaceAnnotationWatchTest {
     private lateinit var client: ApiClient
     private lateinit var watch: RestartDevWorkspaceAnnotationWatch
     private val callbackInvoked = AtomicInteger(0)
+    private val testScheduler = TestCoroutineScheduler()
+    private val testDispatcher = StandardTestDispatcher(testScheduler)
     private val onIsAnnotated: () -> Job = {
         callbackInvoked.incrementAndGet()
         CoroutineScope(Dispatchers.Default).launch { }
@@ -51,7 +55,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start creates watcher with correct field selector`() = runTest {
+    fun `#start creates watcher with correct field selector`() = runTest(testScheduler) {
         // given
         val fieldSelectorSlot = slot<String>()
         every {
@@ -63,7 +67,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
             )
         } throws RuntimeException("Stop immediately") // Stop the watch loop
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -75,7 +79,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start attempts to create watcher when creation fails`() = runTest {
+    fun `#start attempts to create watcher when creation fails`() = runTest(testScheduler) {
         // given
         var attemptCount = 0
         mockCreateWatcherWith {
@@ -83,7 +87,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
             throw RuntimeException("Watcher creation failed")
         }
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -95,7 +99,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start handles watcher creation returning null gracefully`() = runTest {
+    fun `#start handles watcher creation returning null gracefully`() = runTest(testScheduler) {
         // given
         var attemptCount = 0
         mockCreateWatcherWith {
@@ -103,7 +107,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
             throw Exception("First attempt fails")
         }
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -117,11 +121,11 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start can be cancelled`() = runTest {
+    fun `#start can be cancelled`() = runTest(testScheduler) {
         // given
         mockCreateWatcherToThrow(RuntimeException("Watcher creation failed"))
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -134,7 +138,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start calls createWatcher with namespace`() = runTest {
+    fun `#start calls createWatcher with namespace`() = runTest(testScheduler) {
         // given
         val namespaceSlot = slot<String>()
         every {
@@ -146,7 +150,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
             )
         } throws RuntimeException("Stop immediately")
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -161,7 +165,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     fun `constructor creates DevWorkspaces with provided client`() {
         // given/when
         val testClient = mockk<ApiClient>(relaxed = true)
-        val watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, testClient, namespace, workspaceName)
+        val watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, testClient, namespace, workspaceName, testDispatcher)
 
         // then
         // Verify that DevWorkspaces constructor was called (implicitly tested through mockkConstructor)
@@ -169,11 +173,11 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start uses correct dispatcher`() = runTest {
+    fun `#start uses correct dispatcher`() = runTest(testScheduler) {
         // given
         mockCreateWatcherToThrow(RuntimeException("Stop immediately"))
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -187,7 +191,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
 
     @Test
     @Disabled("Async timing issue - watcher loop doesn't process mock events before test completes")
-    fun `#start invokes callback when MODIFIED event with restart annotation is received`() = runTest {
+    fun `#start invokes callback when MODIFIED event with restart annotation is received`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, workspaceName, mapOf(
@@ -196,7 +200,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -209,7 +213,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
 
     @Test
     @Disabled("Async timing issue - watcher loop doesn't process mock events before test completes")
-    fun `#start invokes callback when ADDED event with restart annotation is received`() = runTest {
+    fun `#start invokes callback when ADDED event with restart annotation is received`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("ADDED", namespace, workspaceName, mapOf(
@@ -218,7 +222,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -230,7 +234,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start does not invoke callback for DELETED event`() = runTest {
+    fun `#start does not invoke callback for DELETED event`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("DELETED", namespace, workspaceName, mapOf(
@@ -239,7 +243,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -251,7 +255,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start does not invoke callback when annotation value is not true`() = runTest {
+    fun `#start does not invoke callback when annotation value is not true`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, workspaceName, mapOf(
@@ -260,7 +264,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -272,14 +276,14 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start does not invoke callback when restart annotation is missing`() = runTest {
+    fun `#start does not invoke callback when restart annotation is missing`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, workspaceName, emptyMap())
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -291,7 +295,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start filters events by workspace name`() = runTest {
+    fun `#start filters events by workspace name`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, "different-workspace", mapOf(
@@ -300,7 +304,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -312,7 +316,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start filters events by namespace`() = runTest {
+    fun `#start filters events by namespace`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", "different-namespace", workspaceName, mapOf(
@@ -321,7 +325,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -334,7 +338,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
 
     @Test
     @Disabled("Async timing issue - watcher loop doesn't process mock events before test completes")
-    fun `#start does not invoke callback twice for duplicate events`() = runTest {
+    fun `#start does not invoke callback twice for duplicate events`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, workspaceName, mapOf(
@@ -346,7 +350,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -360,7 +364,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
 
     @Test
     @Disabled("Async timing issue - watcher loop doesn't process mock events before test completes")
-    fun `#start resets pending flag when annotation is removed`() = runTest {
+    fun `#start resets pending flag when annotation is removed`() = runTest(testScheduler) {
         // given
         val mockWatcher = createMockWatcher(
             createEvent("MODIFIED", namespace, workspaceName, mapOf(
@@ -373,7 +377,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
         )
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)
@@ -386,7 +390,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
     }
 
     @Test
-    fun `#start handles malformed DevWorkspace object gracefully`() = runTest {
+    fun `#start handles malformed DevWorkspace object gracefully`() = runTest(testScheduler) {
         // given
         val mockWatcher = mockk<Watch<Any>>(relaxed = true)
         val invalidEvent: Watch.Response<Any> = Watch.Response("MODIFIED", "invalid-object" as Any) // Not a valid DevWorkspace
@@ -396,7 +400,7 @@ class RestartDevWorkspaceAnnotationWatchTest {
 
         mockCreateWatcherToReturn(mockWatcher)
 
-        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName)
+        watch = RestartDevWorkspaceAnnotationWatch(onIsAnnotated, client, namespace, workspaceName, testDispatcher)
 
         // when
         val job = watch.start(this)

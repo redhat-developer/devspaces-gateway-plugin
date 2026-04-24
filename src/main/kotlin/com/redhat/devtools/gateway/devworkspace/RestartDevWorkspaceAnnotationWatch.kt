@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.devworkspace
 import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.Watch
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,14 +32,15 @@ class RestartDevWorkspaceAnnotationWatch(
     private val onIsAnnotated: () -> Job,
     client: ApiClient,
     private val namespace: String,
-    private val workspaceName: String
+    private val workspaceName: String,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val devWorkspaces = DevWorkspaces(client)
     private val restartAnnotationPending = AtomicBoolean(false)
 
     fun start(scope: CoroutineScope): Job {
         val fieldSelector = "metadata.name=$workspaceName"
-        return scope.launch(Dispatchers.IO) {
+        return scope.launch(dispatcher) {
             while (isActive) {
                 val watcher = createWatcher(namespace, fieldSelector) ?: run {
                     delay(1000.milliseconds)

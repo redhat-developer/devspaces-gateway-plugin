@@ -49,19 +49,14 @@ data class DevWorkspace(
             return status.running
         }
 
-    val labels: Any?
-        get() {
-            return metadata.labels
-        }
-
-    val cheEditor: String?
-        get() {
-            return metadata.cheEditor
-        }
-
     val annotations: Map<String, String>
         get() {
             return metadata.annotations
+        }
+
+    val labels: Map<String, String>
+        get() {
+            return metadata.labels
         }
 
     companion object {
@@ -84,11 +79,10 @@ data class DevWorkspace(
 
         other as DevWorkspace
 
-        if (metadata.name != other.metadata.name) return false
-        if (metadata.namespace != other.metadata.namespace) return false
-        if (metadata.cheEditor != other.metadata.cheEditor) return false
-
-        return true
+        return metadata.name == other.metadata.name &&
+                metadata.namespace == other.metadata.namespace &&
+                metadata.annotations == other.metadata.annotations &&
+                labels == other.labels
     }
 
     override fun hashCode(): Int {
@@ -103,26 +97,25 @@ data class DevWorkspaceObjectMeta(
     val name: String,
     val namespace: String,
     val uid: String,
-    val cheEditor: String?,
     val annotations: Map<String, String>,
-    val labels: Any?,
+    val labels: Map<String, String>
 ) {
     companion object {
         fun from(map: Any) = object {
             val name = Utils.getValue(map, arrayOf("name"))
             val namespace = Utils.getValue(map, arrayOf("namespace"))
             val uid = Utils.getValue(map, arrayOf("uid"))
+            @Suppress("UNCHECKED_CAST")
             val annotations = (Utils.getValue(map, arrayOf("annotations")) as? Map<String, String>)
                 ?: emptyMap<String, String>()
-            val cheEditor = annotations["che.eclipse.org/che-editor"] as String?
-            val labels = Utils.getValue(map, arrayOf("labels"))
             @Suppress("UNCHECKED_CAST")
+            val labels = (Utils.getValue(map, arrayOf("labels")) as? Map<String, String>)
+                ?: emptyMap<String, String>()
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
                 namespace as String,
                 uid as String,
-                cheEditor,
                 annotations,
                 labels
             )
@@ -161,6 +154,5 @@ data class DevWorkspaceStatus(
         get() {
             return phase == "Running"
         }
-
 }
 
