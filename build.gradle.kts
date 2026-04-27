@@ -68,7 +68,7 @@ dependencies {
         testFramework(TestFrameworkType.JUnit5)
     }
 
-    implementation("io.kubernetes:client-java:25.0.0")
+    implementation("io.kubernetes:client-java:26.0.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.2")
 }
