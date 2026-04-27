@@ -15,21 +15,18 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.platform.util.progress.RawProgressReporter
 import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBPasswordField
-import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
 import java.awt.Cursor
 import java.awt.Font
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
-import javax.swing.JCheckBox
 import javax.swing.event.DocumentListener
 import java.awt.event.KeyListener
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
+import com.redhat.devtools.gateway.view.ui.PasswordFieldWithToggle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
@@ -53,11 +50,14 @@ class TokenAuthenticationStrategy(
     saveKubeconfigCert
 ) {
 
-    val tfToken = JBPasswordField().apply {
-        document.addDocumentListener(onFieldChanged())
-        PasteClipboardMenu.addTo(this)
-        addKeyListener(createEnterKeyListener())
+    private val tokenFieldWithToggle = PasswordFieldWithToggle().apply {
+        setToggleButtonTooltip(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_token"))
+        passwordField.document.addDocumentListener(onFieldChanged())
+        PasteClipboardMenu.addTo(passwordField)
+        passwordField.addKeyListener(createEnterKeyListener())
     }
+
+    val tfToken = tokenFieldWithToggle.passwordField
 
     val tokenSuggestionLabel = JBLabel().apply {
         text = ""
@@ -65,16 +65,6 @@ class TokenAuthenticationStrategy(
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         isVisible = false
         font = font.deriveFont(Font.ITALIC or Font.PLAIN)
-    }
-
-    private val showTokenCheckbox = JBCheckBox(
-        DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_token")
-    ).apply {
-        isOpaque = false
-        background = null
-        addActionListener {
-            tfToken.echoChar = if (isSelected) 0.toChar() else '•'
-        }
     }
 
     private val clipboardMonitor = ClipboardTokenMonitor()
@@ -91,8 +81,7 @@ class TokenAuthenticationStrategy(
             cell(tokenSuggestionLabel).align(Align.FILL)
         }
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.token")) {
-            cell(tfToken).resizableColumn().align(Align.FILL)
-            cell(showTokenCheckbox)
+            cell(tokenFieldWithToggle).resizableColumn().align(Align.FILL)
         }
     }
 
