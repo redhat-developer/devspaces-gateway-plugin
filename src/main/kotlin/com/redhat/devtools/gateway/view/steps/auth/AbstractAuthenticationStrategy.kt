@@ -17,7 +17,9 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.Projects
+import com.redhat.devtools.gateway.openshift.codeToReasonPhrase
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.ApiException
 
 /**
  * Abstract base class for authentication strategies.
@@ -33,7 +35,7 @@ abstract class AbstractAuthenticationStrategy(
     /**
      * Creates a validated API client.
      */
-    @Throws(IllegalArgumentException::class)
+    @Throws(AuthenticationException::class)
     protected fun createValidatedApiClient(
         server: String,
         certificateAuthorityData: String? = null,
@@ -42,12 +44,22 @@ abstract class AbstractAuthenticationStrategy(
         clientKeyPem: String? = null,
         tlsContext: TlsContext,
         errorMessage: String? = null
-    ): ApiClient = OpenShiftClientFactory(KubeConfigUtils)
-        .create(
-            server, certificateAuthorityData?.toCharArray(), token?.toCharArray(),
-            clientCertPem?.toCharArray(), clientKeyPem?.toCharArray(), tlsContext
-        )
-        .also { client ->
-            require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
-        }
+    ): ApiClient = try {
+        OpenShiftClientFactory(KubeConfigUtils)
+            .create(
+                server,
+                certificateAuthorityData?.toCharArray(),
+                token?.toCharArray(),
+                clientCertPem?.toCharArray(),
+                clientKeyPem?.toCharArray(),
+                tlsContext
+            )
+            .also { client ->
+                require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
+            }
+    } catch (e: ApiException) {
+        throw AuthenticationException(e.codeToReasonPhrase(), e)
+    } catch (e: IllegalArgumentException) {
+        throw AuthenticationException(e.message ?: "Authentication failed", e)
+    }
 }

@@ -120,8 +120,12 @@ class OpenShiftCredentialsAuthenticationStrategy(
         reporter.text("Validating cluster access...")
 
         val client = createValidatedApiClient(
-            server, certAuthorityData,
-            finalToken.accessToken, null, null, tlsContext,
+            server,
+            certAuthorityData,
+            finalToken.accessToken,
+            null,
+            null,
+            tlsContext,
             "Authentication failed: invalid OpenShift credentials."
         )
 

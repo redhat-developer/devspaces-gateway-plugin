@@ -24,7 +24,7 @@ fun ApiException.isUnauthorized(): Boolean {
 /**
  * Converts HTTP status code to human-readable message.
  */
-fun ApiException.toUserFriendlyMessage(): String {
+fun ApiException.codeToReasonPhrase(): String {
     val statusMessage = when (code) {
         400 -> "Bad Request"
         401 -> "Unauthorized"

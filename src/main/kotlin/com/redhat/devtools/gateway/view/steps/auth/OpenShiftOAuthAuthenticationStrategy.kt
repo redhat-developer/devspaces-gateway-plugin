@@ -93,8 +93,12 @@ class OpenShiftOAuthAuthenticationStrategy(
         reporter.text("Validating cluster access...")
 
         val client = createValidatedApiClient(
-            server, certAuthorityData,
-            finalToken.accessToken, null, null, tlsContext,
+            server,
+            certAuthorityData,
+            finalToken.accessToken,
+            null,
+            null,
+            tlsContext,
             "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
         )
 

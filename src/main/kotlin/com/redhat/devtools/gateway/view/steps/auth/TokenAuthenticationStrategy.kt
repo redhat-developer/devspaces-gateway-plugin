@@ -98,8 +98,12 @@ class TokenAuthenticationStrategy(
         val token = String(tfToken.password)
 
         val client = createValidatedApiClient(
-            server, certAuthorityData,
-            token, null, null, tlsContext,
+            server,
+            certAuthorityData,
+            token,
+            null,
+            null,
+            tlsContext,
             "Authentication failed: invalid server URL or token."
         )
 

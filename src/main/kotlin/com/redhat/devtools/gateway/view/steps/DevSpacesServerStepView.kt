@@ -39,8 +39,6 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.toUserFriendlyMessage
-import io.kubernetes.client.openapi.ApiException
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.steps.auth.*
@@ -371,14 +369,7 @@ class DevSpacesServerStepView(
                 }
             }
             success = true
-        } catch (e: ApiException) {
-            if (!e.isCancellationException()) {
-                Dialogs.error(
-                    "Could not connect to cluster $serverDisplay.\n\nReason: ${e.toUserFriendlyMessage()}.",
-                    "Connection Failed"
-                )
-            }
-        } catch (e: IllegalStateException) {
+        } catch (e: AuthenticationException) {
             if (!e.isCancellationException()) {
                 Dialogs.error(
                     "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
@@ -387,7 +378,6 @@ class DevSpacesServerStepView(
             }
         } catch (e: Exception) {
             if (!e.isCancellationException()) {
-                val serverDisplay = server.removePrefix("https://").removePrefix("http://")
                 Dialogs.error(
                     "Could not connect to cluster $serverDisplay: ${e.message ?: "Unknown error"}",
                     "Connection Failed"

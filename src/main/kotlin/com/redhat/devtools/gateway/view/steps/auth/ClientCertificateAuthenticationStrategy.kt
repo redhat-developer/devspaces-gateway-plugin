@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.view.steps.auth
 
 import com.intellij.platform.util.progress.RawProgressReporter
-import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Align
 import com.intellij.ui.dsl.builder.panel
@@ -22,7 +21,6 @@ import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.Projects
 import javax.swing.JPanel
 
 /**
@@ -78,14 +76,14 @@ class ClientCertificateAuthenticationStrategy(
         val clientKeyPem = tfClientKey.text
 
         val client = createValidatedApiClient(
-            server, certAuthorityData,
-            null, clientCertPem, clientKeyPem, tlsContext,
-            "Authentication failed: invalid server URL or token."
-        )
-
-        require(Projects(client).isAuthenticated()) {
+            server,
+            certAuthorityData,
+            null,
+            clientCertPem,
+            clientKeyPem,
+            tlsContext,
             "Authentication failed: invalid client certificate or key."
-        }
+        )
 
         saveKubeconfigCert(selectedCluster, clientCertPem, clientKeyPem, reporter)
         devSpacesContext.client = client
