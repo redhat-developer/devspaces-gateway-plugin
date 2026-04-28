@@ -22,12 +22,10 @@ import com.intellij.platform.ide.progress.ModalTaskOwner
 import com.intellij.platform.ide.progress.runWithModalProgressBlocking
 import com.intellij.platform.util.progress.RawProgressReporter
 import com.intellij.platform.util.progress.reportRawProgress
-import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.*
-import com.intellij.ui.dsl.gridLayout.UnscaledGaps
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -46,14 +44,14 @@ import com.redhat.devtools.gateway.view.steps.auth.*
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
-import com.redhat.devtools.gateway.view.ui.collapsible
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import kotlinx.coroutines.*
-import java.awt.event.*
+import java.awt.event.ItemEvent
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
 import java.nio.file.Paths
 import javax.swing.JComponent
 import javax.swing.JTextField
-import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -192,29 +190,25 @@ class DevSpacesServerStepView(
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.server")) {
             cell(tfServer).align(Align.FILL)
         }
-        collapsible(
+        collapsibleGroup(
             DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.advanced_group")
         ) {
-            indent {
-                row(
-                    DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.certificate_authority")
-                ) {
-                    cell(tfCertAuthorityData)
-                        .align(Align.FILL)
-                        .resizableColumn()
-                }
+            row(
+                DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.certificate_authority")
+            ) {
+                cell(tfCertAuthorityData)
+                    .align(Align.FILL)
+                    .resizableColumn()
             }
         }
-        row {
-            label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.authentication"))
-                .align(AlignY.TOP)
-                // This is the standard "nudge" to align a label with
-                // the text baseline of a adjacent component.
-                .customize(UnscaledGaps(top = JBUI.scale(16)))
-
-            cell(authTabs)
-                .align(AlignX.FILL + AlignY.TOP)
-        }.layout(RowLayout.LABEL_ALIGNED)
+        group(
+            DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.authentication")
+        ) {
+            row {
+                cell(authTabs)
+                    .align(Align.FILL)
+            }
+        }
         row {
             cell(saveKubeconfigCheckbox)
         }
