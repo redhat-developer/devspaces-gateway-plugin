@@ -22,6 +22,7 @@ import com.intellij.platform.ide.progress.ModalTaskOwner
 import com.intellij.platform.ide.progress.runWithModalProgressBlocking
 import com.intellij.platform.util.progress.RawProgressReporter
 import com.intellij.platform.util.progress.reportRawProgress
+import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.components.JBTextField
@@ -45,6 +46,7 @@ import com.redhat.devtools.gateway.view.steps.auth.*
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
+import com.redhat.devtools.gateway.view.ui.collapsible
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import kotlinx.coroutines.*
 import java.awt.event.*
@@ -190,11 +192,19 @@ class DevSpacesServerStepView(
         row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.server")) {
             cell(tfServer).align(Align.FILL)
         }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.certificate_authority")) {
-            cell(tfCertAuthorityData).align(Align.FILL)
+        collapsible(
+            DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.advanced_group")
+        ) {
+            indent {
+                row(
+                    DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.certificate_authority")
+                ) {
+                    cell(tfCertAuthorityData)
+                        .align(Align.FILL)
+                        .resizableColumn()
+                }
+            }
         }
-        val tabInsets = UIManager.getInsets("TabbedPane.tabInsets") ?: JBUI.insets(0)
-
         row {
             label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.authentication"))
                 .align(AlignY.TOP)
