@@ -93,7 +93,7 @@ class RedHatAuthSessionManager : AbstractAuthSessionManager() {
                     if (params == null) {
                         thisLogger().warn("OAuth callback timed out or was cancelled")
                         pendingLogin?.completeExceptionally(
-                            SsoLoginException.Timeout
+                            SsoLoginException.Timeout()
                         )
                         notifyLoginCancelled()
 

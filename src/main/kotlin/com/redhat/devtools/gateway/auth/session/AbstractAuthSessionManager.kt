@@ -128,7 +128,7 @@ abstract class AbstractAuthSessionManager(
             token
         } catch (e: TimeoutCancellationException) {
             thisLogger().warn("Login timed out after ${timeoutMs}ms")
-            throw SsoLoginException.Timeout
+            throw SsoLoginException.Timeout()
         }
     }
 

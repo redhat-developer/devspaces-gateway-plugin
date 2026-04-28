@@ -18,6 +18,8 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
+private const val SSL_PROTOCOL = "TLS"
+
 object SslContextFactory {
 
     fun empty(): TlsContext =
@@ -30,7 +32,7 @@ object SslContextFactory {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         }
 
-        val sslContext = SSLContext.getInstance("TLS").apply {
+        val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
             init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
         }
 
@@ -57,7 +59,7 @@ object SslContextFactory {
             .filterIsInstance<X509TrustManager>()
             .first()
 
-        val sslContext = SSLContext.getInstance("TLS").apply {
+        val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
             init(null, tmf.trustManagers, SecureRandom())
         }
 
@@ -67,7 +69,7 @@ object SslContextFactory {
     fun captureOnly(failIfUntrusted: Boolean = true): TlsContext {
         val capturingTrustManager = CapturingTrustManager(failIfUntrusted)
 
-        val sslContext = SSLContext.getInstance("TLS").apply {
+        val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
             init(
                 null,
                 arrayOf<TrustManager>(capturingTrustManager),

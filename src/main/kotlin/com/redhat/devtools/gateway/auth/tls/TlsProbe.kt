@@ -17,9 +17,11 @@ import javax.net.ssl.SSLSocket
 
 object TlsProbe {
 
+    private const val DEFAULT_HTTPS_PORT = 443
+
     fun connect(serverUri: URI, sslContext: SSLContext) {
         val socketFactory = sslContext.socketFactory
-        val port = if (serverUri.port != -1) serverUri.port else 443
+        val port = if (serverUri.port != -1) serverUri.port else DEFAULT_HTTPS_PORT
 
         (socketFactory.createSocket(serverUri.host, port) as SSLSocket).use { socket ->
             socket.startHandshake()

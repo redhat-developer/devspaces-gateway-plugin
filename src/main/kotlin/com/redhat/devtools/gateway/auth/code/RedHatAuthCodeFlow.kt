@@ -103,13 +103,21 @@ class RedHatAuthCodeFlow(
             .POST(HttpRequest.BodyPublishers.ofString(form))
             .build()
 
-        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+        val response = httpClient.sendAsync(
+            request,
+            HttpResponse.BodyHandlers.ofString()
+        ).await()
+
         if (response.statusCode() !in 200..299) {
             error("Token request failed: ${response.statusCode()}\n${response.body()}")
         }
 
+        return createSSOToken(response.body())
+    }
+
+    private fun createSSOToken(response: String): SSOToken {
         val json = Json { ignoreUnknownKeys = true }
-        val body = json.parseToJsonElement(response.body()).jsonObject
+        val body = json.parseToJsonElement(response).jsonObject
 
         val accessToken = body["access_token"]?.jsonPrimitive?.content
             ?: error("Missing access_token in token response")

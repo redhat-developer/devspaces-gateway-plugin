@@ -81,7 +81,7 @@ class OpenShiftAuthSessionManager : AbstractAuthSessionManager() {
                     val params: Parameters? = callbackServer.awaitCallback(OPENSHIFT_LOGIN_TIMEOUT_MS)
                     if (params == null) {
                         thisLogger().warn("OAuth callback timed out or was cancelled")
-                        pendingLogin?.completeExceptionally(SsoLoginException.Timeout)
+                        pendingLogin?.completeExceptionally(SsoLoginException.Timeout())
                         notifyLoginCancelled()
                         return@launch
                     }
