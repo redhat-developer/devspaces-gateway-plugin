@@ -43,12 +43,11 @@ fun Throwable.message(): String {
 
 fun ApiException.message(): String {
     val response = Gson().fromJson(responseBody, Map::class.java)
-    val msg = try {
-        response["message"]?.toString()
+    return try {
+        response["message"]?.toString() ?: "Unknown error"
     } catch (e: Exception) {
         e.rootMessage()
     }
-    return "Reason: $msg"
 }
 
 fun Throwable.isTimeoutException(): Boolean = (this is TimeoutCancellationException || this is TimeoutException )

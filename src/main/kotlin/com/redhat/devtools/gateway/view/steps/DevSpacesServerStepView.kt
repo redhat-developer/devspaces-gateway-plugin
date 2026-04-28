@@ -39,6 +39,8 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
+import com.redhat.devtools.gateway.openshift.toUserFriendlyMessage
+import io.kubernetes.client.openapi.ApiException
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.steps.auth.*
@@ -340,6 +342,7 @@ class DevSpacesServerStepView(
     override fun onNext(): Boolean {
         val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
         val server = selectedCluster.url
+        val serverDisplay = server.removePrefix("https://").removePrefix("http://")
         val strategy = currentStrategy ?: return false
         var success = false
 
@@ -368,10 +371,25 @@ class DevSpacesServerStepView(
                 }
             }
             success = true
-        } catch (e: Exception) {
+        } catch (e: ApiException) {
             if (!e.isCancellationException()) {
                 Dialogs.error(
-                    e.message ?: "Unable to connect to the cluster",
+                    "Could not connect to cluster $serverDisplay.\n\nReason: ${e.toUserFriendlyMessage()}.",
+                    "Connection Failed"
+                )
+            }
+        } catch (e: IllegalStateException) {
+            if (!e.isCancellationException()) {
+                Dialogs.error(
+                    "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
+                    "Connection Failed"
+                )
+            }
+        } catch (e: Exception) {
+            if (!e.isCancellationException()) {
+                val serverDisplay = server.removePrefix("https://").removePrefix("http://")
+                Dialogs.error(
+                    "Could not connect to cluster $serverDisplay: ${e.message ?: "Unknown error"}",
                     "Connection Failed"
                 )
             }

@@ -25,6 +25,8 @@ import com.redhat.devtools.gateway.auth.session.LOGIN_TIMEOUT_MS
 import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
+import com.redhat.devtools.gateway.openshift.toUserFriendlyMessage
+import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -90,17 +92,23 @@ class RedHatSSOAuthenticationStrategy(
 
         reporter.text("Validating cluster access...")
 
-        val client = createValidatedApiClient(
-            server, certAuthorityData,
-            finalToken.accessToken, null, null, tlsContext,
-            "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
-        )
+        try {
+            val client = createValidatedApiClient(
+                server, certAuthorityData,
+                finalToken.accessToken, null, null, tlsContext,
+                "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
+            )
 
-        // Do not save SSO tokens
-        if (finalToken.kind == AuthTokenKind.PIPELINE) {
-            saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
+            // Do not save SSO tokens
+            if (finalToken.kind == AuthTokenKind.PIPELINE) {
+                saveKubeconfig(selectedCluster, finalToken.accessToken, reporter)
+            }
+            devSpacesContext.client = client
+        } catch (e: ApiException) {
+            throw IllegalStateException("${e.toUserFriendlyMessage()}.\n\nVerify that the cluster has Red Hat SSO enabled.", e)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException("${e.message}.\n\nVerify that the cluster has Red Hat SSO enabled.", e)
         }
-        devSpacesContext.client = client
     }
 
     override fun isNextEnabled(): Boolean =

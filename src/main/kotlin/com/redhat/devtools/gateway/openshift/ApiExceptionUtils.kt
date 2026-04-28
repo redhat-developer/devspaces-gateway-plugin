@@ -20,3 +20,22 @@ fun ApiException.isNotFound(): Boolean {
 fun ApiException.isUnauthorized(): Boolean {
     return code == 401
 }
+
+/**
+ * Converts HTTP status code to human-readable message.
+ */
+fun ApiException.toUserFriendlyMessage(): String {
+    val statusMessage = when (code) {
+        400 -> "Bad Request"
+        401 -> "Unauthorized"
+        403 -> "Forbidden"
+        404 -> "Not Found"
+        408 -> "Request Timeout"
+        500 -> "Internal Server Error"
+        502 -> "Bad Gateway"
+        503 -> "Service Unavailable"
+        504 -> "Gateway Timeout"
+        else -> "HTTP Error $code"
+    }
+    return statusMessage
+}
