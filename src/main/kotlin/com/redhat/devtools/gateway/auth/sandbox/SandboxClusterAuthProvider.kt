@@ -14,13 +14,13 @@ package com.redhat.devtools.gateway.auth.sandbox
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.code.TokenModel
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
+import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Secret
 import io.kubernetes.client.openapi.models.V1ServiceAccount
-import io.kubernetes.client.util.ClientBuilder
-import io.kubernetes.client.util.credentials.AccessTokenAuthentication
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
@@ -29,7 +29,8 @@ class SandboxClusterAuthProvider(
     private val sandboxApi: SandboxApi = SandboxApi(
         SandboxDefaults.SANDBOX_API_BASE_URL,
         SandboxDefaults.SANDBOX_API_TIMEOUT_MS
-    )
+    ),
+    private val clientFactory: OpenShiftClientFactory = OpenShiftClientFactory(KubeConfigUtils)
 ) {
     suspend fun authenticate(ssoToken: SSOToken): TokenModel {
         val signup = sandboxApi.getSignUpStatus(ssoToken.idToken)
@@ -40,11 +41,10 @@ class SandboxClusterAuthProvider(
         val username = signup.compliantUsername ?: signup.username
         val namespace = "$username-dev"
 
-        val client: ApiClient = ClientBuilder.standard()
-            .setBasePath(signup.proxyUrl!!)
-            .setAuthentication(AccessTokenAuthentication(ssoToken.idToken))
+        val client = clientFactory
+            .builder(signup.proxyUrl!!, ssoToken.idToken)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build()
-            .also { it.httpClient = it.httpClient.newBuilder().readTimeout(30, TimeUnit.SECONDS).build() }
 
         val coreV1Api = CoreV1Api(client)
         val pipelineSA = ensurePipelineServiceAccount(coreV1Api, namespace)

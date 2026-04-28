@@ -19,14 +19,16 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
+import io.kubernetes.client.util.SSLUtils.keyManagers
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManager
 import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
 import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
 import java.util.Base64
+import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
@@ -36,6 +38,33 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
     private val clusterName = "openshift_cluster"
 
     private var lastUsedKubeConfig: KubeConfig? = null
+
+    class Builder internal constructor(
+        private val factory: OpenShiftClientFactory,
+        private val server: String,
+        private val token: String
+    ) {
+        private var readTimeoutSeconds: Long = 0
+
+        fun readTimeout(timeout: Long, unit: TimeUnit): Builder {
+            this.readTimeoutSeconds = unit.toSeconds(timeout)
+            return this
+        }
+
+        fun build(): ApiClient {
+            val client = factory.create(server, token)
+            if (readTimeoutSeconds > 0) {
+                client.httpClient = client.httpClient.newBuilder()
+                    .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+                    .build()
+            }
+            return client
+        }
+    }
+
+    fun builder(server: String, token: String): Builder {
+        return Builder(this, server, token)
+    }
 
     fun create(): ApiClient {
         val paths = configUtils.getAllConfigFiles()
@@ -63,6 +92,12 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         }
     }
 
+    fun create(server: String, token: String): ApiClient {
+        val kubeConfig = createKubeConfig(server, null, token.toCharArray(), null, null)
+        lastUsedKubeConfig = kubeConfig
+        return Config.fromConfig(kubeConfig)
+    }
+
     fun create(
         server: String,
         certificateAuthorityData: CharArray? = null,
@@ -72,10 +107,9 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         tlsContext: TlsContext
     ): ApiClient {
 
-        val usingToken = token != null && token.isNotEmpty()
-        val usingClientCert = clientCertData != null && clientCertData.isNotEmpty()
-                && clientKeyData != null && clientKeyData.isNotEmpty()
-        val usingCertificateAuthorityData = certificateAuthorityData != null && certificateAuthorityData.isNotEmpty()
+        val usingToken = token?.isNotEmpty() == true
+        val usingClientCert = clientCertData?.isNotEmpty() == true
+                && clientKeyData?.isNotEmpty() == true
 
         require(usingToken.xor(usingClientCert)) {
             "Provide either token OR clientCertData + clientKeyData."
@@ -86,26 +120,15 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
 
         val client = Config.fromConfig(kubeConfig)
 
+        val usingCertificateAuthorityData = certificateAuthorityData?.isNotEmpty() == true
         val trustManager: X509TrustManager =
             if (usingCertificateAuthorityData) {
-                buildTrustManagerFromCaData(certificateAuthorityData)
+                createTrustManager(certificateAuthorityData)
             } else {
                 tlsContext.trustManager
             }
 
-        val keyManagers: Array<KeyManager>? =
-            if (usingClientCert) {
-                buildKeyManagers(clientCertData, clientKeyData)
-            } else {
-                null
-            }
-
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(
-            keyManagers,
-            arrayOf(trustManager),
-            SecureRandom()
-        )
+        val sslContext = createSSLContext(trustManager, usingClientCert, clientCertData, clientKeyData)
 
         client.httpClient = client.httpClient.newBuilder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
@@ -114,7 +137,31 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         return client
     }
 
-    private fun buildTrustManagerFromCaData(
+    private fun createSSLContext(
+        trustManager: X509TrustManager,
+        usingClientCert: Boolean,
+        clientCertData: CharArray?,
+        clientKeyData: CharArray?
+    ): SSLContext {
+        val keyManagers: Array<KeyManager>? =
+            if (usingClientCert
+                && clientCertData?.isNotEmpty() == true
+                && clientKeyData?.isNotEmpty() == true) {
+                createKeyManagers(clientCertData, clientKeyData)
+            } else {
+                null
+            }
+
+        return SSLContext.getInstance("TLS").apply {
+            init(
+                keyManagers,
+                arrayOf(trustManager),
+                SecureRandom()
+            )
+        }
+    }
+
+    private fun createTrustManager(
         caData: CharArray
     ): X509TrustManager {
 
@@ -139,7 +186,7 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
             .first()
     }
 
-    private fun buildKeyManagers(
+    private fun createKeyManagers(
         certData: CharArray,
         keyData: CharArray
     ): Array<KeyManager> {
