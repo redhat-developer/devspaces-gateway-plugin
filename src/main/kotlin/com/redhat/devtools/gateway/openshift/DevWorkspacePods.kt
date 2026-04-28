@@ -30,15 +30,17 @@ import java.io.OutputStream
 import java.net.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.time.Duration.Companion.seconds
 
-class Pods(private val client: ApiClient) {
+class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
         private const val CONNECT_ATTEMPTS = 5
         private const val RECONNECT_DELAY: Long = 1000
+        private const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
     }
 
-    private val logger = logger<Pods>()
+    private val logger = logger<DevWorkspacePods>()
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
@@ -396,6 +398,52 @@ class Pods(private val client: ApiClient) {
         return CoreV1Api(client)
             .listNamespacedPod(namespace)
             .labelSelector(labelSelector)
-            .execute();
+            .execute()
+    }
+
+    /**
+     * Waits for all pods associated with the given DevWorkspace to be deleted.
+     * Returns `true` if all pods are deleted within the timeout, false otherwise.
+     *
+     * @param namespace the name of the devWorkspace for the pods to be deleted
+     * @param workspaceName the name of the devWorkspace for the pods to be deleted
+     * @param timeout the max time to wait for the pods to be deleted
+     * @param isCancelled lambda to check whether the operation was canceled
+     *
+     */
+    @Throws(IOException::class, CancellationException::class)
+    suspend fun waitForPodsDeleted(
+        namespace: String,
+        workspaceName: String,
+        timeout: Long, // in seconds
+        isCancelled: (() -> Unit)? = null
+    ): Boolean {
+        val labelSelector = "$WORKSPACE_LABEL_KEY=$workspaceName"
+        return withTimeoutOrNull(timeout.seconds) {
+            while (true) {
+                isCancelled?.invoke()
+
+                val pods = try {
+                    doList(namespace, labelSelector)
+                } catch (e: Exception) {
+                    if (e.isCancellationException()) throw e
+                    logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
+                    delay(1.seconds)
+                    continue
+                }
+
+                isCancelled?.invoke()
+                if (pods.items.isEmpty()) {
+                    logger.info("All pods for $namespace/$workspaceName have been deleted")
+                    return@withTimeoutOrNull true
+                }
+
+                logger.debug("Still waiting for ${pods.items.size} pod(s) to be deleted for $namespace/$workspaceName")
+                delay(1.seconds)
+            }
+
+            @Suppress("UNREACHABLE_CODE")
+            false
+        } ?: false
     }
 }

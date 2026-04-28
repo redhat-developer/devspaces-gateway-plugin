@@ -12,7 +12,7 @@
 package com.redhat.devtools.gateway.server
 
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.openshift.Pods
+import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
@@ -36,7 +36,7 @@ class RemoteIDEServerTest {
     fun beforeEach() {
         devSpacesContext = mockk(relaxed = true)
 
-        mockkConstructor(Pods::class)
+        mockkConstructor(DevWorkspacePods::class)
         val mockPod = V1Pod().apply {
             metadata = V1ObjectMeta().apply {
                 name = "test-pod"
@@ -55,7 +55,7 @@ class RemoteIDEServerTest {
             }
         }
         coEvery {
-            anyConstructed<Pods>().findFirst(any(), any())
+            anyConstructed<DevWorkspacePods>().findFirst(any(), any())
         } returns mockPod
 
         remoteIDEServer = spyk(RemoteIDEServer(devSpacesContext), recordPrivateCalls = true)

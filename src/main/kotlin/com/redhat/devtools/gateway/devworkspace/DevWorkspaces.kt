@@ -9,15 +9,14 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.devworkspace
 
 import com.google.gson.reflect.TypeToken
+import com.redhat.devtools.gateway.openshift.Utils
 import com.intellij.openapi.diagnostic.thisLogger
-import io.kubernetes.client.custom.V1Patch
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
-import io.kubernetes.client.util.PatchUtils
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -32,18 +31,24 @@ data class DevWorkspaceListResult(
     val resourceVersion: String?
 )
 
+val DevWorkspace.cheEditor: String
+    get() {
+        return Utils.getValue(this.annotations, arrayOf("che.eclipse.org/che-editor")) as? String ?: "unknown"
+    }
+
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
     companion object {
         private val CHE_EDITOR_ID_REGEX = Regex("che-.*-server", RegexOption.IGNORE_CASE)
 
-        val FAILED: String = "Failed"
-        val RUNNING: String = "Running"
-        val STOPPED: String = "Stopped"
-        val STARTING: String = "Starting"
-        val STOPPING: String = "Stopping"
-        val RUNNING_TIMEOUT: Long = 300
+        const val FAILED: String = "Failed"
+        const val RUNNING: String = "Running"
+        const val STOPPED: String = "Stopped"
+        const val STARTING: String = "Starting"
+        const val STOPPING: String = "Stopping"
+
+        const val RUNNING_TIMEOUT: Long = 300
     }
 
     @Throws(ApiException::class)
@@ -56,7 +61,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 "devworkspaces"
             ).execute()
 
-            val devWorkspaceTemplateMap = getDevWorkspaceTemplateMap(namespace)
+            val devWorkspaceTemplateMap = getTemplateMap(namespace)
             val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
             val dwList = dwItems
                 .map { dwItem -> DevWorkspace.from(dwItem) }
@@ -92,7 +97,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
         // Quick editor ID check
-        val segment = devWorkspace.cheEditor?.split("/")?.getOrNull(1)
+        val segment = devWorkspace.cheEditor.split("/").getOrNull(1)
         if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
              return true
         }
@@ -113,10 +118,10 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     // Creates a filter for the Idea-based DevWorkspaces
-    fun createFilter(
+    fun createIdeaEditorFilter(
         namespace: String
     ): (DevWorkspace) -> Boolean {
-        val templateMap = getDevWorkspaceTemplateMap(namespace)
+        val templateMap = getTemplateMap(namespace)
         return { dw: DevWorkspace ->
             isIdeaEditorBased(dw, templateMap)
         }
@@ -134,7 +139,7 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     // Returns a map of DW Owner UID tp list of DW Templates
-    fun getDevWorkspaceTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
+    private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
         val dwTemplateList = customApi
             .listNamespacedCustomObject(
                 "workspace.devfile.io",
@@ -158,14 +163,30 @@ class DevWorkspaces(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     fun start(namespace: String, name: String) {
-        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to true))
-        doPatch(namespace, name, patch)
+        DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.setSpecStarted(true)
     }
 
     @Throws(ApiException::class)
     fun stop(namespace: String, name: String) {
-        val patch = arrayOf(mapOf("op" to "replace", "path" to "/spec/started", "value" to false))
-        doPatch(namespace, name, patch)
+        DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.setSpecStarted(false)
+    }
+
+    @Throws(ApiException::class)
+    fun isRestarting(namespace: String, workspaceName: String): Boolean {
+        return DevWorkspacePatch(namespace, workspaceName, client) {
+            get(namespace, workspaceName)
+        }.hasRestartAnnotation()
+    }
+
+    @Throws(ApiException::class)
+    fun removeRestarting(namespace: String, workspaceName: String) {
+        DevWorkspacePatch(namespace, workspaceName, client) {
+            get(namespace, workspaceName)
+        }.removeRestartAnnotation()
     }
 
     @Throws(IOException::class, ApiException::class, CancellationException::class)
@@ -219,18 +240,20 @@ class DevWorkspaces(private val client: ApiClient) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
-                } catch (e: Exception) {
-                    delay(500.milliseconds)
+                } catch (_: Exception) {
+                    delay(1.seconds)
                     continue
                 }
 
                 checkCancelled?.invoke()
                 when (devWorkspace.phase) {
-                    desiredPhase -> return@withTimeoutOrNull true
-                    FAILED, STOPPED, STOPPING -> return@withTimeoutOrNull false
+                    desiredPhase
+                        -> return@withTimeoutOrNull true
+                    FAILED
+                        -> return@withTimeoutOrNull false
                 }
 
-                delay(500.milliseconds)
+                delay(1.seconds)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -254,7 +277,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: Exception) {
-                    delay(500)
+                    delay(1.seconds)
                     continue
                 }
 
@@ -263,33 +286,12 @@ class DevWorkspaces(private val client: ApiClient) {
                     return@withTimeoutOrNull true // phase changed out of the given set
                 }
 
-                delay(500)
+                delay(1.seconds)
             }
 
             @Suppress("UNREACHABLE_CODE")
             false
         } ?: false
-    }
-
-    // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/PatchExample.java
-    @Throws(ApiException::class)
-    private fun doPatch(namespace: String, name: String, body: Any) {
-        PatchUtils.patch(
-            DevWorkspace::class.java,
-            {
-                customApi.patchNamespacedCustomObject(
-                    "workspace.devfile.io",
-                    "v1alpha2",
-                    namespace,
-                    "devworkspaces",
-                    name,
-                    body
-                ).buildCall(null)
-            },
-            V1Patch.PATCH_FORMAT_JSON_PATCH,
-            customApi.apiClient
-        )
     }
 
     // Example:

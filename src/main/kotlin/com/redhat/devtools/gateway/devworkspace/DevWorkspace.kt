@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2026 Red Hat, Inc.
+ * Copyright (c) 2024-2025 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -9,8 +9,9 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.devworkspace
 
+import com.redhat.devtools.gateway.openshift.Utils
 import java.util.Collections.emptyMap
 
 data class DevWorkspace(
@@ -48,14 +49,14 @@ data class DevWorkspace(
             return status.running
         }
 
-    val labels: Any?
+    val annotations: Map<String, String>
         get() {
-            return metadata.labels
+            return metadata.annotations
         }
 
-    val cheEditor: String?
+    val labels: Map<String, String>
         get() {
-            return metadata.cheEditor
+            return metadata.labels
         }
 
     companion object {
@@ -78,11 +79,10 @@ data class DevWorkspace(
 
         other as DevWorkspace
 
-        if (metadata.name != other.metadata.name) return false
-        if (metadata.namespace != other.metadata.namespace) return false
-        if (metadata.cheEditor != other.metadata.cheEditor) return false
-
-        return true
+        return metadata.name == other.metadata.name &&
+                metadata.namespace == other.metadata.namespace &&
+                metadata.annotations == other.metadata.annotations &&
+                labels == other.labels
     }
 
     override fun hashCode(): Int {
@@ -97,23 +97,27 @@ data class DevWorkspaceObjectMeta(
     val name: String,
     val namespace: String,
     val uid: String,
-    val labels: Any?,
-    val cheEditor: String?
+    val annotations: Map<String, String>,
+    val labels: Map<String, String>
 ) {
     companion object {
         fun from(map: Any) = object {
             val name = Utils.getValue(map, arrayOf("name"))
             val namespace = Utils.getValue(map, arrayOf("namespace"))
             val uid = Utils.getValue(map, arrayOf("uid"))
-            val labels = Utils.getValue(map, arrayOf("labels"))
-            val cheEditor = Utils.getValue(map, arrayOf("annotations", "che.eclipse.org/che-editor"))
+            @Suppress("UNCHECKED_CAST")
+            val annotations = (Utils.getValue(map, arrayOf("annotations")) as? Map<String, String>)
+                ?: emptyMap<String, String>()
+            @Suppress("UNCHECKED_CAST")
+            val labels = (Utils.getValue(map, arrayOf("labels")) as? Map<String, String>)
+                ?: emptyMap<String, String>()
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
                 namespace as String,
                 uid as String,
-                labels,
-                cheEditor as String?
+                annotations,
+                labels
             )
         }.data
     }
@@ -150,6 +154,5 @@ data class DevWorkspaceStatus(
         get() {
             return phase == "Running"
         }
-
 }
 
