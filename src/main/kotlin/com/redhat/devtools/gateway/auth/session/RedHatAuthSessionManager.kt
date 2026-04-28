@@ -80,8 +80,7 @@ class RedHatAuthSessionManager : AbstractAuthSessionManager() {
             authFlow = RedHatAuthCodeFlow(
                 clientId = authConfig.clientId,
                 redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                providerMetadata = providerMetadata,
-                sslContext = sslContext
+                providerMetadata = providerMetadata
             )
 
             val request = authFlow.startAuthFlow()

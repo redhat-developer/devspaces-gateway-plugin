@@ -43,18 +43,19 @@ import javax.net.ssl.SSLContext
 class RedHatAuthCodeFlow(
     private val clientId: String,
     private val redirectUri: URI,
-    private val providerMetadata: OIDCProviderMetadata,
-    private val sslContext: SSLContext
+    private val providerMetadata: OIDCProviderMetadata
 ) : AuthCodeFlow {
 
     private lateinit var codeVerifier: CodeVerifier
     private lateinit var nonce: Nonce
     private lateinit var state: State
 
-    private val httpClient = HttpClient.newBuilder()
-        .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build()
+    private val httpClient by lazy {
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build()
+    }
 
     override suspend fun startAuthFlow(): AuthCodeRequest {
         codeVerifier = CodeVerifier()
@@ -82,11 +83,6 @@ class RedHatAuthCodeFlow(
 
     override suspend fun handleCallback(parameters: Parameters): SSOToken {
         val code = parameters["code"] ?: error("Missing 'code' parameter in callback")
-
-        fun encodeForm(vararg pairs: Pair<String, String>): String =
-            pairs.joinToString("&") { (k, v) ->
-                "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
-            }
 
         val form = encodeForm(
             "grant_type" to "authorization_code",
@@ -120,20 +116,7 @@ class RedHatAuthCodeFlow(
 
         val idToken = body["id_token"]?.jsonPrimitive?.content.orEmpty()
         val expiresInSeconds = body["expires_in"]?.jsonPrimitive?.longOrNull ?: 3600
-        val accountLabel = if (idToken.isNotBlank()) {
-            try {
-                val jwt = JWTParser.parse(idToken) as SignedJWT
-                val claims = jwt.jwtClaimsSet
-
-                claims.getStringClaim("preferred_username")
-                    ?: claims.getStringClaim("email")
-                    ?: "unknown-user"
-            } catch (e: Exception) {
-                "unknown-user"
-            }
-        } else {
-            "unknown-user"
-        }
+        val accountLabel = createAccountLabel(idToken)
 
         return SSOToken(
             accessToken = accessToken,
@@ -146,7 +129,28 @@ class RedHatAuthCodeFlow(
     override suspend fun login(parameters: Parameters): SSOToken =
         error(
             "Direct login is not supported for Red Hat SSO authentication. " +
-            "This flow requires browser-based authentication via startAuthFlow(), " +
-            "followed by token exchange with the Sandbox API."
+                    "This flow requires browser-based authentication via startAuthFlow(), " +
+                    "followed by token exchange with the Sandbox API."
         )
+
+    private fun createAccountLabel(idToken: String): String = if (idToken.isNotBlank()) {
+        try {
+            val jwt = JWTParser.parse(idToken) as SignedJWT
+            val claims = jwt.jwtClaimsSet
+
+            claims.getStringClaim("preferred_username")
+                ?: claims.getStringClaim("email")
+                ?: "unknown-user"
+        } catch (e: Exception) {
+            "unknown-user"
+        }
+    } else {
+        "unknown-user"
+    }
+
+    private fun encodeForm(vararg pairs: Pair<String, String>): String =
+        pairs.joinToString("&") { (k, v) ->
+            "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
+        }
+
 }
