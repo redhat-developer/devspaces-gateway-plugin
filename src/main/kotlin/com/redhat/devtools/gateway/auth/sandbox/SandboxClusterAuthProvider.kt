@@ -78,8 +78,12 @@ class SandboxClusterAuthProvider(
         val secretList = api.listNamespacedSecret(namespace).execute()
             ?: error("Failed to list Secrets")
 
-        secretList.items.firstOrNull { it.metadata?.name == secretName && it.data?.containsKey("token") == true }
-            ?.let { return@withContext it }
+        val existing = secretList.items.firstOrNull { it.metadata?.name == secretName }
+        if (existing != null) {
+            val populated = requestSecret(secretName, namespace, api)
+                ?: error("Pipeline token secret not populated")
+            return@withContext populated
+        }
 
         val secret = V1Secret().metadata(
             V1ObjectMeta()
@@ -90,26 +94,27 @@ class SandboxClusterAuthProvider(
 
         api.createNamespacedSecret(namespace, secret).execute()
 
-        if (requestSecret(secretName, namespace, api)) {
-            return@withContext secret
-        }
+        val populated = requestSecret(secretName, namespace, api)
+            ?: error("Pipeline token secret not populated")
 
-        error("Pipeline token secret not populated")
+        return@withContext populated
     }
 
-    private suspend fun requestSecret(secretName: String, namespace: String, api: CoreV1Api): Boolean {
+    private suspend fun requestSecret(secretName: String, namespace: String, api: CoreV1Api): V1Secret? {
         repeat(30) {
             val secret = api.readNamespacedSecret(secretName, namespace).execute()
             if (secret.data?.containsKey("token") == true) {
-                return true
+                return secret
             }
             delay(1000.milliseconds)
         }
-        return false
+        return null
     }
 
     private fun extractToken(secret: V1Secret): String {
-        val tokenBytes = secret.data?.get("token") ?: error("Token missing in secret")
+        val tokenBytes = secret.data?.get("token")
+            ?: error("Token missing in secret")
+
         return String(tokenBytes, Charsets.UTF_8)
     }
 }
