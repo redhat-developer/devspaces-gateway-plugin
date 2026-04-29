@@ -120,17 +120,17 @@ class DevSpacesServerStepView(
 
         listOf(
             tokenStrategy,
-            ClientCertificateAuthenticationStrategy(
-                tfServer,
-                ::saveKubeconfig,
-                ::saveKubeconfig,
-                ::onFieldChanged
-            ),
             OpenShiftOAuthAuthenticationStrategy(
                 tfServer,
                 ::saveKubeconfig,
                 ::saveKubeconfig,
                 setTokenDisplay
+            ),
+            ClientCertificateAuthenticationStrategy(
+                tfServer,
+                ::saveKubeconfig,
+                ::saveKubeconfig,
+                ::onFieldChanged
             ),
             OpenShiftCredentialsAuthenticationStrategy(
                 tfServer,
