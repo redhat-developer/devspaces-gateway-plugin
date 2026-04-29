@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2025-2026 Red Hat, Inc.
+ * This program and the accompanying materials are made
+ * available under the terms of the Eclipse Public License 2.0
+ * which is available at https://www.eclipse.org/legal/epl-2.0/
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Contributors:
+ *   Red Hat, Inc. - initial API and implementation
+ */
 package com.redhat.devtools.gateway.kubeconfig
 
 import com.intellij.openapi.diagnostic.thisLogger
@@ -33,7 +44,10 @@ object KubeConfigUtils {
                 kubeConfig.clusters?.mapNotNull { cluster ->
                     val namedCluster = KubeConfigNamedCluster.fromMap(cluster as Map<*, *>) ?: return@mapNotNull null
                     val token = KubeConfigNamedUser.getUserTokenForCluster(namedCluster.name, kubeConfig)
-                    val cluster = toCluster(namedCluster, token)
+                    val clientCert:Pair<String?, String?>? = KubeConfigNamedUser.getUserClientCertForCluster(namedCluster.name, kubeConfig)
+                    val clientCertData = clientCert?.first
+                    val clientKeyData = clientCert?.second
+                    val cluster = toCluster(namedCluster, token, clientCertData, clientKeyData)
                     logger.debug("Parsed cluster: ${cluster.name} at ${cluster.url}")
                     cluster
                 } ?: emptyList()
@@ -70,11 +84,14 @@ object KubeConfigUtils {
             }
     }
 
-    private fun toCluster(clusterEntry: KubeConfigNamedCluster, userToken: String?): Cluster {
+    private fun toCluster(clusterEntry: KubeConfigNamedCluster, userToken: String?,
+                          clientCertData: String?, clientKeyData: String? ): Cluster {
         return Cluster(
             url = clusterEntry.cluster.server,
             name = clusterEntry.name,
-            token = userToken
+            token = userToken,
+            clientCertData = clientCertData,
+            clientKeyData = clientKeyData
         )
     }
 

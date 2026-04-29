@@ -27,6 +27,7 @@ object Utils {
     }
 
     @JvmStatic
+    @Suppress("UNCHECKED_CAST")
     fun setValue(obj: Any?, value: Any, path: Array<String>) {
         if (obj !is MutableMap<*, *>) {
             return
@@ -48,6 +49,26 @@ object Utils {
         }
     }
 
+    @JvmStatic
+    @Suppress("UNCHECKED_CAST")
+    fun removeValue(obj: Any?, path: Array<String>) {
+        if (obj !is MutableMap<*, *>) {
+            return
+        }
+
+        var currentMap: MutableMap<Any?, Any?> = obj as MutableMap<Any?, Any?>
+
+        for (i in path.indices) {
+            val key = path[i]
+
+            if (i == path.lastIndex) {
+                currentMap.remove(key)
+            } else {
+                val nextMap = currentMap[key] as? MutableMap<Any?, Any?> ?: return
+                currentMap = nextMap
+            }
+        }
+    }
 }
 
 fun <K, V> mapOfNotNull(vararg pairs: Pair<K, V?>): Map<K, V> {
