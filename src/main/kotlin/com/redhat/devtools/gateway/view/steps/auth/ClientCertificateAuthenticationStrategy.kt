@@ -89,5 +89,7 @@ class ClientCertificateAuthenticationStrategy(
     }
 
     override fun isNextEnabled(): Boolean =
-        tfClientCert.text.isNotBlank() && tfClientKey.text.isNotBlank()
+        isServerSelected()
+                && tfClientCert.text.isNotBlank()
+                && tfClientKey.text.isNotBlank()
 }

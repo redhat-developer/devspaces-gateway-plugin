@@ -32,6 +32,13 @@ abstract class AbstractAuthenticationStrategy(
 ) : AuthenticationStrategy {
 
     /**
+     * Checks if a server/cluster has been selected.
+     */
+    protected fun isServerSelected(): Boolean {
+        return (tfServer as? javax.swing.JComboBox<*>)?.selectedItem != null
+    }
+
+    /**
      * Creates a validated API client.
      */
     @Throws(AuthenticationException::class)

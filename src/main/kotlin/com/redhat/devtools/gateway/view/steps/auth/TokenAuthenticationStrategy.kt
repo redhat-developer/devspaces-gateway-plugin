@@ -110,7 +110,8 @@ class TokenAuthenticationStrategy(
     }
 
     override fun isNextEnabled(): Boolean =
-        tfToken.password?.isNotEmpty() == true
+        isServerSelected()
+                && tfToken.password?.isNotEmpty() == true
 
     /**
      * Start monitoring clipboard for tokens.

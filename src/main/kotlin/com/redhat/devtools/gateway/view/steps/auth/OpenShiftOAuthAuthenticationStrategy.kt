@@ -106,5 +106,5 @@ class OpenShiftOAuthAuthenticationStrategy(
     }
 
     override fun isNextEnabled(): Boolean =
-        (tfServer as? javax.swing.JComboBox<*>)?.selectedItem != null
+        isServerSelected()
 }

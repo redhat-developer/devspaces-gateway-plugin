@@ -133,5 +133,7 @@ class OpenShiftCredentialsAuthenticationStrategy(
     }
 
     override fun isNextEnabled(): Boolean =
-        tfUsername.text.isNotBlank() && tfPassword.password?.isNotEmpty() == true
+        isServerSelected()
+                && tfUsername.text.isNotBlank()
+                && tfPassword.password?.isNotEmpty() == true
 }
