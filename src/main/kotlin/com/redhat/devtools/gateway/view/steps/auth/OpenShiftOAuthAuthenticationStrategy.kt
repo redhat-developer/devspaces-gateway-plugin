@@ -38,12 +38,10 @@ import javax.swing.JPanel
 class OpenShiftOAuthAuthenticationStrategy(
     tfServer: Any,
     saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit,
-    saveKubeconfigCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit,
     private val setTokenDisplay: suspend (String) -> Unit
 ) : AbstractAuthenticationStrategy(
     tfServer,
-    saveKubeconfig,
-    saveKubeconfigCert
+    saveKubeconfig
 ) {
 
     override fun getAuthMethod(): AuthMethod = AuthMethod.OPENSHIFT

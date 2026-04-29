@@ -30,12 +30,11 @@ import javax.swing.JPanel
 class ClientCertificateAuthenticationStrategy(
     tfServer: Any,
     saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit,
-    saveKubeconfigCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit,
+    private val saveKubeconfigWithCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit,
     private val onFieldChanged: () -> DocumentListener
 ) : AbstractAuthenticationStrategy(
     tfServer,
-    saveKubeconfig,
-    saveKubeconfigCert
+    saveKubeconfig
 ) {
 
     val tfClientCert = JBTextField().apply {
@@ -85,7 +84,7 @@ class ClientCertificateAuthenticationStrategy(
             "Authentication failed: invalid client certificate or key."
         )
 
-        saveKubeconfigCert(selectedCluster, clientCertPem, clientKeyPem, reporter)
+        saveKubeconfigWithCert(selectedCluster, clientCertPem, clientKeyPem, reporter)
         devSpacesContext.client = client
     }
 

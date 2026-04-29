@@ -107,7 +107,6 @@ class DevSpacesServerStepView(
         val tokenStrategy = TokenAuthenticationStrategy(
             tfServer,
             ::saveKubeconfig,
-            ::saveKubeconfig,
             ::onFieldChanged,
             ::createEnterKeyListener
         )
@@ -123,18 +122,16 @@ class DevSpacesServerStepView(
             OpenShiftOAuthAuthenticationStrategy(
                 tfServer,
                 ::saveKubeconfig,
-                ::saveKubeconfig,
                 setTokenDisplay
             ),
             ClientCertificateAuthenticationStrategy(
                 tfServer,
                 ::saveKubeconfig,
-                ::saveKubeconfig,
+                ::saveKubeconfigWithCert,
                 ::onFieldChanged
             ),
             OpenShiftCredentialsAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
                 ::saveKubeconfig,
                 ::onFieldChanged,
                 ::createEnterKeyListener,
@@ -142,7 +139,6 @@ class DevSpacesServerStepView(
             ),
             RedHatSSOAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
                 ::saveKubeconfig,
                 sessionManager
             )
@@ -484,7 +480,7 @@ class DevSpacesServerStepView(
         }
     }
 
-    private fun saveKubeconfig(cluster: Cluster?, clientCertPem: String?, clientKeyPem: String?, reporter: RawProgressReporter) {
+    private fun saveKubeconfigWithCert(cluster: Cluster?, clientCertPem: String?, clientKeyPem: String?, reporter: RawProgressReporter) {
         if (!saveToKubeconfig || cluster == null || clientCertPem.isNullOrBlank() || clientKeyPem.isNullOrBlank()) return
 
         try {

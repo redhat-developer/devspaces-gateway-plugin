@@ -28,8 +28,7 @@ import io.kubernetes.client.openapi.ApiException
 @Suppress("UnstableApiUsage")
 abstract class AbstractAuthenticationStrategy(
     protected val tfServer: Any,  // FilteringComboBox<Cluster>
-    protected val saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit,
-    protected val saveKubeconfigCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit
+    protected val saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit
 ) : AuthenticationStrategy {
 
     /**

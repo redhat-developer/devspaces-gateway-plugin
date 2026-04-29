@@ -41,13 +41,11 @@ import javax.swing.JPanel
 class TokenAuthenticationStrategy(
     tfServer: Any,
     saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit,
-    saveKubeconfigCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit,
     private val onFieldChanged: () -> DocumentListener,
     private val createEnterKeyListener: () -> KeyListener
 ) : AbstractAuthenticationStrategy(
     tfServer,
-    saveKubeconfig,
-    saveKubeconfigCert
+    saveKubeconfig
 ) {
 
     private val tokenFieldWithToggle = PasswordFieldWithToggle().apply {

@@ -38,14 +38,12 @@ import javax.swing.JPanel
 class OpenShiftCredentialsAuthenticationStrategy(
     tfServer: Any,
     saveKubeconfig: suspend (Cluster, String, RawProgressReporter) -> Unit,
-    saveKubeconfigCert: suspend (Cluster, String, String, RawProgressReporter) -> Unit,
     private val onFieldChanged: () -> DocumentListener,
     private val createEnterKeyListener: () -> KeyListener,
     private val setTokenDisplay: suspend (String) -> Unit
 ) : AbstractAuthenticationStrategy(
     tfServer,
-    saveKubeconfig,
-    saveKubeconfigCert
+    saveKubeconfig
 ) {
 
     private val tfUsername = JBTextField().apply {
