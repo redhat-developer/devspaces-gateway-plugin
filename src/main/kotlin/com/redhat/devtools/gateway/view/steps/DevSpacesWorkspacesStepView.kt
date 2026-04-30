@@ -44,6 +44,7 @@ import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
 import io.kubernetes.client.openapi.ApiClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.awt.Dimension
 import java.awt.FontMetrics
@@ -355,31 +356,33 @@ class DevSpacesWorkspacesStepView(
         }
     }
 
-    private fun connect() {
+        private fun connect() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
-                    DevSpacesConnection(devSpacesContext).connect(
-                        {
-                            refreshDevWorkspace(
-                                devSpacesContext.devWorkspace.namespace,
-                                devSpacesContext.devWorkspace.name
-                            )
-                            enableButtons()
-                        },
-                        {
-                            enableButtons()
-                        },
-                        {
-                            if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
+                    runBlocking(Dispatchers.IO) {
+                        DevSpacesConnection(devSpacesContext).connect(
+                            {
                                 refreshDevWorkspace(
                                     devSpacesContext.devWorkspace.namespace,
                                     devSpacesContext.devWorkspace.name
                                 )
                                 enableButtons()
+                            },
+                            {
+                                enableButtons()
+                            },
+                            {
+                                if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
+                                    refreshDevWorkspace(
+                                        devSpacesContext.devWorkspace.namespace,
+                                        devSpacesContext.devWorkspace.name
+                                    )
+                                    enableButtons()
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 } catch (e: Exception) {
                     refreshDevWorkspace(
                         devSpacesContext.devWorkspace.namespace,
@@ -451,7 +454,7 @@ class DevSpacesWorkspacesStepView(
      */
     private fun isAlreadyConnected(workspace: DevWorkspace?): Boolean {
         if (workspace == null) return false
-        return devSpacesContext.activeWorkspaces.contains(workspace)
+        return devSpacesContext.activeWorkspaces.any { it.namespace == workspace.namespace && it.name == workspace.name }
     }
 
     class DevWorkspaceListRenderer : ColoredListCellRenderer<DevWorkspace>() {

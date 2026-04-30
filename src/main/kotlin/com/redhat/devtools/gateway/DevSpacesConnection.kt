@@ -40,25 +40,15 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
-    @Suppress("UnstableApiUsage")
-    fun connect(
-        onConnected: () -> Unit,
-        onDisconnected: () -> Unit,
-        onDevWorkspaceStopped: () -> Unit,
-        onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
-        checkCancelled: (() -> Unit)? = null
-    ): ThinClientHandle = runBlocking {
-        doConnect(onConnected, onDevWorkspaceStopped, onDisconnected, onProgress, checkCancelled)
-    }
-
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
-    private suspend fun doConnect(
+    suspend fun connect(
         onConnected: () -> Unit,
-        onDevWorkspaceStopped: () -> Unit,
         onDisconnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
         onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
-        checkCancelled: (() -> Unit)? = null
+        checkCancelled: (() -> Unit)? = null,
+        registerRestartWatcher: Boolean? = true
     ): ThinClientHandle {
         val workspace = devSpacesContext.devWorkspace
         devSpacesContext.addWorkspace(workspace)
@@ -169,12 +159,14 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             }
 
             // Watch for restart annotation on the DevWorkspace
-            watchRestartAnnotation(
-                workspace.namespace,
-                workspace.name,
-                devSpacesContext.client,
-                client
-            )
+            if (registerRestartWatcher == true) {
+                watchRestartAnnotation(
+                    workspace.namespace,
+                    workspace.name,
+                    devSpacesContext.client,
+                    client
+                )
+            }
 
             onConnected()
             client
@@ -189,7 +181,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     private fun watchRestartAnnotation(namespace: String, workspaceName: String, kubeClient: ApiClient, thinClient: ThinClientHandle) {
         val restartWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         RestartDevWorkspaceAnnotationWatch(
-            onRestartAnnotated(namespace, workspaceName, thinClient),
+            onRestartAnnotated(thinClient),
             kubeClient,
             namespace,
             workspaceName
@@ -201,11 +193,12 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Suppress("UnstableApiUsage")
-    private fun onRestartAnnotated(namespace: String, workspaceName: String, thinClient: ThinClientHandle): () -> Job {
+    private fun onRestartAnnotated(
+        thinClient: ThinClientHandle
+    ): () -> Job {
         return {
             CoroutineScope(Dispatchers.IO).launch {
-                val restartHandler = DevWorkspaceRestart(namespace, workspaceName, devSpacesContext.client)
-                restartHandler.execute(thinClient)
+                DevWorkspaceRestart(devSpacesContext).execute(thinClient)
             }
         }
     }

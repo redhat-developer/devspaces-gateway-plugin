@@ -11,248 +11,327 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
+import com.redhat.devtools.gateway.DevSpacesConnection
+import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
-import io.kubernetes.client.openapi.ApiClient
+import com.redhat.devtools.gateway.server.RemoteIDEServer
 import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.models.V1Pod
+import io.kubernetes.client.openapi.models.V1PodList
 import io.mockk.*
 import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
-import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 
 class DevWorkspaceRestartTest {
 
-    private lateinit var client: ApiClient
+    private lateinit var devSpacesContext: DevSpacesContext
     private lateinit var workspaces: DevWorkspaces
     private lateinit var pods: DevWorkspacePods
     private lateinit var thinClient: ThinClientHandle
-    private lateinit var restart: DevWorkspaceRestart
+    private lateinit var indicator: ProgressIndicator
+    private lateinit var remoteIDEServer: RemoteIDEServer
+    private lateinit var devSpacesConnection: DevSpacesConnection
 
     private val namespace = "test-namespace"
     private val workspaceName = "test-workspace"
 
+    private lateinit var restart: DevWorkspaceRestart
+
     @BeforeEach
     fun beforeEach() {
-        client = mockk(relaxed = true)
+        devSpacesContext = mockk(relaxed = true) {
+            every { devWorkspace.namespace } returns namespace
+            every { devWorkspace.name } returns workspaceName
+        }
         workspaces = mockk(relaxed = true)
         pods = mockk(relaxed = true)
         thinClient = mockk(relaxed = true)
+        indicator = mockk(relaxed = true)
+        remoteIDEServer = mockk(relaxed = true)
+        devSpacesConnection = mockk(relaxed = true)
 
         restart = DevWorkspaceRestart(
-            namespace,
-            workspaceName,
-            client,
+            devSpacesContext,
             workspaces,
-            pods
+            pods,
+            createRemoteIDEServer = { remoteIDEServer },
+            createDevSpacesConnection = { devSpacesConnection }
         )
+
+        // Default: no pods remaining
+        every { pods.list(any(), any()) } returns V1PodList().items(emptyList())
+        // Default: IDE ready and connection succeed (`just Awaits` never completes — hangs runTest)
+        coJustRun { remoteIDEServer.waitServerReady() }
+        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
     }
 
     @Test
-    fun `#execute stops workspace`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
-
+    fun `#doRestart closes thin client`() = runTest {
         // when
-        restart.execute(thinClient)
-
+        restart.restart(thinClient, indicator)
         // then
-        verify { workspaces.stop(namespace, workspaceName) }
+        verify { thinClient.close() }
     }
 
     @Test
-    fun `#execute waits for pods to be deleted`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
-
+    fun `#doRestart closes thin client before stopping workspace`() = runTest {
         // when
-        restart.execute(thinClient)
-
-        // then
-        coVerify { pods.waitForPodsDeleted(namespace, workspaceName, 20) }
-    }
-
-    @Test
-    fun `#execute starts workspace after pods deleted`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
-
-        // when
-        restart.execute(thinClient)
-
+        restart.restart(thinClient, indicator)
         // then
         verifyOrder {
-            workspaces.stop(namespace, workspaceName)
-            workspaces.start(namespace, workspaceName)
+            thinClient.close()
+            workspaces.stopAndWait(namespace, workspaceName, any())
         }
     }
 
     @Test
-    fun `#execute starts workspace even when pods not deleted within timeout`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns false
-
+    fun `#doRestart stops workspace`() = runTest {
         // when
-        restart.execute(thinClient)
-
+        restart.restart(thinClient, indicator)
         // then
-        verify { workspaces.start(namespace, workspaceName) }
+        verify { workspaces.stopAndWait(namespace, workspaceName, DevWorkspaces.RUNNING_TIMEOUT) }
     }
 
     @Test
-    fun `#execute closes thin client before stopping workspace`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
-
+    fun `#doRestart waits for pods to be deleted`() = runTest {
         // when
-        restart.execute(thinClient)
+        restart.restart(thinClient, indicator)
+        // then
+        verify { pods.list(namespace, "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=$workspaceName") }
+    }
 
+    @Test
+    fun `#doRestart continues when pods deleted`() = runTest {
+        // given
+        every { pods.list(any(), any()) } returns V1PodList().items(emptyList())
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        verify { workspaces.startAndWait(namespace, workspaceName, any()) }
+    }
+
+    @Test
+    fun `#doRestart waits until pods with deletionTimestamp are deleted`() = runTest {
+        // given
+        val podWithDeletionTimestamp = mockk<V1Pod> {
+            every { metadata?.deletionTimestamp } returns mockk()
+            every { metadata?.name } returns "pod-1"
+        }
+        every { pods.list(any(), any()) } returns
+            V1PodList().items(listOf(podWithDeletionTimestamp)) andThen
+            V1PodList().items(emptyList())
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        verify(atLeast = 2) { pods.list(namespace, any()) }
+    }
+
+    @Test
+    fun `#doRestart retries when pods still exist`() = runTest {
+        // given
+        val activePod = V1Pod().metadata(
+            io.kubernetes.client.openapi.models.V1ObjectMeta().name("pod-1")
+        )
+        every { pods.list(any(), any()) } returns
+            V1PodList().items(listOf(activePod)) andThen
+            V1PodList().items(listOf(activePod)) andThen
+            V1PodList().items(emptyList())
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        verify(atLeast = 3) { pods.list(namespace, any()) }
+    }
+
+    @Test
+    fun `#doRestart throws when pods not deleted within timeout`() = runTest {
+        // given
+        val activePod = V1Pod().metadata(
+            io.kubernetes.client.openapi.models.V1ObjectMeta().name("pod-1")
+        )
+        every { pods.list(any(), any()) } returns V1PodList().items(listOf(activePod))
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+        // then
+        assertThat(result.isFailure).isTrue()
+        assertThat(result.exceptionOrNull()).isInstanceOf(IllegalStateException::class.java)
+        assertThat(result.exceptionOrNull()).hasMessageContaining("Timeout waiting for pods deletion")
+    }
+
+    @Test
+    fun `#doRestart starts workspace after pods deleted`() = runTest {
+        // when
+        restart.restart(thinClient, indicator)
         // then
         verifyOrder {
-            thinClient.close()
-            workspaces.stop(namespace, workspaceName)
+            workspaces.stopAndWait(namespace, workspaceName, any())
+            workspaces.startAndWait(namespace, workspaceName, any())
+        }
+    }
+
+    @Test
+    fun `#doRestart waits for IDE ready`() = runTest {
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        coVerify { remoteIDEServer.waitServerReady() }
+    }
+
+    @Test
+    fun `#doRestart connects to IDE`() = runTest {
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        coVerify { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `#doRestart connects to IDE after waiting for ready`() = runTest {
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        coVerifyOrder {
+            remoteIDEServer.waitServerReady()
+            devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
         }
     }
 
     @Test
     fun `#execute removes restart annotation after successful restart`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
         every { workspaces.isRestarting(namespace, workspaceName) } returns true
-
-        // when
-        restart.execute(thinClient)
-
-        // then
+        runExecuteWithProgressMock {
+            restart.execute(thinClient)
+        }
         verify { workspaces.removeRestarting(namespace, workspaceName) }
     }
 
     @Test
-    fun `#execute does not remove annotation if already removed`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
+    fun `#execute does not call removeRestarting when annotation already cleared`() = runTest {
         every { workspaces.isRestarting(namespace, workspaceName) } returns false
-
-        // when
-        restart.execute(thinClient)
-
-        // then
+        runExecuteWithProgressMock {
+            restart.execute(thinClient)
+        }
         verify(exactly = 0) { workspaces.removeRestarting(namespace, workspaceName) }
     }
 
     @Test
-    @Disabled("TestLogger.error() throws TestLoggerAssertionError which prevents removeAnnotation from executing")
-    fun `#execute removes annotation even when restart fails`() = runTest {
-        // given
-        every { workspaces.stop(any(), any()) } throws ApiException("Stop failed")
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
-
-        // when/then
-        val result = runCatching { restart.execute(thinClient) }
-        assertThat(result.isFailure).isTrue()
-
-        verify { workspaces.removeRestarting(namespace, workspaceName) }
-    }
-
-    @Test
-    fun `#execute rethrows exception after cleaning up annotation`() = runTest {
-        // given
-        val exception = ApiException("Start failed")
-        every { workspaces.start(any(), any()) } throws exception
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
-
-        // when/then
-        val result = runCatching { restart.execute(thinClient) }
-        assertThat(result.isFailure).isTrue()
-        assertThat(result.exceptionOrNull()).hasMessageContaining("Workspace restart failed")
-    }
-
-    @Test
-    fun `#execute continues even if annotation removal fails`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
+    fun `#execute completes when annotation removal fails`() = runTest {
         every { workspaces.isRestarting(namespace, workspaceName) } returns true
         every { workspaces.removeRestarting(namespace, workspaceName) } throws ApiException("Remove failed")
-
-        // when - should not throw
-        restart.execute(thinClient)
-
-        // then - verify the method completed
-        verify { workspaces.start(namespace, workspaceName) }
+        runExecuteWithProgressMock {
+            restart.execute(thinClient)
+        }
+        verify { workspaces.startAndWait(namespace, workspaceName, any()) }
     }
 
     @Test
-    fun `#execute executes full restart sequence in correct order`() = runTest {
-        // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
-
+    fun `#doRestart executes full sequence in correct order`() = runTest {
         // when
-        restart.execute(thinClient)
-
+        restart.restart(thinClient, indicator)
         // then
-        verify {
+        verifyOrder {
             thinClient.close()
-            workspaces.stop(namespace, workspaceName)
-            workspaces.start(namespace, workspaceName)
-            workspaces.isRestarting(namespace, workspaceName)
-            workspaces.removeRestarting(namespace, workspaceName)
+            workspaces.stopAndWait(namespace, workspaceName, any())
+            pods.list(namespace, any())
+            workspaces.startAndWait(namespace, workspaceName, any())
         }
-        coVerify {
-            pods.waitForPodsDeleted(namespace, workspaceName, 20)
+        coVerifyOrder {
+            remoteIDEServer.waitServerReady()
+            devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
         }
     }
 
     @Test
-    fun `#execute fails when thin client close fails`() = runTest {
+    fun `#doRestart fails when thin client close fails`() = runTest {
         // given
         val exception = RuntimeException("Close failed")
         every { thinClient.close() } throws exception
-
-        // when/then
-        val result = runCatching { restart.execute(thinClient) }
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+        // then
         assertThat(result.isFailure).isTrue()
-        assertThat(result.exceptionOrNull()).hasMessageContaining("Workspace restart failed")
+        assertThat(result.exceptionOrNull()).isEqualTo(exception)
     }
 
     @Test
-    @Disabled("TestLogger.error() throws TestLoggerAssertionError which prevents removeAnnotation from executing")
-    fun `#execute cleans up annotation when thin client close fails`() = runTest {
-        // given
-        every { thinClient.close() } throws RuntimeException("Close failed")
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
-
-        // when/then
-        val result = runCatching { restart.execute(thinClient) }
-        assertThat(result.isFailure).isTrue()
-
-        verify { workspaces.removeRestarting(namespace, workspaceName) }
-    }
-
-    @Test
-    fun `#execute fails when stop workspace fails`() = runTest {
+    fun `#doRestart fails when stop workspace fails`() = runTest {
         // given
         val exception = ApiException("Stop failed")
-        every { workspaces.stop(any(), any()) } throws exception
-
-        // when/then
-        val result = runCatching { restart.execute(thinClient) }
+        every { workspaces.stopAndWait(any(), any(), any()) } throws exception
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+        // then
         assertThat(result.isFailure).isTrue()
-        assertThat(result.exceptionOrNull()).hasMessageContaining("Workspace restart failed")
+        assertThat(result.exceptionOrNull()).isEqualTo(exception)
     }
 
     @Test
-    fun `#execute fails when start workspace fails`() = runTest {
+    fun `#doRestart fails when start workspace fails`() = runTest {
         // given
-        coEvery { pods.waitForPodsDeleted(any(), any(), any()) } returns true
         val exception = ApiException("Start failed")
-        every { workspaces.start(any(), any()) } throws exception
+        every { workspaces.startAndWait(any(), any(), any()) } throws exception
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+        // then
+        assertThat(result.isFailure).isTrue()
+        assertThat(result.exceptionOrNull()).isEqualTo(exception)
+    }
+
+    @Test
+    fun `#doRestart fails when IDE ready fails`() = runTest {
+        // given
+        val exception = RuntimeException("IDE not ready")
+        coEvery { remoteIDEServer.waitServerReady() } throws exception
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+        // then
+        assertThat(result.isFailure).isTrue()
+        assertThat(result.exceptionOrNull()).isEqualTo(exception)
+    }
+
+    @Test
+    fun `#doRestart fails when IDE connection fails`() = runTest {
+        // given
+        val exception = RuntimeException("Connection failed")
+        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) } throws exception
 
         // when/then
-        val result = runCatching { restart.execute(thinClient) }
+        val result = runCatching { restart.restart(thinClient, indicator) }
         assertThat(result.isFailure).isTrue()
-        assertThat(result.exceptionOrNull()).hasMessageContaining("Workspace restart failed")
+        assertThat(result.exceptionOrNull()).isEqualTo(exception)
+    }
+
+    @Test
+    fun `#doRestart retries pod listing on failure`() = runTest {
+        // given
+        every { pods.list(any(), any()) } throws RuntimeException("List failed") andThen
+            V1PodList().items(emptyList())
+
+        // when
+        restart.restart(thinClient, indicator)
+
+        // then
+        verify(atLeast = 2) { pods.list(namespace, any()) }
+        verify { workspaces.startAndWait(namespace, workspaceName, any()) }
+    }
+
+    private suspend fun runExecuteWithProgressMock(body: suspend () -> Unit) {
+        mockkStatic(ProgressManager::class)
+        try {
+            val pm = mockk<ProgressManager>()
+            every { ProgressManager.getInstance() } returns pm
+            every { pm.progressIndicator } returns indicator
+            every { pm.run(any<com.intellij.openapi.progress.Task.Backgroundable>()) } answers {
+                firstArg<com.intellij.openapi.progress.Task.Backgroundable>()
+                    .run(indicator)
+            }
+            body()
+        } finally {
+            unmockkStatic(ProgressManager::class)
+        }
     }
 }

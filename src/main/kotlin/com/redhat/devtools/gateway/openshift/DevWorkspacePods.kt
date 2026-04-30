@@ -35,9 +35,9 @@ import kotlin.time.Duration.Companion.seconds
 class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
+        const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
         private const val CONNECT_ATTEMPTS = 5
         private const val RECONNECT_DELAY: Long = 1000
-        private const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
     }
 
     private val logger = logger<DevWorkspacePods>()
@@ -389,12 +389,12 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     fun findFirst(namespace: String, labelSelector: String): V1Pod? {
-        val pods = doList(namespace, labelSelector)
+        val pods = list(namespace, labelSelector)
         return pods.items[0]
     }
 
     @Throws(ApiException::class)
-    private fun doList(namespace: String, labelSelector: String = ""): V1PodList {
+    fun list(namespace: String, labelSelector: String = ""): V1PodList {
         return CoreV1Api(client)
             .listNamespacedPod(namespace)
             .labelSelector(labelSelector)
@@ -424,7 +424,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 isCancelled?.invoke()
 
                 val pods = try {
-                    doList(namespace, labelSelector)
+                    list(namespace, labelSelector)
                 } catch (e: Exception) {
                     if (e.isCancellationException()) throw e
                     logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
