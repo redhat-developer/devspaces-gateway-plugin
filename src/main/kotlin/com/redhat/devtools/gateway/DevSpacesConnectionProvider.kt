@@ -31,7 +31,12 @@ import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.SelectClusterDialog
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -207,15 +212,17 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
 
         indicator.update(message = "Connecting to workspace IDE…")
-        val thinClient = DevSpacesConnection(ctx)
-            .connect({}, {}, {},
-                onProgress = { value ->
-                    indicator.update(value.title, value.message, value.countdownSeconds)
-                },
-                checkCancelled = {
-                    if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
-                }
-            )
+        val thinClient = runBlocking(Dispatchers.IO) {
+            DevSpacesConnection(ctx)
+                .connect({}, {}, {},
+                    onProgress = { value ->
+                        indicator.update(value.title, value.message, value.countdownSeconds)
+                    },
+                    checkCancelled = {
+                        if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
+                    }
+                )
+        }
 
         indicator.update(message = "Connection established successfully.")
         return DevSpacesConnectionHandle(

@@ -11,12 +11,28 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
+import com.intellij.openapi.wm.WindowManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
+import com.redhat.devtools.gateway.DevSpacesConnection
+import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
-import io.kubernetes.client.openapi.ApiClient
+import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.ui.Dialogs
+import io.kubernetes.client.openapi.models.V1Pod
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration.Companion.seconds
+
+private const val TIMEOUT_SECONDS_DELETE_PODS = 120
 
 /**
  * Handles the restart of a DevWorkspace when triggered by the restart annotation.
@@ -26,28 +42,111 @@ import kotlin.time.Duration.Companion.seconds
  * 2. Stop the workspace (spec.started = false)
  * 3. Wait for all pods to be deleted
  * 4. Start the workspace (spec.started = true)
- * 5. Clean up the restart annotation
+ * 5. Reconnect the IDE; then [execute] removes the restart annotation in a `finally` block
+ *    (once per attempt, success or failure).
  */
 class DevWorkspaceRestart(
-    private val namespace: String,
-    private val workspaceName: String,
-    private val client: ApiClient,
-    private val workspaces: DevWorkspaces = DevWorkspaces(client),
-    private val pods: DevWorkspacePods = DevWorkspacePods(client)
+    private val devSpacesContext: DevSpacesContext,
+    private val workspaces: DevWorkspaces = DevWorkspaces(devSpacesContext.client),
+    private val pods: DevWorkspacePods = DevWorkspacePods(devSpacesContext.client),
+    private val createRemoteIDEServer: () -> RemoteIDEServer = { RemoteIDEServer(devSpacesContext) },
+    private val createDevSpacesConnection: () -> DevSpacesConnection = { DevSpacesConnection(devSpacesContext) }
 ) {
+
+    private val namespace get() = devSpacesContext.devWorkspace.namespace
+    private val workspaceName get() = devSpacesContext.devWorkspace.name
 
     @Suppress("UnstableApiUsage")
     suspend fun execute(thinClient: ThinClientHandle) {
-        try {
-            close(thinClient)
-            stopWorkspace()
-            waitForPodsDeleted()
-            startWorkspace()
-            removeAnnotation()
-        } catch (e: Exception) {
-            thisLogger().error("Workspace restart failed for $namespace/$workspaceName", e)
-            removeAnnotation()
-            throw e
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            null, "Restart workspace", true
+        ) {
+                override fun run(indicator: ProgressIndicator) {
+                    indicator.isIndeterminate = false
+                    try {
+                        runBlocking(Dispatchers.IO) {
+                            restart(thinClient, indicator)
+                        }
+
+                    } catch (e: Exception) {
+                        thisLogger().error("Could not restart workspace $namespace/$workspaceName",e)
+                        ApplicationManager.getApplication().invokeLater {
+                            Dialogs.error(e.messageWithoutPrefix()?: "Could not connect to workspace IDE","Connection Error")
+                        }
+                    } finally {
+                        removeAnnotation()
+                    }
+                }
+            }
+        )
+    }
+
+    @Suppress("UnstableApiUsage")
+    internal suspend fun restart(
+        thinClient: ThinClientHandle,
+        indicator: ProgressIndicator?
+    ) {
+        indicator?.update("Closing IDE connection...", 0.0)
+        close(thinClient)
+
+        indicator?.update("Stopping workspace...", 0.2)
+        stopWorkspaceAndWait()
+
+        indicator?.update("Waiting for pods to terminate...", 0.4)
+        waitForPodsDeleted(indicator)
+
+        indicator?.update("Starting workspace...", 0.6)
+        startWorkspaceAndWait()
+
+        indicator?.update("Waiting for IDE to be ready...", 0.8)
+        waitForIDEReady()
+
+        indicator?.update("Connecting to IDE...", 1.0)
+        connectIDE()
+    }
+
+    private suspend fun waitForIDEReady() {
+        thisLogger().debug("Waiting for IDE server to be ready...")
+        createRemoteIDEServer().waitServerReady()
+        thisLogger().debug("IDE server is ready")
+    }
+
+    /**
+     * Reconnects via [DevSpacesConnection.connect]. That method throws if the IDE client never
+     * becomes ready; [execute] catches those failures and shows an error dialog. The disconnect
+     * callback only runs when the client closes later.
+     */
+    private suspend fun connectIDE() {
+        createDevSpacesConnection().connect(
+            ::onConnected,
+            {
+                thisLogger().warn("IDE connection failed")
+            },
+            {
+                thisLogger().debug("Workspace stopped after connection")
+            },
+            registerRestartWatcher = false
+        )
+    }
+
+    private fun onConnected(): () -> Unit = {
+        ApplicationManager.getApplication().invokeLater {
+            runCatching {
+                val refreshedWorkspace = DevWorkspaces(devSpacesContext.client)
+                    .get(namespace, workspaceName)
+                devSpacesContext.devWorkspace = refreshedWorkspace
+                repaintAllViews()
+            }.onFailure {
+                thisLogger().warn("Failed to refresh UI after reconnect", it)
+            }
+        }
+        thisLogger().debug("IDE connected successfully")
+    }
+
+    private fun repaintAllViews() {
+        val views = WindowManager.getInstance().allProjectFrames
+        views.forEach {
+            it.component.repaint()
         }
     }
 
@@ -58,27 +157,61 @@ class DevWorkspaceRestart(
         delay(1.seconds) // Give time for port forwarder cleanup
     }
 
-    private fun stopWorkspace() {
-        workspaces.stop(namespace, workspaceName)
-        thisLogger().debug("workspace $namespace/$workspaceName stop requested.")
+    private fun stopWorkspaceAndWait() {
+        thisLogger().debug("Stopping workspace and waiting...")
+        workspaces.stopAndWait(
+            namespace,
+            workspaceName,
+            DevWorkspaces.RUNNING_TIMEOUT
+        )
+
+        thisLogger().debug("Workspace stopped")
     }
 
-    private suspend fun waitForPodsDeleted() {
-        val podsDeleted = pods.waitForPodsDeleted(
+    private fun startWorkspaceAndWait() {
+        thisLogger().debug("Starting workspace and waiting...")
+        workspaces.startAndWait(
             namespace,
             workspaceName,
             20
         )
-        if (podsDeleted) {
-            thisLogger().debug("All pods for $namespace/$workspaceName have been deleted.")
-        } else {
-            thisLogger().warn("Pods for $namespace/$workspaceName were not deleted within timeout, proceeding anyway.")
+        thisLogger().debug("Workspace started and running")
+    }
+
+    private suspend fun waitForPodsDeleted(indicator: ProgressIndicator?) {
+        val labelSelector = "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=$workspaceName"
+
+        try {
+            withTimeout(TIMEOUT_SECONDS_DELETE_PODS.seconds) {
+                while (true) {
+                    indicator?.checkCanceled()
+                    val pods = fetchPodsWithRetry(labelSelector)
+                    if (pods.isEmpty()) break
+                    delay(2.seconds)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw IllegalStateException("Timeout waiting for pods deletion. Remaining pods: ${getRemainingPodNames(labelSelector)}", e)
         }
     }
 
-    private fun startWorkspace() {
-        workspaces.start(namespace, workspaceName)
-        thisLogger().debug("workspace $namespace/$workspaceName start requested.")
+    private suspend fun fetchPodsWithRetry(labelSelector: String): List<V1Pod> {
+        return try {
+            pods.list(namespace, labelSelector).items
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            thisLogger().warn("Failed to list pods, retrying...", e)
+            delay(1.seconds)
+            fetchPodsWithRetry(labelSelector)
+        }
+    }
+
+    private suspend fun getRemainingPodNames(labelSelector: String): List<String?> {
+        return try {
+            pods.list(namespace, labelSelector).items.map { it.metadata?.name }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun removeAnnotation() {
@@ -92,5 +225,11 @@ class DevWorkspaceRestart(
         }.onFailure { e ->
             thisLogger().debug("Failed to remove restart annotation from $namespace/$workspaceName", e)
         }
+    }
+
+    private fun ProgressIndicator.update(text: String, fraction: Double) {
+        this.fraction = fraction
+        this.text = text
+
     }
 }
