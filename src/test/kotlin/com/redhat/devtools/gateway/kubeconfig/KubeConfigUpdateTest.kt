@@ -436,6 +436,61 @@ class KubeConfigUpdateTest {
         }
     }
 
+    @Test
+    fun `#apply works when preferences are null`() {
+        // given
+        val data = CreateContextTestData()
+        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile)
+        every { config.preferences } returns null
+        
+        val allConfigs = listOf(config)
+        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        
+        // when
+        update.apply()
+        
+        // then
+        verify {
+            anyConstructed<BlockStyleFilePersister>().save(
+                any(),
+                any(),
+                any(),
+                null,
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply updates token when preferences are null`() {
+        // given
+        val data = UpdateTokenTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap)
+        every { config.preferences } returns null
+        
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateTokenMocks(data, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs)
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            anyConstructed<BlockStyleFilePersister>().save(
+                any(),
+                any(),
+                any(),
+                null,
+                any()
+            )
+        }
+    }
+
     private data class UpdateTokenTestData(
         val oldToken: String = "use-the-force",
         val newToken: String = "may-the-force-be-with-you",
