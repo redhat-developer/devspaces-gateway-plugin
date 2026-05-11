@@ -43,7 +43,7 @@ abstract class KubeConfigUpdate private constructor(
         contexts: ArrayList<Any?>?,
         clusters: ArrayList<Any?>?,
         users: ArrayList<Any?>?,
-        preferences: Any,
+        preferences: Any?,
         currentContext: String?,
         path: Path?
     ) {
