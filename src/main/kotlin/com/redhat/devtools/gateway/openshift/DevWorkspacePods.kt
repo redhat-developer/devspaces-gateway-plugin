@@ -17,9 +17,6 @@ import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
-import io.kubernetes.client.openapi.auth.ApiKeyAuth
-import io.kubernetes.client.openapi.auth.HttpBasicAuth
-import io.kubernetes.client.openapi.auth.HttpBearerAuth
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
 import kotlinx.coroutines.*
@@ -134,100 +131,8 @@ class DevWorkspacePods(private val client: ApiClient) {
         }
     }
 
-    // Helpers to access private maps using reflection
-     private fun ApiClient.copy(): ApiClient {
-        val originalDispatcher = this.httpClient.dispatcher
-        val newDispatcher = okhttp3.Dispatcher().apply {
-            maxRequests = originalDispatcher.maxRequests
-            maxRequestsPerHost = originalDispatcher.maxRequestsPerHost
-        }
-        val newPool = okhttp3.ConnectionPool()
-
-        val newHttp = this.httpClient.newBuilder()
-            .dispatcher(newDispatcher)
-            .connectionPool(newPool)
-            .pingInterval(0, java.util.concurrent.TimeUnit.SECONDS) // IMPORTANT for Exec
-            .build()
-
-        val clone = ApiClient(newHttp)
-
-        clone.basePath = this.basePath
-        clone.setDebugging(this.isDebugging)
-        clone.setVerifyingSsl(this.isVerifyingSsl)
-        clone.setSslCaCert(this.sslCaCert)
-        clone.setKeyManagers(this.keyManagers)
-        clone.setReadTimeout(this.readTimeout)
-        clone.setConnectTimeout(this.connectTimeout)
-        clone.setWriteTimeout(this.writeTimeout)
-
-        this.authentications.forEach { (name, auth) ->
-            val target = clone.getAuthentication(name) ?: return@forEach
-
-            when (auth) {
-                is ApiKeyAuth -> {
-                    if (target is ApiKeyAuth) {
-                        target.apiKey = auth.apiKey
-                        target.apiKeyPrefix = auth.apiKeyPrefix
-                    }
-                }
-
-                is HttpBasicAuth -> {
-                    if (target is HttpBasicAuth) {
-                        target.username = auth.username
-                        target.password = auth.password
-                    }
-                }
-
-                is HttpBearerAuth -> {
-                    if (target is HttpBearerAuth) {
-                        // No access to private "scheme" – always use correct "Bearer"
-                        target.bearerToken = auth.bearerToken
-                    }
-                }
-            }
-        }
-
-        defaultHeaders().forEach { (k, v) -> clone.addDefaultHeader(k, v) }
-        defaultCookies().forEach { (k, v) -> clone.addDefaultCookie(k, v) }
-        return clone
-    }
-
-    // Helpers to access headers/cookies via public API
-    fun ApiClient.defaultHeaders(): Map<String, String> {
-        return try {
-            val field = ApiClient::class.java.getDeclaredField("defaultHeaderMap")
-            field.isAccessible = true
-            @Suppress("UNCHECKED_CAST")
-            field.get(this) as Map<String, String>
-        } catch (_: Exception) {
-            emptyMap()
-        }
-    }
-
-    fun ApiClient.defaultCookies(): Map<String, String> {
-        return try {
-            val field = ApiClient::class.java.getDeclaredField("defaultCookieMap")
-            field.isAccessible = true
-            @Suppress("UNCHECKED_CAST")
-            field.get(this) as Map<String, String>
-        } catch (_: Exception) {
-            emptyMap()
-        }
-    }
-
-    private fun createIsolatedExecClient(base: ApiClient): ApiClient {
-        val cloned = base.copy()
-
-        val originalDispatcher = base.httpClient.dispatcher
-        cloned.httpClient = base.httpClient.newBuilder()
-            .connectionPool(okhttp3.ConnectionPool()) // Still need new pool for isolation
-            .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = originalDispatcher.maxRequests
-                maxRequestsPerHost = originalDispatcher.maxRequestsPerHost
-            })
-            .build()
-        return cloned
-    }
+    private fun createIsolatedExecClient(base: ApiClient): ApiClient =
+        ApiClientUtils.cloneForExec(base)
 
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
