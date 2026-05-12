@@ -38,6 +38,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.Socket
+import kotlin.time.Duration.Companion.milliseconds
 
 class DevWorkspacePodsTest {
 
@@ -92,14 +93,12 @@ class DevWorkspacePodsTest {
 
         // then
         // wait for the server to start
-        runBlocking { delay(100) }
+        runBlocking { delay(100.milliseconds) }
 
-        try {
+        closeable.use { closeable ->
             // Verify that data from server input stream is received by client
             val bytesRead = sendClientData("ping") // Send data to trigger server response
             assertThat(String(buffer, 0, bytesRead)).isEqualTo(serverData)
-        } finally {
-            closeable.close()
         }
     }
 
@@ -115,18 +114,16 @@ class DevWorkspacePodsTest {
 
         // then
         // wait for the server to start
-        runBlocking { delay(100) }
+        runBlocking { delay(100.milliseconds) }
         Socket("127.0.0.1", localPort).apply {
             close() // trigger retry
         }
-        runBlocking { delay(6000) } // 5 attempts * 1 second
+        runBlocking { delay(6000.milliseconds) } // 5 attempts * 1 second
 
-        try {
+        closeable.use { closeable ->
             verify(atLeast = 2) { // 2+ retries
                 anyConstructed<PortForward>().forward(pod, listOf(remotePort))
             }
-        } finally {
-            closeable.close()
         }
     }
 

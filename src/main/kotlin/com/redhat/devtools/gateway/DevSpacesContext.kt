@@ -14,12 +14,10 @@ package com.redhat.devtools.gateway
 import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import io.kubernetes.client.openapi.ApiClient
 
-class DevSpacesContext() {
+class DevSpacesContext {
     lateinit var client: ApiClient
     lateinit var devWorkspace: DevWorkspace
     var activeWorkspaces = mutableSetOf<DevWorkspace>()
-
-    fun isClientInitialized(): Boolean = ::client.isInitialized
 
     fun addWorkspace(workspace: DevWorkspace) {
         synchronized(activeWorkspaces) {
