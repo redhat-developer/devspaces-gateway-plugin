@@ -74,9 +74,9 @@ dependencies {
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
 
     // RedHat Auth dependencies
-    implementation("io.ktor:ktor-server-core-jvm:2.3.7")
-    implementation("io.ktor:ktor-server-netty-jvm:2.3.7")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:2.3.7")
+    implementation("io.ktor:ktor-server-core-jvm:3.4.3")
+    implementation("io.ktor:ktor-server-netty-jvm:3.4.3")
+    implementation("io.ktor:ktor-server-content-negotiation-jvm:3.4.3")
 
     implementation("com.nimbusds:oauth2-oidc-sdk:11.15")  // Core OIDC/OAuth2
     implementation("com.nimbusds:nimbus-jose-jwt:9.37")   // JWT processing
