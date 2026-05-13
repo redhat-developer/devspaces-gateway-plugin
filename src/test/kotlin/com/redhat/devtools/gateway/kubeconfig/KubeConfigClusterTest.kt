@@ -21,7 +21,7 @@ class KubeConfigClusterTest {
         // given
         val map = mapOf(
             "server" to "https://api.example.com:6443",
-            "certificate-authority-data" to "LS0tLS1CRUdJTi...",
+            "certificate-authority-data" to "LS0tLS1CRUdJTi...", // notsecret
             "insecure-skip-tls-verify" to true
         )
 
@@ -31,7 +31,7 @@ class KubeConfigClusterTest {
         // then
         assertThat(cluster).isNotNull
         assertThat(cluster?.server).isEqualTo("https://api.example.com:6443")
-        assertThat(cluster?.certificateAuthority?.value).isEqualTo("LS0tLS1CRUdJTi...")
+        assertThat(cluster?.certificateAuthority?.value).isEqualTo("LS0tLS1CRUdJTi...") // notsecret
         assertThat(cluster?.certificateAuthority?.isFilePath).isFalse()
         assertThat(cluster?.insecureSkipTlsVerify).isTrue()
     }
@@ -71,7 +71,7 @@ class KubeConfigClusterTest {
     fun `#fromMap returns null when server is missing`() {
         // given
         val map = mapOf(
-            "certificate-authority-data" to "LS0tLS1CRUdJTi..."
+            "certificate-authority-data" to "LS0tLS1CRUdJTi..." // notsecret - missing server
         )
 
         // when
@@ -128,7 +128,7 @@ class KubeConfigClusterTest {
         // given
         val cluster = KubeConfigCluster(
             server = "https://tatooine.starwars.galaxy:6443",
-            certificateAuthority = CertificateSource.fromData("LS0tLS1CRUdJTi1MSUdIVF..."),
+            certificateAuthority = CertificateSource.fromData("LS0tLS1CRUdJTi1MSUdIVF..."), // notsecret
             insecureSkipTlsVerify = true
         )
 
@@ -139,7 +139,7 @@ class KubeConfigClusterTest {
         assertThat(map)
             .hasSize(3)
             .containsEntry("server", "https://tatooine.starwars.galaxy:6443")
-            .containsEntry("certificate-authority-data", "LS0tLS1CRUdJTi1MSUdIVF...")
+            .containsEntry("certificate-authority-data", "LS0tLS1CRUdJTi1MSUdIVF...") // notsecret
             .containsEntry("insecure-skip-tls-verify", true)
     }
 

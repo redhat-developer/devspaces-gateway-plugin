@@ -17,46 +17,53 @@ import java.util.Base64
 
 class PemUtilsTest {
 
+    private val inventedNonParseablePem =
+        "-----BEGIN CERTIFICATE-----\nTk9OLVZBTElELURFUi1ERVItVEVTVA==\n-----END CERTIFICATE-----" // notsecret
+
     @Test
     fun `#toBase64 encodes PEM content`() {
-        val pem = "-----BEGIN CERTIFICATE-----\nMIIDazCCAlOgAwIBAgIUZtx\n-----END CERTIFICATE-----"
-
+        // given
+        val pem = inventedNonParseablePem
+        // when
         val result = PemUtils.toBase64(pem)
-
+        // then
         assertThat(result).isEqualTo(Base64.getEncoder().encodeToString(pem.toByteArray()))
     }
 
     @Test
     fun `#toBase64 passes through already-base64 content`() {
-        val base64 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURhekNDQWxP"
-
+        // given
+        val base64 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURhekNDQWxP" // notsecret
+        // when
         val result = PemUtils.toBase64(base64)
-
+        // then
         assertThat(result).isEqualTo(base64)
     }
 
     @Test
     fun `#toBase64 is idempotent`() {
-        val pem = "-----BEGIN CERTIFICATE-----\nMIIDazCCAlOgAwIBAgIUZtx\n-----END CERTIFICATE-----"
-
+        // given
+        val pem = inventedNonParseablePem
+        // when
         val encoded = PemUtils.toBase64(pem)
         val doubleEncoded = PemUtils.toBase64(encoded)
-
+        // then
         assertThat(doubleEncoded).isEqualTo(encoded)
     }
 
     @Test
     fun `#isPem returns true for PEM content`() {
-        assertThat(PemUtils.isPem("-----BEGIN CERTIFICATE-----\ndata")).isTrue()
+        assertThat(PemUtils.isPem("-----BEGIN CERTIFICATE-----\ndata")).isTrue() // notsecret
     }
 
     @Test
     fun `#isPem returns true for PEM embedded in other text`() {
-        assertThat(PemUtils.isPem("some prefix -----BEGIN CERTIFICATE-----")).isTrue()
+        assertThat(PemUtils.isPem("some prefix -----BEGIN CERTIFICATE-----")).isTrue() // notsecret
     }
 
     @Test
     fun `#isPem returns false for base64 content`() {
+        // notsecret
         assertThat(PemUtils.isPem("LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t")).isFalse()
     }
 
@@ -72,68 +79,76 @@ class PemUtilsTest {
 
     @Test
     fun `#parseCertificate handles single-line PEM from JBTextField paste`() {
-        // given - simulates pasting multi-line PEM into single-line JBTextField
-        // (newlines get stripped, resulting in single-line PEM)
-        val singleLinePem = "-----BEGIN CERTIFICATE-----MIIB9zCCAXygAwIBAgIUALZNAPFdxHPwjeDloDwyYChAO/4wCgYIKoZIzj0EAwMwKjEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MREwDwYDVQQDEwhzaWdzdG9yZTAeFw0yMTEwMDcxMzU2NTlaFw0zMTEwMDUxMzU2NThaMCoxFTATBgNVBAoTDHNpZ3N0b3JlLmRldjERMA8GA1UEAxMIc2lnc3RvcmUwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAT7XeFT4rb3PQGwS4IajtLk3/OlnpgangaBclYpsYBr5i+4ynB07ceb3LP0OIOZdxexX69c5iVuyJRQ+Hz05yi+UF3uBWAlHpiS5sh0+H2GHE7SXrk1EC5m1Tr19L9gg92jYzBhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBRYwB5fkUWlZql6zJChkyLQKsXF+jAfBgNVHSMEGDAWgBRYwB5fkUWlZql6zJChkyLQKsXF+jAKBggqhkjOPQQDAwNpADBmAjEAj1nHeXZp+13NWBNa+EDsDP8G1WWg1tCMWP/WHPqpaVo0jhsweNFZgSs0eE7wYI4qAjEA2WB9ot98sIkoF3vZYdd3/VtWB5b9TNMea7Ix/stJ5TfcLLeABLE4BNJOsQ4vnBHJ-----END CERTIFICATE-----"
-
+        // given - simulates pasting multi-line PEM into single-line JBTextField (newlines stripped)
+        val singleLinePem =
+            // notsecret
+            "-----BEGIN CERTIFICATE-----MIIDlTCCAn2gAwIBAgIUJ/MyNwdZC5vGYJMyYa5m4letZrYwDQYJKoZIhvcNAQELBQAwWjEnMCUGA1UEAwweZmFrZS11bml0LXRlc3QuZXhhbXBsZS5pbnZhbGlkMSIwIAYDVQQKDBlFeGFtcGxlIFRlc3QgRml4dHVyZSBPbmx5MQswCQYDVQQGEwJYWDAeFw0yNjA1MTMxMzE4MDJaFw0zNjA1MTAxMzE4MDJaMFoxJzAlBgNVBAMMHmZha2UtdW5pdC10ZXN0LmV4YW1wbGUuaW52YWxpZDEiMCAGA1UECgwZRXhhbXBsZSBUZXN0IEZpeHR1cmUgT25seTELMAkGA1UEBhMCWFgwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCG4CRbIkDOtpWzjWVW3V62FKzSfdAhdOJ/avqaPU2FiSjwEcBuVceoT5ilVjNWuDSqWeTrmwPjBfzywpB9OHrziqE5rRBnlyuxTMgxxbpNU8WEBFtn2RWvKen0uZOOLTro1oQsI6ALqKd07s8t9XjIZMEiOzhvKzYK6xQiqXjnYJqWAw3ZjhuvPcuvAALTXJMB6dASZNJ+q7gUd0gIMIjXVzAcj/QPxISwr3JMbpk+GvDnz0kFt7TFQRMqW56dbK36ukjDvLdFd+bbigE6m55vsGVdyZC55wBIB87ycn0zc3hgrfej4JVEqEhhlsifUkjGqNR2h9cdY3u58gzJwZP5AgMBAAGjUzBRMB0GA1UdDgQWBBSn488Oxr0rTEaI1Q3xHhxERrAZ5jAfBgNVHSMEGDAWgBSn488Oxr0rTEaI1Q3xHhxERrAZ5jAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAu0fWReMMgSMM2ctyslZ/b00FDUnDq713HQ+HH3sB28NVxvwKUHR637Z/VzX2HNlR5wuR2ulxKi6m54EBVCuE+T4kwPD/wx32RtGMAyuBlpamLC6WOdmVIVdYr66BRE7KdfTNnK+MJAa0duD5KniqxkdMU7ZxveHM6RRv/hDg0qybOxLSwetmfI9CRiw0qOGiX5PhCqsJVIf1FxRl2mPPO0HiI94AyenmZfatuz9Y8Pb/q7cgdXpX2x29dnqXXO91qbVHk+zIIsYowqsdnMTfqNHFSJGrNovvI63/GQ/8148oKAALaH4VgNOyVIdaKkPDR5I/WBnNmgJHFa/ozYnVi-----END CERTIFICATE-----"
         // when
         val certificate = PemUtils.parseCertificate(singleLinePem)
-
-        // then
+        // then — self-signed RSA fixture generated for this test suite only (openssl req -x509 … *.invalid)
         assertThat(certificate).isNotNull()
-        assertThat(certificate.subjectX500Principal.name).contains("CN=sigstore")
-        assertThat(certificate.issuerX500Principal.name).contains("CN=sigstore")
+        assertThat(certificate.subjectX500Principal.name).contains("CN=fake-unit-test.example.invalid")
+        assertThat(certificate.issuerX500Principal.name).contains("CN=fake-unit-test.example.invalid")
     }
 
     @Test
     fun `#parseCertificate handles properly formatted multi-line PEM`() {
-        // given - proper PEM with newlines
+        // given - proper synthetic PEM with newlines
+        // notsecret
         val multiLinePem = """
             -----BEGIN CERTIFICATE-----
-            MIIB9zCCAXygAwIBAgIUALZNAPFdxHPwjeDloDwyYChAO/4wCgYIKoZIzj0EAwMw
-            KjEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MREwDwYDVQQDEwhzaWdzdG9yZTAeFw0y
-            MTEwMDcxMzU2NTlaFw0zMTEwMDUxMzU2NThaMCoxFTATBgNVBAoTDHNpZ3N0b3Jl
-            LmRldjERMA8GA1UEAxMIc2lnc3RvcmUwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAT7
-            XeFT4rb3PQGwS4IajtLk3/OlnpgangaBclYpsYBr5i+4ynB07ceb3LP0OIOZdxex
-            X69c5iVuyJRQ+Hz05yi+UF3uBWAlHpiS5sh0+H2GHE7SXrk1EC5m1Tr19L9gg92j
-            YzBhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBRY
-            wB5fkUWlZql6zJChkyLQKsXF+jAfBgNVHSMEGDAWgBRYwB5fkUWlZql6zJChkyLQ
-            KsXF+jAKBggqhkjOPQQDAwNpADBmAjEAj1nHeXZp+13NWBNa+EDsDP8G1WWg1tCM
-            WP/WHPqpaVo0jhsweNFZgSs0eE7wYI4qAjEA2WB9ot98sIkoF3vZYdd3/VtWB5b9
-            TNMea7Ix/stJ5TfcLLeABLE4BNJOsQ4vnBHJ
+            MIIDlTCCAn2gAwIBAgIUJ/MyNwdZC5vGYJMyYa5m4letZrYwDQYJKoZIhvcNAQEL
+            BQAwWjEnMCUGA1UEAwweZmFrZS11bml0LXRlc3QuZXhhbXBsZS5pbnZhbGlkMSIw
+            IAYDVQQKDBlFeGFtcGxlIFRlc3QgRml4dHVyZSBPbmx5MQswCQYDVQQGEwJYWDAe
+            Fw0yNjA1MTMxMzE4MDJaFw0zNjA1MTAxMzE4MDJaMFoxJzAlBgNVBAMMHmZha2Ut
+            dW5pdC10ZXN0LmV4YW1wbGUuaW52YWxpZDEiMCAGA1UECgwZRXhhbXBsZSBUZXN0
+            IEZpeHR1cmUgT25seTELMAkGA1UEBhMCWFgwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+            DwAwggEKAoIBAQCG4CRbIkDOtpWzjWVW3V62FKzSfdAhdOJ/avqaPU2FiSjwEcBu
+            VceoT5ilVjNWuDSqWeTrmwPjBfzywpB9OHrziqE5rRBnlyuxTMgxxbpNU8WEBFtn
+            2RWvKen0uZOOLTro1oQsI6ALqKd07s8t9XjIZMEiOzhvKzYK6xQiqXjnYJqWAw3Z
+            jhuvPcuvAALTXJMB6dASZNJ+q7gUd0gIMIjXVzAcj/QPxISwr3JMbpk+GvDnz0kF
+            t7TFQRMqW56dbK36ukjDvLdFd+bbigE6m55vsGVdyZC55wBIB87ycn0zc3hgrfej
+            4JVEqEhhlsifUkjGqNR2h9cdY3u58gzJwZP5AgMBAAGjUzBRMB0GA1UdDgQWBBSn
+            488Oxr0rTEaI1Q3xHhxERrAZ5jAfBgNVHSMEGDAWgBSn488Oxr0rTEaI1Q3xHhxE
+            RrAZ5jAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAu0fWReMMg
+            SMM2ctyslZ/b00FDUnDq713HQ+HH3sB28NVxvwKUHR637Z/VzX2HNlR5wuR2ulxK
+            i6m54EBVCuE+T4kwPD/wx32RtGMAyuBlpamLC6WOdmVIVdYr66BRE7KdfTNnK+MJ
+            Aa0duD5KniqxkdMU7ZxveHM6RRv/hDg0qybOxLSwetmfI9CRiw0qOGiX5PhCqsJV
+            If1FxRl2mPPO0HiI94AyenmZfatuz9Y8Pb/q7cgdXpX2x29dnqXXO91qbVHk+zII
+            sYowqsdnMTfqNHFSJGrNovvI63/GQ/8148oKAALaH4VgNOyVIdaKkPDR5I/WBnNm
+            gJHFa/ozYnVi
             -----END CERTIFICATE-----
         """.trimIndent()
-
         // when
         val certificate = PemUtils.parseCertificate(multiLinePem)
-
-        // then
+        //then
         assertThat(certificate).isNotNull()
-        assertThat(certificate.subjectX500Principal.name).contains("CN=sigstore")
-        assertThat(certificate.issuerX500Principal.name).contains("CN=sigstore")
+        assertThat(certificate.subjectX500Principal.name).contains("CN=fake-unit-test.example.invalid")
     }
 
     @Test
-    fun `#parseCertificate handles single-line client certificate`() {
-        // given - client certificate pasted into JBTextField (newlines stripped)
-        val singleLinePem = "-----BEGIN CERTIFICATE-----MIIDGjCCAgKgAwIBAgIBAjANBgkqhkiG9w0BAQsFADAiMSAwHgYDVQQDDBdsb2NhbGhvc3QtY2FAMTUzMTQ2ODA4NTAgFw0xODA3MTMwNjQ4MDVaGA8yMTE4MDYxOTA2NDgwNVowHzEdMBsGA1UEAwwUbG9jYWxob3N0QDE1MzE0NjgwODYwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDC9Qfx1YAEp+wrSIjbinWw3pWIDbf57LutfXgS84ilZpc7M2zeu1QrPyhCedL/gPP0QxKbPS6AR5R/DibH4RWcujL6CU5FB0Y9on+IpN/Iml2XzgGiU82gTkJg185VgWwDaHOPKvUF9N1GpvxcSvRsNGoiBJ/LlE4NhxyUQ0V/lAalYxYybxgl8/xghWMkGnQc3YKWKqGmtBaaax3xvMzamxpWPphoLG07+YZfAf0Q7vslVMmlslRmx9OpJFvRnkelbXoHHx73umbMiFp28njY8NK2dqXwb6Z80BCezppCKYpbjnupOIDAAE0KvjzhhzSS68ZgukiBZOcUlnWLzL39AgMBAAGjXDBaMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMCUGA1UdEQQeMByCCWxvY2FsaG9zdIIJbG9jYWxob3N0hwR/AAABMA0GCSqGSIb3DQEBCwUAA4IBAQBm9Z15QxsRqoaRDh/ELA93eE9105gwrXrR3AK/iKuJyxIc/SXVbpAaYHArMrUzaZs0GXEzgW31tZn8D3dgFy8XdZxk1ztaFTm+QTnFRogMNB8Akvpq7jwTa44c7G0wuNO2nATMu2Ifi/nSdQadTxzmZacSrevN/zcjmvSoV4VFkKO5VBnr7e1ruffxAaVAzrRraplpZvuJzlcvqTYAME8fq8H9QidvaXF6yIbEPwwUHK678W4rXn9Zp6NDuQhH0eNPAGlEAaYuyCJvJZeM68ootMi7Uh6RJOTDw1HIdekYEr1/FAg4+rH/9Gi+o/LXsBmYXabO+GjsOwfezv3THDnw-----END CERTIFICATE-----"
-
+    fun `#parseCertificate handles single-line EC certificate`() {
+        // given
+        // notsecret
+        val singleLineEcPem =
+            "-----BEGIN CERTIFICATE-----MIICDzCCAbWgAwIBAgIUJM+lFwR1WyaM0pOqgloNGsvTLjEwCgYIKoZIzj0EAwIwXTEqMCgGA1UEAwwhZmFrZS1lYy11bml0LXRlc3QuZXhhbXBsZS5pbnZhbGlkMSIwIAYDVQQKDBlFeGFtcGxlIFRlc3QgRml4dHVyZSBPbmx5MQswCQYDVQQGEwJYWDAeFw0yNjA1MTMxMzE5MjdaFw0zNjA1MTAxMzE5MjdaMF0xKjAoBgNVBAMMIWZha2UtZWMtdW5pdC10ZXN0LmV4YW1wbGUuaW52YWxpZDEiMCAGA1UECgwZRXhhbXBsZSBUZXN0IEZpeHR1cmUgT25seTELMAkGA1UEBhMCWFgwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASjD1l8BUS3K/y60I9tUn6njNT378eh6rtqWA9JUM4Rij4iIOnnRRjBuN0L+fF/ojNgakEG6Dc17z6C1t3oJjCSo1MwUTAdBgNVHQ4EFgQUIsiKjviTVSQMf52xWPlEu6+/cU0wHwYDVR0jBBgwFoAUIsiKjviTVSQMf52xWPlEu6+/cU0wDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiAWbprqeHYk2Ov262fzisXbyLmSlNa9uOMQXCaxmqm6tQIhAIgIr5jIokOT+ThCgant0Jr/XUEryzF7tpvAD/lJkwv9-----END CERTIFICATE-----"
         // when
-        val certificate = PemUtils.parseCertificate(singleLinePem)
-
+        val certificate = PemUtils.parseCertificate(singleLineEcPem)
         // then
         assertThat(certificate).isNotNull()
-        assertThat(certificate.subjectX500Principal.name).contains("CN=localhost@1531468086")
+        assertThat(certificate.subjectX500Principal.name).contains("CN=fake-ec-unit-test.example.invalid")
     }
 
     @Test
     fun `#parsePrivateKey handles single-line RSA private key from JBTextField paste`() {
-        // given - 512-bit RSA private key in single-line format (simulating JBTextField paste)
-        val singleLineKey = "-----BEGIN PRIVATE KEY-----MIIBVwIBADANBgkqhkiG9w0BAQEFAASCAUEwggE9AgEAAkEA8ZF6nT2T9jLuZE6c8CduV0pc0MpCzZkLGKH4KMDjd9J5L/c/DqbrqqubGCfZhWfpn7Dccy1QEVmJf5RgLbxL6QIDAQABAkEAkphhW2jSENdJmi+mx4p2SJzFBKOptJEKjdFFAp5DrCMtOf0SgGPqadEJmVF+FcsFJKi0RXN+0Hk0JIXUoRBoXQIhAPmYugieyFBgcO17xEfe+Bm1rIBMg0DGVQVaxZmJ1LqXAiEA98QGWSQ6OTuR0U0KkgjWEyfRdtf5rOmTk+I2VL2ofX8CIQCCtQg3G2+rJ9X7h6TyPkGOtSTwyyCw+yvq8e4oyZUtYQIhAMZnMq4vVHCAQ0RXbR+D8+li+Vkxmb3dTVAe1WMGfOYBAiEA1axQLnkgglVgK9jGYUgH320TpEwLuOKQCwysxqVg9jQ=-----END PRIVATE KEY-----"
-
+        // PKCS#8 PEM is a throwaway RSA key generated only for this test (openssl genrsa /
+        // pkcs8 -nocrypt). It is not paired with any certificate in this file, never belonged to
+        // a cluster or host
+        // notsecret
+        val singleLineKey =
+            "-----BEGIN PRIVATE KEY-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCcxRFWa06rNo5xsdpGTLsETLviFAR4wdB0bylr6lHCuNpdW1gM1TyRvVvFyQWbJK+Dk+emSV7ocbUibUaxdhWQ1W1Jv7L/s3H4zzYdWpOF4LZ+W0wHVhav4AZjiU7GbvO15uK2gbfuEZHJ06uLTpKMh5uWRGpEBr0eNDE1Y6au1lpZtJSfgXuJRXHd+kbngjtmjb4XcW/3xCBbcAcpmXSCGgE9uV5uuYVmCwYBrLtHK5MUKz0i1F85XN2DEQwAEHEkg5d9Z0ypxoKHMRGmBkoN2t9SihAU04efHHKWk2GTDFZGY4Ga4w/YmmhoPM54gU7ONRN3LYRfThr0Y5ivJfPTAgMBAAECggEACqQ97GCAXeg9fG5BjirAjybToiG7DqS+t7NMBoKeENpncurea+Xq+fb2odMRdFnl0sgEHio2LQ/QPIlaa8rDj/9M2d1kvdgP0SnlAdJs19ZMd6tO2o33dZzUEjGh4p++ygbli39RXZxdCcGP5Xbsmml3dZh99ibW85PrZd+2fYD9hsO0CTRdlCLB0/Gy/yKW4iujlJyp1HfPFeiw/lKL5GwNSFpMJElwGcQUPVdXPqU+GzPJH1m54jFlYzIZCXuHW4U99+NPFj6foA5PjMS3ZXcEyWZfhuHbDYrqj3aKxRURWaNdGVxML6xSmdXvN/4yo7CkLUr1PN0apKACVS0FYQKBgQDUTP0aTp+ja3TNVtrv4K1v8Me3stlbxR9zeB/zL4QBjSkALBhz8xeYGYm4i1elH3Ch9jn2rHy9E8C7zxwZbW2mYHtV/Micyc6X03yqBuEVzsqlIxSUoUKM4yVTlje5jj6ggo/OJP86wUExbvsxkjocjrRitqk5eAlt6KHr5SxbqQKBgQC9CewRCFBJQpYaHDEpyVHlsgM6qwP4W4VvStScTQ1hXnHE7g0mQhKxiS+WgF6RJkhiJhTvRfSVm0/3PSLa9woEtgiNx+cPscHLFvR0y4RCbjA1QDIGLbQV9/e6ntnlup4nFrCEgA17oQtb/EGXMAIRL2SdsGpd3YEWrSchOxuhGwKBgQDJeyt17Qo6OMAIJJbxswRGyXdxUm5QVtsLZgTEceLQ6hvwSukGGb3ZntsCZlPOpPDq9Nh7z6UueHGgi+U6CI1YqhZDO/1UN342vwKABrlVTgUqBgoBKK4VMXl6Q4UtN98dy+sYlCoZo9DwTkhc+k7mTVTKnlop7U7dnTsWuk+HyQKBgHOAm39wr/WDPMlpTlS00FhjIvv2v+9ApE/yzeNOZQ2IMkVcGia1GkzlgHEZsC5J0NI/aG0mNiIvCnYLIb/eT32/Z4yRhsmdF8aqGOU/8GjSgJwYxDfoNu9xWijppENsefNyNppOz24pYRJsF/tzdt/fMD/1KZh+ncAoPg9c2S3fAoGAWzYz9FFDIXv8yx8e5eGJstq+F2GkOrTliPfjX5PP1NkIJ8vFxGVE6RKzn8FSoE+Xxz5GjcULoE0hno7p2oYqLQpd7pI3LyLTSZhTN0FKDHQQpPtzoo6hSda53i3AaI0VO6mRi3VJaSoWhUkz/4ULR1NuuWpW2oFD2hIEQZqkiDI=-----END PRIVATE KEY-----"
         // when
         val privateKey = PemUtils.parsePrivateKey(singleLineKey)
-
         // then
         assertThat(privateKey).isNotNull()
         assertThat(privateKey.algorithm).isEqualTo("RSA")
@@ -141,14 +156,14 @@ class PemUtilsTest {
 
     @Test
     fun `#parseCertificate handles malformed PEM with only header newline`() {
-        // given - JBTextField sometimes preserves first newline only
-        val malformedPem = "-----BEGIN CERTIFICATE-----\nMIIDGjCCAgKgAwIBAgIBAjANBgkqhkiG9w0BAQsFADAiMSAwHgYDVQQDDBdsb2NhbGhvc3QtY2FAMTUzMTQ2ODA4NTAgFw0xODA3MTMwNjQ4MDVaGA8yMTE4MDYxOTA2NDgwNVowHzEdMBsGA1UEAwwUbG9jYWxob3N0QDE1MzE0NjgwODYwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDC9Qfx1YAEp+wrSIjbinWw3pWIDbf57LutfXgS84ilZpc7M2zeu1QrPyhCedL/gPP0QxKbPS6AR5R/DibH4RWcujL6CU5FB0Y9on+IpN/Iml2XzgGiU82gTkJg185VgWwDaHOPKvUF9N1GpvxcSvRsNGoiBJ/LlE4NhxyUQ0V/lAalYxYybxgl8/xghWMkGnQc3YKWKqGmtBaaax3xvMzamxpWPphoLG07+YZfAf0Q7vslVMmlslRmx9OpJFvRnkelbXoHHx73umbMiFp28njY8NK2dqXwb6Z80BCezppCKYpbjnupOIDAAE0KvjzhhzSS68ZgukiBZOcUlnWLzL39AgMBAAGjXDBaMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMCUGA1UdEQQeMByCCWxvY2FsaG9zdIIJbG9jYWxob3N0hwR/AAABMA0GCSqGSIb3DQEBCwUAA4IBAQBm9Z15QxsRqoaRDh/ELA93eE9105gwrXrR3AK/iKuJyxIc/SXVbpAaYHArMrUzaZs0GXEzgW31tZn8D3dgFy8XdZxk1ztaFTm+QTnFRogMNB8Akvpq7jwTa44c7G0wuNO2nATMu2Ifi/nSdQadTxzmZacSrevN/zcjmvSoV4VFkKO5VBnr7e1ruffxAaVAzrRraplpZvuJzlcvqTYAME8fq8H9QidvaXF6yIbEPwwUHK678W4rXn9Zp6NDuQhH0eNPAGlEAaYuyCJvJZeM68ootMi7Uh6RJOTDw1HIdekYEr1/FAg4+rH/9Gi+o/LXsBmYXabO+GjsOwfezv3THDnw-----END CERTIFICATE-----"
-
+        // given
+        // notsecret
+        val malformedPem =
+            "-----BEGIN CERTIFICATE-----\nMIIDlTCCAn2gAwIBAgIUJ/MyNwdZC5vGYJMyYa5m4letZrYwDQYJKoZIhvcNAQELBQAwWjEnMCUGA1UEAwweZmFrZS11bml0LXRlc3QuZXhhbXBsZS5pbnZhbGlkMSIwIAYDVQQKDBlFeGFtcGxlIFRlc3QgRml4dHVyZSBPbmx5MQswCQYDVQQGEwJYWDAeFw0yNjA1MTMxMzE4MDJaFw0zNjA1MTAxMzE4MDJaMFoxJzAlBgNVBAMMHmZha2UtdW5pdC10ZXN0LmV4YW1wbGUuaW52YWxpZDEiMCAGA1UECgwZRXhhbXBsZSBUZXN0IEZpeHR1cmUgT25seTELMAkGA1UEBhMCWFgwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCG4CRbIkDOtpWzjWVW3V62FKzSfdAhdOJ/avqaPU2FiSjwEcBuVceoT5ilVjNWuDSqWeTrmwPjBfzywpB9OHrziqE5rRBnlyuxTMgxxbpNU8WEBFtn2RWvKen0uZOOLTro1oQsI6ALqKd07s8t9XjIZMEiOzhvKzYK6xQiqXjnYJqWAw3ZjhuvPcuvAALTXJMB6dASZNJ+q7gUd0gIMIjXVzAcj/QPxISwr3JMbpk+GvDnz0kFt7TFQRMqW56dbK36ukjDvLdFd+bbigE6m55vsGVdyZC55wBIB87ycn0zc3hgrfej4JVEqEhhlsifUkjGqNR2h9cdY3u58gzJwZP5AgMBAAGjUzBRMB0GA1UdDgQWBBSn488Oxr0rTEaI1Q3xHhxERrAZ5jAfBgNVHSMEGDAWgBSn488Oxr0rTEaI1Q3xHhxERrAZ5jAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAu0fWReMMgSMM2ctyslZ/b00FDUnDq713HQ+HH3sB28NVxvwKUHR637Z/VzX2HNlR5wuR2ulxKi6m54EBVCuE+T4kwPD/wx32RtGMAyuBlpamLC6WOdmVIVdYr66BRE7KdfTNnK+MJAa0duD5KniqxkdMU7ZxveHM6RRv/hDg0qybOxLSwetmfI9CRiw0qOGiX5PhCqsJVIf1FxRl2mPPO0HiI94AyenmZfatuz9Y8Pb/q7cgdXpX2x29dnqXXO91qbVHk+zIIsYowqsdnMTfqNHFSJGrNovvI63/GQ/8148oKAALaH4VgNOyVIdaKkPDR5I/WBnNmgJHFa/ozYnVi-----END CERTIFICATE-----"
         // when
         val certificate = PemUtils.parseCertificate(malformedPem)
-
         // then
         assertThat(certificate).isNotNull()
-        assertThat(certificate.subjectX500Principal.name).contains("CN=localhost@1531468086")
+        assertThat(certificate.subjectX500Principal.name).contains("CN=fake-unit-test.example.invalid")
     }
 }

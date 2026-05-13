@@ -21,12 +21,12 @@ class ClusterTest {
     fun `#Cluster constructor creates instance with name, url, and token`() {
         // given
         // when
-        val cluster = Cluster(name = "death-star", url = "https://api.deathstar.empire", token = "empire-token-4ls")
+        val cluster = Cluster(name = "death-star", url = "https://api.deathstar.empire", token = "empire-token-4ls") // notsecret
 
         // then
         assertThat(cluster.name).isEqualTo("death-star")
         assertThat(cluster.url).isEqualTo("https://api.deathstar.empire")
-        assertThat(cluster.token).isEqualTo("empire-token-4ls")
+        assertThat(cluster.token).isEqualTo("empire-token-4ls") // notsecret
         assertThat(cluster.id).isEqualTo("death-star@api.deathstar.empire")
     }
 
@@ -50,7 +50,7 @@ class ClusterTest {
         val cluster = Cluster(
             name = "millennium-falcon",
             url = "https://api.falcon.ship",
-            token = "solo-token-123")
+            token = "solo-token-123") // notsecret
 
         // then
         assertThat(cluster.toString()).isEqualTo("millennium-falcon (https://api.falcon.ship)")
@@ -74,9 +74,9 @@ class ClusterTest {
     fun `#equals returns true for clusters with same properties`() {
         // given
         // when
-        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
-        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
-        val cluster3 = Cluster(name = "c3po", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
+        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
+        val cluster3 = Cluster(name = "c3po", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
 
         // then
         assertThat(cluster1).isEqualTo(cluster2)
@@ -87,8 +87,8 @@ class ClusterTest {
     fun `#hashCode returns same value for clusters with same properties`() {
         // given
         // when
-        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
-        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
+        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
 
         // then
         assertThat(cluster1.hashCode()).isEqualTo(cluster2.hashCode())
@@ -97,7 +97,7 @@ class ClusterTest {
     @Test
     fun `#copy method creates new instance with modified properties`() {
         // given
-        val original = Cluster(name = "obi-wan", url = "https://api.kenobi.jedi", token = "kenobi-token-1")
+        val original = Cluster(name = "obi-wan", url = "https://api.kenobi.jedi", token = "kenobi-token-1") // notsecret
 
         // when
         val copy = original.copy(name = "ben-kenobi")
@@ -105,7 +105,7 @@ class ClusterTest {
         // then
         assertThat(copy.name).isEqualTo("ben-kenobi")
         assertThat(copy.url).isEqualTo("https://api.kenobi.jedi")
-        assertThat(copy.token).isEqualTo("kenobi-token-1")
+        assertThat(copy.token).isEqualTo("kenobi-token-1") // notsecret
     }
 
     @Test
@@ -136,7 +136,7 @@ class ClusterTest {
     @Test
     fun `#fromNameAndUrl creates cluster from URL-only input`() {
         // given
-        val url = "https://api.che-dev.x6e0.p1.openshiftapps.com:6443"
+        val url = "https://api.jedi.temple:6443"
 
         // when
         val cluster = Cluster.fromNameAndUrl(url)
@@ -205,7 +205,7 @@ class ClusterTest {
         val cluster = Cluster(
             name = "scarif",
             url = "https://api.scarif.empire",
-            token = "empire-token"
+            token = "empire-token" // notsecret
         )
 
         // then
@@ -222,7 +222,7 @@ class ClusterTest {
             Cluster(
                 name = "mustafar",
                 url = "https://api.mustafar.sith",
-                token = "vader-token",
+                token = "vader-token", // notsecret
                 clientCert = CertificateSource.fromData("cert"),
                 clientKey = CertificateSource.fromData("key")
             )
@@ -273,7 +273,7 @@ class ClusterTest {
         val cluster3 = Cluster(
             name = "endor",
             url = "https://api.endor.rebel",
-            token = "ewok-token"
+            token = "ewok-token" // notsecret
         )
 
         // when

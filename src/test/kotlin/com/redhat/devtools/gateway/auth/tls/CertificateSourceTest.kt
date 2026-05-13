@@ -125,7 +125,7 @@ class CertificateSourceTest {
     fun `#fromPathOrPem detects PEM content`() {
         // given
         // when
-        val source = CertificateSource.fromPathOrPem("-----BEGIN CERTIFICATE-----")!!
+        val source = CertificateSource.fromPathOrPem("-----BEGIN CERTIFICATE-----")!! // notsecret
 
         // then
         assertThat(source.isFilePath).isFalse()
@@ -134,7 +134,7 @@ class CertificateSourceTest {
     @Test
     fun `#fromPathOrPem detects long base64 string`() {
         // given
-        val base64 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURhekNDQWxPZ0F3SUJBZ0lVWnR4"
+        val base64 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURhekNDQWxPZ0F3SUJBZ0lVWnR4" // notsecret
 
         // when
         val source = CertificateSource.fromPathOrPem(base64)!!
@@ -156,7 +156,7 @@ class CertificateSourceTest {
     @Test
     fun `#validate succeeds for base64 data`() {
         // given
-        val source = CertificateSource.fromData("LS0tLS1CRUdJTi")
+        val source = CertificateSource.fromData("LS0tLS1CRUdJTi") // notsecret
 
         // when/then
         assertThatCode { source.validate() }.doesNotThrowAnyException()
@@ -213,8 +213,10 @@ class CertificateSourceTest {
 
     @Test
     fun `#fromUserInput normalizes and base64-encodes single-line PEM`() {
-        // given - PEM with newlines stripped (from JBTextField paste)
-        val singleLinePem = "-----BEGIN CERTIFICATE-----MIIBkTCB+wIJAKHHCgVZU6T+MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDAeFw0yNTAxMDEwMDAwMDBaFw0yNjAxMDEwMDAwMDBaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAwfnQ2wLuONsN9Bvj/YqYF7S2VKvwHJRwqLlqgP3uP7F3kMmZQF7VJQ/8qvwzBLvhM5Y3yLVZRZPZ8qYa/QIDAQABo1AwTjAdBgNVHQ4EFgQUqgQKqgQKqgQKqgQKqgQKqgQKMA8GA1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAUqgQKqgQKqgQKqgQKqgQKqgQKMA0GCSqGSIb3DQEBCwUAA4GBALiT-----END CERTIFICATE-----"
+        // given — self-signed fixture for this suite only (openssl req … *.invalid), not from any cluster
+        val singleLinePem =
+            // notsecret
+            "-----BEGIN CERTIFICATE-----MIICmDCCAgGgAwIBAgIUV5nqmQtJt7MtAFJDk8/mI/LvDgIwDQYJKoZIhvcNAQELBQAwXjEwMC4GA1UEAwwnZmFrZS1ub3JtYWxpemF0aW9uLXRlc3QuZXhhbXBsZS5pbnZhbGlkMR0wGwYDVQQKDBRFeGFtcGxlIFRlc3QgRml4dHVyZTELMAkGA1UEBhMCWFgwHhcNMjYwNTEzMTMyMDE0WhcNMzYwNTEwMTMyMDE0WjBeMTAwLgYDVQQDDCdmYWtlLW5vcm1hbGl6YXRpb24tdGVzdC5leGFtcGxlLmludmFsaWQxHTAbBgNVBAoMFEV4YW1wbGUgVGVzdCBGaXh0dXJlMQswCQYDVQQGEwJYWDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAziSew4ot/f/avtFRNfMG9YlviyDbGf1UqViaGI2G4r7gUGSF1a//hNe8+mNMdDfyg/s1VelBR0ajAUU+R45N6DRJFAdy8dYaHVxzrxKe7apk2PIqXBo7CI59I2D2KMkEWrYtSDtyXhg8GNb753/Tkw+6ifXp/5Px5GLkU93AlzUCAwEAAaNTMFEwHQYDVR0OBBYEFG3l/ZZpH4IpTASMXlFoaQbQdOlIMB8GA1UdIwQYMBaAFG3l/ZZpH4IpTASMXlFoaQbQdOlIMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADgYEAvEWA5kcQYgD+U2lwKueYgL/habm8KcUb+e+DK0b4y0WcuoTCqH+2XWaxh5JdG6BLIC+EdFYn9SNm6lo1nv2pOppoyvE5w/xcoPB0rrXr8Eu5PGqKDOWF7YdPcEkjGqL+/TUGiGQmCY0zpTia8+MBDlZLwI9im0W4TJAL2/Lhryg=-----END CERTIFICATE-----"
 
         // when
         val source = CertificateSource.fromPathOrPem(singleLinePem)!!
@@ -230,16 +232,24 @@ class CertificateSourceTest {
 
     @Test
     fun `#fromUserInput handles properly formatted multi-line PEM`() {
-        // given - proper PEM with newlines
+        // given - proper synthetic PEM with newlines
+        // notsecret
         val multiLinePem = """
             -----BEGIN CERTIFICATE-----
-            MIIBkTCB+wIJAKHHCgVZU6T+MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxv
-            Y2FsaG9zdDAeFw0yNTAxMDEwMDAwMDBaFw0yNjAxMDEwMDAwMDBaMBQxEjAQBgNV
-            BAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAwfnQ2wLu
-            ONsN9Bvj/YqYF7S2VKvwHJRwqLlqgP3uP7F3kMmZQF7VJQ/8qvwzBLvhM5Y3yLVZ
-            RZPZ8qYa/QIDAQABo1AwTjAdBgNVHQ4EFgQUqgQKqgQKqgQKqgQKqgQKqgQKMA8G
-            A1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAUqgQKqgQKqgQKqgQKqgQKqgQKMA0G
-            CSqGSIb3DQEBCwUAA4GBALiT
+            MIICmDCCAgGgAwIBAgIUV5nqmQtJt7MtAFJDk8/mI/LvDgIwDQYJKoZIhvcNAQEL
+            BQAwXjEwMC4GA1UEAwwnZmFrZS1ub3JtYWxpemF0aW9uLXRlc3QuZXhhbXBsZS5p
+            bnZhbGlkMR0wGwYDVQQKDBRFeGFtcGxlIFRlc3QgRml4dHVyZTELMAkGA1UEBhMC
+            WFgwHhcNMjYwNTEzMTMyMDE0WhcNMzYwNTEwMTMyMDE0WjBeMTAwLgYDVQQDDCdm
+            YWtlLW5vcm1hbGl6YXRpb24tdGVzdC5leGFtcGxlLmludmFsaWQxHTAbBgNVBAoM
+            FEV4YW1wbGUgVGVzdCBGaXh0dXJlMQswCQYDVQQGEwJYWDCBnzANBgkqhkiG9w0B
+            AQEFAAOBjQAwgYkCgYEAziSew4ot/f/avtFRNfMG9YlviyDbGf1UqViaGI2G4r7g
+            UGSF1a//hNe8+mNMdDfyg/s1VelBR0ajAUU+R45N6DRJFAdy8dYaHVxzrxKe7apk
+            2PIqXBo7CI59I2D2KMkEWrYtSDtyXhg8GNb753/Tkw+6ifXp/5Px5GLkU93AlzUC
+            AwEAAaNTMFEwHQYDVR0OBBYEFG3l/ZZpH4IpTASMXlFoaQbQdOlIMB8GA1UdIwQY
+            MBaAFG3l/ZZpH4IpTASMXlFoaQbQdOlIMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
+            hvcNAQELBQADgYEAvEWA5kcQYgD+U2lwKueYgL/habm8KcUb+e+DK0b4y0WcuoTC
+            qH+2XWaxh5JdG6BLIC+EdFYn9SNm6lo1nv2pOppoyvE5w/xcoPB0rrXr8Eu5PGqK
+            DOWF7YdPcEkjGqL+/TUGiGQmCY0zpTia8+MBDlZLwI9im0W4TJAL2/Lhryg=
             -----END CERTIFICATE-----
         """.trimIndent()
 

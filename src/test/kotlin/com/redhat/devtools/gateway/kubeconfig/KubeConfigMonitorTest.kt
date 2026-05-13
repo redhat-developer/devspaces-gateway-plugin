@@ -35,6 +35,8 @@ import kotlin.io.path.createFile
 @ExperimentalCoroutinesApi
 class KubeConfigMonitorTest {
 
+    // notsecret — cluster token literals in this class are invented test fixtures only.
+
     @TempDir
     lateinit var tempDir: Path
 

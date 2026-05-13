@@ -41,7 +41,7 @@ class ClipboardTokenMonitor(
 ) {
 
     companion object {
-        private val OPENSHIFT_TOKEN_REGEX = Regex("^sha256~[A-Za-z0-9_-]{20,}$")
+        private val OPENSHIFT_TOKEN_REGEX = Regex("^sha256~[A-Za-z0-9_-]{20,}$") // notsecret
 
         /**
          * Checks if a string is a valid OpenShift token.
