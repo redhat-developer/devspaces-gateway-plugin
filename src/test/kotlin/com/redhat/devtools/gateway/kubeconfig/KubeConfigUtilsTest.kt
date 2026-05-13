@@ -26,6 +26,7 @@ import kotlin.io.path.writeText
 
 class KubeConfigUtilsTest {
 
+    // notsecret — tokens and URLs embedded in kubeconfig YAML snippets below are invented test fixtures only.
     @TempDir
     lateinit var tempDir: Path
 
@@ -50,7 +51,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
         val kubeConfigFile2 = createTempKubeConfigFile(
@@ -71,7 +72,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -83,12 +84,12 @@ class KubeConfigUtilsTest {
             Cluster(
                 name = "tatooine-cluster",
                 url = "https://api.tatooine.starwars.com:6443",
-                token = "jedi-token"
+                token = "jedi-token" // notsecret
             ),
             Cluster(
                 name = "dagobah-cluster",
                 url = "https://api.dagobah.starwars.com:6443",
-                token = "force-token"
+                token = "force-token" // notsecret
             )
         )
     }
@@ -150,7 +151,7 @@ class KubeConfigUtilsTest {
             users:
             - name: leia-organa
               user:
-                token: rebel-token
+                token: rebel-token # notsecret
         """.trimIndent()
         )
         val invalidFile = createTempKubeConfigFile("invalid-config", "this is not yaml")
@@ -163,7 +164,7 @@ class KubeConfigUtilsTest {
             Cluster(
                 name = "endor-cluster",
                 url = "https://api.endor.starwars.com:6443",
-                token = "rebel-token"
+                token = "rebel-token" // notsecret
             )
         )
     }
@@ -172,8 +173,7 @@ class KubeConfigUtilsTest {
     fun `#isCurrentUserTokenAuth returns true if current user has token`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
-            "config",
-            """
+            "config", """
             apiVersion: v1
             clusters:
             - name: hoth-cluster
@@ -182,7 +182,8 @@ class KubeConfigUtilsTest {
             users:
             - name: han-solo
               user:
-                token: smuggler-token
+                # notsecret
+                token: smuggler-token # notsecret
             contexts:
             - name: echo-base
               context:
@@ -205,8 +206,7 @@ class KubeConfigUtilsTest {
     fun `#isCurrentUserTokenAuth returns false if current user has no token`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
-            "config",
-            """
+            "config", """
             apiVersion: v1
             clusters:
             - name: naboo-cluster
@@ -307,7 +307,8 @@ class KubeConfigUtilsTest {
             users:
             - name: rey-scavenger
               user:
-                token: force-sensitive-token
+                # notsecret
+                token: force-sensitive-token # notsecret
             contexts:
             - context:
                 cluster: jakku-cluster
@@ -328,7 +329,8 @@ class KubeConfigUtilsTest {
     fun `#getCurrentClusterName returns name of cluster set in current context`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
-            "config", """
+            "config", 
+            """
             apiVersion: v1
             clusters:
             - name: bespin-cluster
@@ -337,7 +339,8 @@ class KubeConfigUtilsTest {
             users:
             - name: lando-calrissian
               user:
-                token: cloud-city-token
+                # notsecret
+                token: cloud-city-token # notsecret
             contexts:
             - context:
                 cluster: bespin-cluster
@@ -359,7 +362,8 @@ class KubeConfigUtilsTest {
     fun `#getCurrentClusterName returns cluster name from first config file with current context when multiple files exist`() {
         // given
         val kubeConfigFile1 = createTempKubeConfigFile(
-            "config1", """
+            "config1", 
+            """
             apiVersion: v1
             clusters:
             - name: tatooine-cluster
@@ -368,7 +372,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
             contexts:
             - context:
                 cluster: tatooine-cluster
@@ -387,7 +391,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -406,7 +410,7 @@ class KubeConfigUtilsTest {
             users:
             - name: han-solo
               user:
-                token: smuggler-token
+                token: smuggler-token # notsecret
             contexts:
             - context:
                 cluster: hoth-cluster
@@ -432,6 +436,7 @@ class KubeConfigUtilsTest {
             current-context: dagobah-context
         """.trimIndent()
         )
+        // notsecret
         val kubeConfigFile2 = createTempKubeConfigFile(
             "config2", """
             apiVersion: v1
@@ -442,7 +447,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -472,7 +477,7 @@ class KubeConfigUtilsTest {
             users:
             - name: mace-windu
               user:
-                token: jedi-council-token
+                token: jedi-council-token # notsecret
             contexts:
             - context:
                 cluster: coruscant-cluster
@@ -515,7 +520,7 @@ class KubeConfigUtilsTest {
             users:
             - name: bail-organa
               user:
-                token: senator-token
+                token: senator-token # notsecret
             contexts:
             - context:
                 cluster: alderaan-cluster
@@ -549,7 +554,7 @@ class KubeConfigUtilsTest {
             users:
             - name: obi-wan-kenobi
               user:
-                token: old-ben-token
+                token: old-ben-token # notsecret
             contexts:
             - context:
                 cluster: dantooine-cluster
@@ -582,7 +587,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
             contexts:
             - context:
                 cluster: tatooine-cluster
@@ -601,7 +606,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -634,7 +639,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
             contexts:
             - context:
                 cluster: tatooine-cluster
@@ -652,7 +657,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -682,7 +687,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
             contexts:
             - context:
                 cluster: tatooine-cluster
@@ -701,7 +706,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -732,7 +737,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
             contexts:
             - context:
                 cluster: tatooine-cluster
@@ -751,7 +756,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
             contexts:
             - context:
                 cluster: dagobah-cluster
@@ -770,7 +775,7 @@ class KubeConfigUtilsTest {
             users:
             - name: han-solo
               user:
-                token: smuggler-token
+                token: smuggler-token # notsecret
             contexts:
             - context:
                 cluster: hoth-cluster
@@ -1065,7 +1070,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1095,7 +1100,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1115,7 +1120,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1147,7 +1152,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1167,7 +1172,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1199,7 +1204,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1219,7 +1224,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1252,7 +1257,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1273,7 +1278,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1303,7 +1308,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1324,7 +1329,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1354,7 +1359,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: first-token
+                token: first-token # notsecret
         """.trimIndent()
         )
 
@@ -1374,7 +1379,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: second-token
+                token: second-token # notsecret
         """.trimIndent()
         )
 
@@ -1408,7 +1413,7 @@ class KubeConfigUtilsTest {
             users:
             - name: duplicate-user
               user:
-                token: first-token
+                token: first-token # notsecret
         """.trimIndent()
         )
 
@@ -1428,7 +1433,7 @@ class KubeConfigUtilsTest {
             users:
             - name: duplicate-user
               user:
-                token: second-token
+                token: second-token # notsecret
         """.trimIndent()
         )
 
@@ -1440,7 +1445,7 @@ class KubeConfigUtilsTest {
         val user = merged.users?.get(0) as Map<*, *>
         assertThat(user["name"]).isEqualTo("duplicate-user")
         val userDetails = user["user"] as Map<*, *>
-        assertThat(userDetails["token"]).isEqualTo("first-token")
+        assertThat(userDetails["token"]).isEqualTo("first-token") // notsecret
     }
 
     @Test
@@ -1462,7 +1467,7 @@ class KubeConfigUtilsTest {
             users:
             - name: user-1
               user:
-                token: first-token
+                token: first-token # notsecret
         """.trimIndent()
         )
 
@@ -1482,7 +1487,7 @@ class KubeConfigUtilsTest {
             users:
             - name: user-2
               user:
-                token: second-token
+                token: second-token # notsecret
         """.trimIndent()
         )
 
@@ -1517,7 +1522,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1537,7 +1542,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 
@@ -1568,7 +1573,7 @@ class KubeConfigUtilsTest {
             users:
             - name: luke-skywalker
               user:
-                token: jedi-token
+                token: jedi-token # notsecret
         """.trimIndent()
         )
 
@@ -1589,7 +1594,7 @@ class KubeConfigUtilsTest {
             users:
             - name: yoda-master
               user:
-                token: force-token
+                token: force-token # notsecret
         """.trimIndent()
         )
 

@@ -46,6 +46,7 @@ object PemUtils {
             .encodeToString(certificate.encoded)
 
         return buildString {
+            // notsecret
             append("-----BEGIN CERTIFICATE-----\n")
             append(base64)
             append("\n-----END CERTIFICATE-----\n")
@@ -80,6 +81,7 @@ object PemUtils {
             normalized
         }
 
+        // notsecret
         val cleaned = reformatted
             .replace("-----BEGIN PRIVATE KEY-----", "")
             .replace("-----END PRIVATE KEY-----", "")
@@ -110,7 +112,7 @@ object PemUtils {
         val trimmed = input.trim()
 
         return if (!isPem(trimmed)) {
-            // It's base64 from kubeconfig → decode to PEM
+            // kubeconfig/base64 -> PEM
             String(Base64.getDecoder().decode(trimmed))
         } else {
             trimmed

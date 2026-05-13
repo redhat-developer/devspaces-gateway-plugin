@@ -56,7 +56,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken returns true for valid token format`() {
         // given
-        val validToken = "sha256~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop"
+        val validToken = "sha256~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" // notsecret
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(validToken)
@@ -68,7 +68,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken returns true for token with underscores and dashes`() {
         // given
-        val validToken = "sha256~ABC_DEF-GHI_JKL-MNO_PQR"
+        val validToken = "sha256~ABC_DEF-GHI_JKL-MNO_PQR" // notsecret
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(validToken)
@@ -92,7 +92,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken returns false for token with wrong prefix`() {
         // given
-        val invalidToken = "sha512~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop"
+        val invalidToken = "sha512~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" // notsecret
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(invalidToken)
@@ -104,7 +104,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken returns false for token too short`() {
         // given
-        val invalidToken = "sha256~ABC" // Less than 20 chars after prefix
+        val invalidToken = "sha256~ABC" // notsecret - Less than 20 chars after prefix
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(invalidToken)
@@ -116,7 +116,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken returns false for token with invalid characters`() {
         // given
-        val invalidToken = "sha256~ABCDEFGHIJKLMNOPQRST@#$%"
+        val invalidToken = "sha256~ABCDEFGHIJKLMNOPQRST@#$%" // notsecret
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(invalidToken)
@@ -152,7 +152,7 @@ class ClipboardTokenMonitorTest {
     @Test
     fun `#isOpenShiftToken trims whitespace before validation`() {
         // given
-        val tokenWithWhitespace = "  sha256~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop  "
+        val tokenWithWhitespace = "  sha256~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop  " // notsecret
 
         // when
         val result = ClipboardTokenMonitor.isOpenShiftToken(tokenWithWhitespace)
@@ -165,7 +165,7 @@ class ClipboardTokenMonitorTest {
     fun `#checkNow returns token when valid token is in clipboard`() {
         runBlocking {
             // given
-            val validToken = "sha256~ValidTokenWith20PlusCharacters"
+            val validToken = "sha256~ValidTokenWith20PlusCharacters" // notsecret
             setClipboardContent(validToken)
             delay(50.milliseconds) // Give clipboard time to update
 
@@ -212,8 +212,8 @@ class ClipboardTokenMonitorTest {
         runBlocking {
             // given
             monitor.addListener { token -> detectedTokens.add(token) }
-            val monitoringToken = "sha256~MonitoringToken123456789"
-            val checkNowToken = "sha256~CheckNowToken1234567890"
+            val monitoringToken = "sha256~MonitoringToken123456789" // notsecret
+            val checkNowToken = "sha256~CheckNowToken1234567890" // notsecret
 
             // when
             monitor.start()
@@ -262,7 +262,7 @@ class ClipboardTokenMonitorTest {
         runBlocking {
             // given
             monitor.addListener { token -> detectedTokens.add(token) }
-            val validToken = "sha256~MonitoringTestToken12345678"
+            val validToken = "sha256~MonitoringTestToken12345678" // notsecret
 
             // when
             monitor.start()
@@ -285,7 +285,7 @@ class ClipboardTokenMonitorTest {
             monitor.start() // Start again
             monitor.start() // And again
 
-            val validToken = "sha256~MultipleStartTestToken123"
+            val validToken = "sha256~MultipleStartTestToken123" // notsecret
             setClipboardAndWaitForDetection(validToken)
 
             // then - should only be notified once per token change
@@ -303,7 +303,7 @@ class ClipboardTokenMonitorTest {
 
             // when
             monitor.stop()
-            val validToken = "sha256~AfterStopTestToken1234567"
+            val validToken = "sha256~AfterStopTestToken1234567" // notsecret
             setClipboardAndWaitForDetection(validToken)
 
             // then - no tokens should be detected after stop
@@ -316,7 +316,7 @@ class ClipboardTokenMonitorTest {
         runBlocking {
             // given
             monitor.addListener { token -> detectedTokens.add(token) }
-            val validToken = "sha256~UniqueTokenTest123456789"
+            val validToken = "sha256~UniqueTokenTest123456789" // notsecret
 
             // when
             monitor.start()
@@ -334,8 +334,8 @@ class ClipboardTokenMonitorTest {
         runBlocking {
             // given
             monitor.addListener { token -> detectedTokens.add(token) }
-            val token1 = "sha256~FirstTokenTest1234567890"
-            val token2 = "sha256~SecondTokenTest123456789"
+            val token1 = "sha256~FirstTokenTest1234567890" // notsecret
+            val token2 = "sha256~SecondTokenTest123456789" // notsecret
 
             // when
             monitor.start()
@@ -355,7 +355,7 @@ class ClipboardTokenMonitorTest {
             val tokens2 = mutableListOf<String>()
             monitor.addListener { token -> tokens1.add(token) }
             monitor.addListener { token -> tokens2.add(token) }
-            val validToken = "sha256~MultiListenerTest12345678"
+            val validToken = "sha256~MultiListenerTest12345678" // notsecret
 
             // when
             monitor.start()
@@ -374,7 +374,7 @@ class ClipboardTokenMonitorTest {
             val tokens = mutableListOf<String>()
             monitor.addListener { throw RuntimeException("Listener failure") }
             monitor.addListener { token -> tokens.add(token) }
-            val validToken = "sha256~ExceptionTestToken1234567"
+            val validToken = "sha256~ExceptionTestToken1234567" // notsecret
 
             // when
             monitor.start()
@@ -397,7 +397,7 @@ class ClipboardTokenMonitorTest {
             delay(250.milliseconds)
             setClipboardContent("12345")
             delay(250.milliseconds)
-            setClipboardContent("sha256~short") // Too short
+            setClipboardContent("sha256~short") // notsecret - Too short
             delay(250.milliseconds)
 
             // then - no tokens should be detected
@@ -446,8 +446,8 @@ class ClipboardTokenMonitorTest {
         runBlocking {
             // given
             monitor.addListener { token -> detectedTokens.add(token) }
-            val token1 = "sha256~FirstRunToken1234567890"
-            val token2 = "sha256~SecondRunToken123456789"
+            val token1 = "sha256~FirstRunToken1234567890" // notsecret
+            val token2 = "sha256~SecondRunToken123456789" // notsecret
 
             // when - first run
             startSetAndStop(token1)
