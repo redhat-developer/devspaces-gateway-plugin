@@ -66,20 +66,8 @@ object PemUtils {
 
     fun parsePrivateKey(pemOrBase64: String): PrivateKey {
         val normalized = normalizePem(pemOrBase64)
-
         // JBTextField can strip or mangle newlines from pasted PEM → reformat if needed
-        val reformatted = if (isPem(normalized)) {
-            // Count newlines - properly formatted PEM should have multiple lines
-            val newlineCount = normalized.count { it == '\n' }
-            // Reformat if single-line or has very few newlines (malformed)
-            if (newlineCount < 2) {
-                reformatSingleLinePem(normalized)
-            } else {
-                normalized
-            }
-        } else {
-            normalized
-        }
+        val reformatted = clean(normalized)
 
         // notsecret
         val cleaned = reformatted
@@ -95,17 +83,20 @@ object PemUtils {
 
         return try {
             // Try PKCS#8 first
-            val spec = PKCS8EncodedKeySpec(decoded)
-            KeyFactory.getInstance("RSA").generatePrivate(spec)
+            generatePrivateKey(decoded, "RSA")
         } catch (_: Exception) {
             // Try EC
             try {
-                val spec = PKCS8EncodedKeySpec(decoded)
-                KeyFactory.getInstance("EC").generatePrivate(spec)
+                generatePrivateKey(decoded, "EC")
             } catch (e: Exception) {
                 throw IllegalArgumentException("Unsupported private key format", e)
             }
         }
+    }
+
+    private fun generatePrivateKey(encodedKey: ByteArray, algorithm: String): PrivateKey {
+        val spec = PKCS8EncodedKeySpec(encodedKey)
+        return KeyFactory.getInstance(algorithm).generatePrivate(spec)
     }
 
     private fun normalizePem(input: String): String {
@@ -123,7 +114,14 @@ object PemUtils {
         val normalized = normalizePem(pemOrBase64)
 
         // JBTextField can strip or mangle newlines from pasted PEM → reformat if needed
-        val cleaned = if (isPem(normalized)) {
+        val cleaned = clean(normalized)
+
+        val factory = CertificateFactory.getInstance("X.509")
+        return factory.generateCertificate(cleaned.byteInputStream()) as X509Certificate
+    }
+
+    private fun clean(normalized: String): String {
+        return if (isPem(normalized)) {
             // Count newlines - properly formatted PEM should have multiple lines
             val newlineCount = normalized.count { it == '\n' }
             // Reformat if single-line or has very few newlines (malformed)
@@ -135,9 +133,6 @@ object PemUtils {
         } else {
             normalized
         }
-
-        val factory = CertificateFactory.getInstance("X.509")
-        return factory.generateCertificate(cleaned.byteInputStream()) as X509Certificate
     }
 
     /**
