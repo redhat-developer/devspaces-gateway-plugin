@@ -113,6 +113,24 @@ class TokenAuthenticationStrategy(
                 && tfToken.password?.isNotEmpty() == true
 
     /**
+     * Dirty vs kubeconfig only once the token field has content; an empty field after switching tabs is not dirty.
+     */
+    override fun isDirty(saved: Cluster): Boolean {
+        val cur = tfToken.password ?: CharArray(0)
+        if (cur.isEmpty()) return false
+        return tokenDiffers(saved.token, cur)
+    }
+
+    private fun tokenDiffers(savedToken: String?, current: CharArray = CharArray(0)): Boolean {
+        val saved = savedToken.orEmpty()
+        val savedBlank = saved.isBlank()
+        val curEmpty = current.isEmpty()
+        if (savedBlank && curEmpty) return false
+        if (savedBlank != curEmpty) return true
+        return !saved.toCharArray().contentEquals(current)
+    }
+
+    /**
      * Start monitoring clipboard for tokens.
      * Should be called during initialization.
      */

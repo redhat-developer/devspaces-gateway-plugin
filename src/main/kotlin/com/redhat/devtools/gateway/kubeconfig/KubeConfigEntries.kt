@@ -210,25 +210,22 @@ data class KubeConfigNamedUser(
             )
         }
 
-        fun getUserTokenForCluster(clusterName: String, kubeConfig: KubeConfig): String? {
-            val contextEntry = KubeConfigNamedContext.getByName(clusterName, kubeConfig) ?: return null
+        fun getUserForCluster(clusterRefName: String, kubeConfig: KubeConfig): KubeConfigUser? {
+            val contextEntry = KubeConfigNamedContext.getByName(clusterRefName, kubeConfig) ?: return null
             val userObject = (kubeConfig.users as? List<*>)?.firstOrNull { userObject ->
                 val userMap = userObject as? Map<*, *> ?: return@firstOrNull false
                 val userName = userMap["name"] as? String ?: return@firstOrNull false
                 userName == contextEntry.context.user
-            } as? Map<*,*> ?: return null
-            return fromMap(userObject)?.user?.token
+            } as? Map<*, *> ?: return null
+            return fromMap(userObject)?.user
         }
 
+        fun getUserTokenForCluster(clusterName: String, kubeConfig: KubeConfig): String? =
+            getUserForCluster(clusterName, kubeConfig)?.token
+
         fun getUserClientCertForCluster(clusterName: String, kubeConfig: KubeConfig): Pair<CertificateSource?, CertificateSource?>? {
-            val contextEntry = KubeConfigNamedContext.getByName(clusterName, kubeConfig) ?: return null
-            val userObject = (kubeConfig.users as? List<*>)?.firstOrNull { userObject ->
-                val userMap = userObject as? Map<*, *> ?: return@firstOrNull false
-                val userName = userMap["name"] as? String ?: return@firstOrNull false
-                userName == contextEntry.context.user
-            } as? Map<*,*> ?: return null
-            val user = fromMap(userObject)?.user
-            return Pair(user?.clientCertificate, user?.clientKey)
+            val user = getUserForCluster(clusterName, kubeConfig) ?: return null
+            return Pair(user.clientCertificate, user.clientKey)
         }
 
         fun isTokenAuth(kubeConfig: KubeConfig): Boolean {

@@ -13,7 +13,6 @@ package com.redhat.devtools.gateway.kubeconfig
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.EnvironmentUtil
-import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.openshift.Cluster
 import io.kubernetes.client.util.KubeConfig
 import java.io.File
@@ -44,13 +43,10 @@ object KubeConfigUtils {
             .flatMap { kubeConfig ->
                 kubeConfig.clusters?.mapNotNull { cluster ->
                     val namedCluster = KubeConfigNamedCluster.fromMap(cluster as Map<*, *>) ?: return@mapNotNull null
-                    val token = KubeConfigNamedUser.getUserTokenForCluster(namedCluster.name, kubeConfig)
-                    val clientCert = KubeConfigNamedUser.getUserClientCertForCluster(namedCluster.name, kubeConfig)
-                    val clientCertSource = clientCert?.first
-                    val clientKeySource = clientCert?.second
-                    val cluster = toCluster(namedCluster, token, clientCertSource, clientKeySource)
-                    logger.debug("Parsed cluster: ${cluster.name} at ${cluster.url}")
-                    cluster
+                    val kubeUser = KubeConfigNamedUser.getUserForCluster(namedCluster.name, kubeConfig)
+                    val clusterModel = toCluster(namedCluster, kubeUser)
+                    logger.debug("Parsed cluster: ${clusterModel.name} at ${clusterModel.url}")
+                    clusterModel
                 } ?: emptyList()
             }
             .distinctBy { it.id }
@@ -87,17 +83,17 @@ object KubeConfigUtils {
 
     private fun toCluster(
         clusterEntry: KubeConfigNamedCluster,
-        userToken: String?,
-        clientCertSource: CertificateSource?,
-        clientKeySource: CertificateSource?
+        kubeUser: KubeConfigUser?
     ): Cluster {
         return Cluster(
             url = clusterEntry.cluster.server,
             name = clusterEntry.name,
             certificateAuthority = clusterEntry.cluster.certificateAuthority,
-            token = userToken,
-            clientCert = clientCertSource,
-            clientKey = clientKeySource
+            token = kubeUser?.token,
+            clientCert = kubeUser?.clientCertificate,
+            clientKey = kubeUser?.clientKey,
+            basicUsername = kubeUser?.username,
+            basicPassword = kubeUser?.password,
         )
     }
 

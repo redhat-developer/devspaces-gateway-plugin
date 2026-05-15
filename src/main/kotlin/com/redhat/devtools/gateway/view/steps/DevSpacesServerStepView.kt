@@ -38,7 +38,6 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
-import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.steps.auth.*
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
@@ -62,23 +61,27 @@ class DevSpacesServerStepView(
 
     private lateinit var allClusters: List<Cluster>
 
+    /**
+     * `clusters[].name` referenced by kubeconfig `current-context`; from [KubeConfigUtils.getCurrentClusterName].
+     * When the Server combo shows another cluster, the form is dirty vs that default.
+     */
+    private var currentContextClusterName: String? = null
+
     private val settings: ServerSettings = ServerSettings()
 
     private lateinit var kubeconfigScope: CoroutineScope
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
 
-    private var saveToKubeconfig: Boolean = false
-
-    private val saveKubeconfigCheckbox = JBCheckBox(
+    private val saveConfigCheckbox = JBCheckBox(
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration")
     ).apply {
         isOpaque = false
         background = null
-        isSelected = saveToKubeconfig
-        addActionListener {
-            saveToKubeconfig = isSelected
-        }
+        isSelected = false
     }
+
+    private val saveConfig: Boolean
+        get() = saveConfigCheckbox.isEnabled && saveConfigCheckbox.isSelected
 
     private val sessionManager =
         ApplicationManager.getApplication()
@@ -100,6 +103,7 @@ class DevSpacesServerStepView(
             val editor = this.editor.editorComponent as JTextField
             PasteClipboardMenu.addTo(editor)
             editor.addKeyListener(createEnterKeyListener())
+            editor.document.addDocumentListener(onFieldChanged())
         }
 
     private val authStrategies: List<AuthenticationStrategy> by lazy {
@@ -150,12 +154,6 @@ class DevSpacesServerStepView(
     private inline fun <reified T : AuthenticationStrategy> findStrategy(): T? =
         authStrategies.firstOrNull { it is T } as? T
 
-    private fun getCurrentAuthTokenValue(): CharArray? =
-        when (currentStrategy?.getAuthMethod()) {
-            AuthMethod.TOKEN -> (currentStrategy as? TokenAuthenticationStrategy)?.tfToken?.password
-            else -> null // other tabs don't have a token yet
-        }
-
     private fun tabPanel(p: JComponent): JComponent =
         JBUI.Panels.simplePanel(p).apply {
             isOpaque = true
@@ -175,13 +173,10 @@ class DevSpacesServerStepView(
             addTab(strategy.getTabTitle(), tabPanel(panel))
         }
 
-        addChangeListener {
+        addChangeListener { event ->
             currentStrategy = authStrategies.getOrNull(selectedIndex)
-
-            saveKubeconfigCheckbox.isVisible =
-                currentStrategy?.getAuthMethod() != AuthMethod.REDHAT_SSO
-
             enableNextButton?.invoke()
+            enableSaveConfigCheckbox()
         }
     }
 
@@ -213,7 +208,7 @@ class DevSpacesServerStepView(
             }
         }
         row {
-            cell(saveKubeconfigCheckbox)
+            cell(saveConfigCheckbox)
         }
     }.apply {
         isOpaque = false
@@ -256,7 +251,7 @@ class DevSpacesServerStepView(
     private fun onClusterSelected(event: ItemEvent) {
         if (event.stateChange == ItemEvent.SELECTED) {
             (event.item as? Cluster)?.let { selectedCluster ->
-                if (allClusters.contains(selectedCluster)) {
+                if (    allClusters.contains(selectedCluster)) {
                     tfCertAuthority.text = selectedCluster.certificateAuthority?.value ?: ""
                     findStrategy<TokenAuthenticationStrategy>()?.tfToken?.apply {
                         text = selectedCluster.token
@@ -265,46 +260,84 @@ class DevSpacesServerStepView(
                         tfClientCert.text = selectedCluster.clientCert?.value ?: ""
                         tfClientKey.text = selectedCluster.clientKey?.value ?: ""
                     }
-                    saveKubeconfigCheckbox.isSelected = false
+                    findStrategy<OpenShiftCredentialsAuthenticationStrategy>()?.applyFromCluster(selectedCluster)
+                    saveConfigCheckbox.isSelected = false
                 }
             }
         }
-        updateSaveKubeconfigCheckboxEnablement()
+        enableSaveConfigCheckbox()
     }
 
     private fun onFieldChanged(): DocumentListener = object : DocumentListener {
         override fun insertUpdate(event: DocumentEvent) {
             enableNextButton?.invoke()
-            updateSaveKubeconfigCheckboxEnablement()
+            enableSaveConfigCheckbox()
         }
 
         override fun removeUpdate(e: DocumentEvent) {
             enableNextButton?.invoke()
-            updateSaveKubeconfigCheckboxEnablement()
+            enableSaveConfigCheckbox()
         }
 
         override fun changedUpdate(e: DocumentEvent?) {
             enableNextButton?.invoke()
-            updateSaveKubeconfigCheckboxEnablement()
+            enableSaveConfigCheckbox()
         }
     }
 
-    private fun updateSaveKubeconfigCheckboxEnablement() {
-        val cluster = tfServer.selectedItem as? Cluster
-        val currentToken = getCurrentAuthTokenValue()
+    /**
+     * Returns the cluster that is selected.
+     * When the editor text does not parse as a [Cluster], we must not fall back to the combo's stale `selectedItem`:
+     * that would keep the old cluster and hide URL edits from [isDirty].
+     *
+     * @return the cluster that is selected or null
+     */
+    private fun getSelectedCluster(): Cluster? {
+        val parsed = tfServer.editor.item as? Cluster
+        if (parsed != null) return parsed
+        val selected = tfServer.selectedItem as? Cluster ?: return null
+        val text = (tfServer.editor.editorComponent as JTextField).text.trim()
+        return selected.takeIf { it.toString() == text }
+    }
 
-        val tokenChanged =
-            !cluster?.token.isNullOrBlank()
-                    && currentToken?.isNotEmpty() == true
-                    && !cluster.token.toCharArray().contentEquals(currentToken)
+    /**
+     * Returns `true` if the values in the form are dirty and may be saved.
+     * It is considered dirty if the following values differ from kube config:
+     * * cluster name or URL/CA/auth
+     * * selected auth strategy
+     * * auth strategy values
+     *
+     * @see [getKubeConfigFor]
+     * @see [AuthenticationStrategy.isDirty]
+     */
+    private fun isDirty(): Boolean {
+        val cluster = getSelectedCluster() ?: return true
+        val ctxName = currentContextClusterName
+        if (ctxName != null && cluster.name != ctxName) return true
 
-        // Only TokenAuthenticationStrategy requires token diff to enable save
-        val requiresTokenDiff = currentStrategy is TokenAuthenticationStrategy
+        val config = getKubeConfigFor(cluster) ?: return true
 
-        saveKubeconfigCheckbox.isEnabled =
-            !allClusters.contains(cluster)
-                    || !requiresTokenDiff
-                    || tokenChanged
+        if (cluster.url != config.url) return true
+
+        if (tfCertAuthority.text.trim() != (config.certificateAuthority?.value ?: "").trim()) return true
+
+        return currentStrategy?.isDirty(config) ?: true
+    }
+
+    /**
+     * Kubeconfig row for [cluster]. [Cluster.id] is name+URL — id match is exact until URL is edited;
+     * then we match by name so URL/CA/auth still compare to the saved entry.
+     */
+    private fun getKubeConfigFor(cluster: Cluster): Cluster? =
+        allClusters.find { it.id == cluster.id }
+            ?: allClusters.find { it.name == cluster.name }
+
+    private fun enableSaveConfigCheckbox() {
+        val isDirty = isDirty()
+        saveConfigCheckbox.isEnabled = isDirty
+        if (!isDirty) {
+            saveConfigCheckbox.isSelected = false // uncheck if checkbox is disabled
+        }
     }
 
 
@@ -326,13 +359,14 @@ class DevSpacesServerStepView(
             }
             ApplicationManager.getApplication().invokeLater(
                 {
+                    currentContextClusterName = kubeConfigCurrentCluster
                     val previouslySelected = tfServer.selectedItem as? Cluster?
                     setClusters(updatedClusters)
                     setSelectedCluster(
                         (previouslySelected)?.name ?: kubeConfigCurrentCluster,
                         updatedClusters
                     )
-                    updateSaveKubeconfigCheckboxEnablement()
+                    enableSaveConfigCheckbox()
                 },
                 ModalityState.stateForComponent(component)
             )
@@ -345,7 +379,7 @@ class DevSpacesServerStepView(
     }
 
     override fun onNext(): Boolean {
-        val selectedCluster = tfServer.selectedItem as? Cluster ?: return false
+        val selectedCluster = getSelectedCluster() ?: return false
         val server = selectedCluster.url
         val serverDisplay = server.removePrefix("https://").removePrefix("http://")
         val strategy = currentStrategy ?: return false
@@ -474,7 +508,7 @@ class DevSpacesServerStepView(
     }
 
     private suspend fun saveKubeconfig(cluster: Cluster, token: String, indicator: ProgressIndicator) {
-        if (!saveToKubeconfig || token.isBlank()) return
+        if (!saveConfig || token.isBlank()) return
 
         try {
             indicator.text = "Updating Kube config..."
@@ -496,7 +530,7 @@ class DevSpacesServerStepView(
     }
 
     private suspend fun saveKubeconfigWithCert(cluster: Cluster, clientCertPem: String, clientKeyPem: String, indicator: ProgressIndicator) {
-        if (!saveToKubeconfig
+        if (!saveConfig
             || clientCertPem.isBlank()
             || clientKeyPem.isBlank())
             return
@@ -542,6 +576,7 @@ class DevSpacesServerStepView(
             tfClientCert.text = toSelect?.clientCert?.value ?: ""
             tfClientKey.text = toSelect?.clientKey?.value ?: ""
         }
+        findStrategy<OpenShiftCredentialsAuthenticationStrategy>()?.applyFromCluster(toSelect)
     }
 
     private fun startKubeconfigMonitor() {
