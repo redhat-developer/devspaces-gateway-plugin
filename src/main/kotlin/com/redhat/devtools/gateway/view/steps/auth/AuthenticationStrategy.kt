@@ -63,4 +63,9 @@ interface AuthenticationStrategy {
      * Determines if the "Next" button should be enabled for this authentication method.
      */
     fun isNextEnabled(): Boolean
+
+    /**
+     * Returns `true` if the current values in this strategy differs from the given config
+     */
+    fun isDirty(saved: Cluster): Boolean
 }

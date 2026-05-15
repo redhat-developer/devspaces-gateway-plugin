@@ -21,7 +21,10 @@ data class Cluster(
     val certificateAuthority: CertificateSource? = null,
     val token: String? = null,
     val clientCert: CertificateSource? = null,
-    val clientKey: CertificateSource? = null
+    val clientKey: CertificateSource? = null,
+    /** From kubeconfig user entry when present (basic auth). */
+    val basicUsername: String? = null,
+    val basicPassword: String? = null,
 ) {
     init {
         require(!(token != null && clientCert != null)) {

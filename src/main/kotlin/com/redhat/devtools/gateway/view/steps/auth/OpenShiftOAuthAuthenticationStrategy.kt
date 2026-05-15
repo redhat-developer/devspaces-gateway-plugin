@@ -103,4 +103,9 @@ class OpenShiftOAuthAuthenticationStrategy(
 
     override fun isNextEnabled(): Boolean =
         isServerSelected()
+
+    /**
+     * Browser login always yields a new token; there is no pre-login field to diff against kubeconfig.
+     */
+    override fun isDirty(saved: Cluster): Boolean = true
 }

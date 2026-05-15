@@ -49,13 +49,6 @@ class RedHatSSOAuthenticationStrategy(
         row {
             label(DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.redhat_sso_info"))
         }
-        row {
-            label(
-                DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.redhat_sso_token_note")
-            ).comment(
-                DevSpacesBundle.message("connector.wizard_step.openshift_connection.text.pipeline_token_comment")
-            )
-        }
     }
 
     override suspend fun authenticate(
@@ -106,4 +99,10 @@ class RedHatSSOAuthenticationStrategy(
 
     override fun isNextEnabled(): Boolean =
         isServerSelected()
+
+    /**
+     * Browser login always yields a new token
+     */
+    override fun isDirty(saved: Cluster): Boolean = true
+
 }

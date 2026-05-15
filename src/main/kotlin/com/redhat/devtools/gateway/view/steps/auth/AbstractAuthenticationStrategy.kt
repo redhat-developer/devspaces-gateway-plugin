@@ -38,6 +38,8 @@ abstract class AbstractAuthenticationStrategy(
         return (tfServer as? javax.swing.JComboBox<*>)?.selectedItem != null
     }
 
+    override fun isDirty(saved: Cluster): Boolean = false
+
     /**
      * Creates a validated API client.
      */

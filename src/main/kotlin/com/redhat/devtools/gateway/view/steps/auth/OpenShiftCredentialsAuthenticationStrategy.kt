@@ -148,8 +148,35 @@ class OpenShiftCredentialsAuthenticationStrategy(
         devSpacesContext.client = client
     }
 
+    override fun isDirty(saved: Cluster): Boolean {
+        val username = tfUsername.text.trim()
+        val password = tfPassword.passwordField.password ?: CharArray(0)
+        if (username.isEmpty() || password.isEmpty()) return false
+        return (username == (saved.basicUsername ?: "").trim())
+                && !passwordDiffersFromKube(saved.basicPassword, tfPassword.passwordField.password)
+    }
+
+    private fun passwordDiffersFromKube(kube: String?, current: CharArray = CharArray(0)): Boolean {
+        val kubeChars = kube?.toCharArray() ?: CharArray(0)
+        val isKubeBlank = kubeChars.isEmpty()
+        val isCurrentBlank = current.isEmpty()
+
+        return isKubeBlank != isCurrentBlank
+                || !kubeChars.contentEquals(current)    }
+
     override fun isNextEnabled(): Boolean =
         isServerSelected()
                 && tfUsername.text.isNotBlank()
                 && tfPassword.passwordField.password?.isNotEmpty() == true
+
+    /** Fills fields from kubeconfig-backed [cluster] when switching selection. */
+    fun applyFromCluster(cluster: Cluster?) {
+        if (cluster == null) {
+            tfUsername.text = ""
+            tfPassword.passwordField.text = ""
+            return
+        }
+        tfUsername.text = cluster.basicUsername.orEmpty()
+        tfPassword.passwordField.text = cluster.basicPassword.orEmpty()
+    }
 }

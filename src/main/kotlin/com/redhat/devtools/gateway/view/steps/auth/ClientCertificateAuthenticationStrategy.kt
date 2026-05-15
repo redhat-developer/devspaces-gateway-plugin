@@ -104,4 +104,15 @@ class ClientCertificateAuthenticationStrategy(
         isServerSelected()
                 && tfClientCert.text.isNotBlank()
                 && tfClientKey.text.isNotBlank()
+
+    /**
+     * Dirty vs kubeconfig only once both PEM paths/contents are filled; an empty tab after switching is not dirty.
+     */
+    override fun isDirty(saved: Cluster): Boolean {
+        val cert = tfClientCert.text.trim()
+        val key = tfClientKey.text.trim()
+        if (cert.isEmpty() || key.isEmpty()) return false
+        return cert != (saved.clientCert?.value ?: "").trim()
+            || key != (saved.clientKey?.value ?: "").trim()
+    }
 }
