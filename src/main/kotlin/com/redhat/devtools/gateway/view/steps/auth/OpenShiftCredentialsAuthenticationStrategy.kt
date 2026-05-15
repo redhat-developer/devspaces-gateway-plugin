@@ -12,11 +12,12 @@
 package com.redhat.devtools.gateway.view.steps.auth
 
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBPasswordField
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
-import com.intellij.ui.dsl.builder.Align
-import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import javax.swing.event.DocumentListener
 import java.awt.event.KeyListener
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -27,6 +28,8 @@ import com.redhat.devtools.gateway.auth.code.TokenModel
 import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
+import com.redhat.devtools.gateway.view.ui.PasswordFieldWithToggle
+import javax.swing.JComponent
 import javax.swing.JPanel
 
 /**
@@ -49,20 +52,11 @@ class OpenShiftCredentialsAuthenticationStrategy(
         addKeyListener(createEnterKeyListener())
     }
 
-    private val tfPassword = JBPasswordField().apply {
-        document.addDocumentListener(onFieldChanged())
-        PasteClipboardMenu.addTo(this)
-        addKeyListener(createEnterKeyListener())
-    }
-
-    private val showPasswordCheckbox = JBCheckBox(
-        DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_password")
-    ).apply {
-        isOpaque = false
-        background = null
-        addActionListener {
-            tfPassword.echoChar = if (isSelected) 0.toChar() else '•'
-        }
+    private val tfPassword = PasswordFieldWithToggle().apply {
+        setToggleButtonTooltip(DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.show_password"))
+        passwordField.document.addDocumentListener(onFieldChanged())
+        PasteClipboardMenu.addTo(passwordField)
+        passwordField.addKeyListener(createEnterKeyListener())
     }
 
     override fun getAuthMethod(): AuthMethod = AuthMethod.OPENSHIFT_CREDENTIALS
@@ -70,16 +64,41 @@ class OpenShiftCredentialsAuthenticationStrategy(
     override fun getTabTitle(): String =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.tab.credentials")
 
-    override fun createPanel(): JPanel = panel {
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.username")) {
-            cell(tfUsername).align(Align.FILL)
-        }
-        row(DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.password")) {
-            cell(tfPassword).align(Align.FILL)
-        }
-        row {
-            cell(showPasswordCheckbox)
-        }
+    // not using dsl bcs resulted in password being more narrow than username
+    override fun createPanel(): JPanel = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        // BorderLayout.NORTH: keep the form at the top of the tab; a bare GridBagLayout in a
+        // tall tab cell vertically centers its grid, which looks like a large gap above username.
+        add(JPanel(GridBagLayout()).apply {
+            isOpaque = false
+            fun addLabeledField(row: Int, labelText: String, field: JComponent) {
+                val gapBelow = if (row == 0) JBUI.scale(6) else 0
+                add(JBLabel(labelText), GridBagConstraints().apply {
+                    gridx = 0
+                    gridy = row
+                    anchor = GridBagConstraints.BASELINE_TRAILING
+                    insets = JBUI.insets(0, 0, gapBelow, JBUI.scale(8))
+                })
+                add(field, GridBagConstraints().apply {
+                    gridx = 1
+                    gridy = row
+                    weightx = 1.0
+                    fill = GridBagConstraints.HORIZONTAL
+                    anchor = GridBagConstraints.BASELINE_LEADING
+                    insets = JBUI.insetsBottom(gapBelow)
+                })
+            }
+            addLabeledField(
+                0,
+                DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.username"),
+                tfUsername,
+            )
+            addLabeledField(
+                1,
+                DevSpacesBundle.message("connector.wizard_step.openshift_connection.label.password"),
+                tfPassword,
+            )
+        }, BorderLayout.NORTH)
     }
 
     override suspend fun authenticate(
@@ -93,7 +112,7 @@ class OpenShiftCredentialsAuthenticationStrategy(
         indicator.text = "Authenticating with OpenShift credentials..."
 
         val username = tfUsername.text
-        val password = String(tfPassword.password)
+        val password = String(tfPassword.passwordField.password)
 
         val sessionManager = OpenShiftAuthSessionManager()
 
@@ -132,5 +151,5 @@ class OpenShiftCredentialsAuthenticationStrategy(
     override fun isNextEnabled(): Boolean =
         isServerSelected()
                 && tfUsername.text.isNotBlank()
-                && tfPassword.password?.isNotEmpty() == true
+                && tfPassword.passwordField.password?.isNotEmpty() == true
 }
