@@ -111,9 +111,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # Run tests
+      # Run tests (clean + disable build cache: avoid stale compileTestKotlin from shared
+      # remote cache when main Kotlin ABI changes, e.g. NoSuchMethodError on data class <init>)
       - name: Run Tests
-        run: ./gradlew check
+        run: ./gradlew clean check --no-build-cache
 
       # Collect Tests Result of failed tests
       - name: Collect Tests Result
