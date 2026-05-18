@@ -4,6 +4,54 @@
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-05-18
+
+### ✨ New Features and Enhancements
+
+- feat: allow to restart a workspace from local devfile (#23417) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/271
+- feat: Gateway: CRW-8927 - Simplify login to the OCP cluster from the Gateway plugin by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/247
+- Added auto reconnect functionality by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/295
+- feat: allow connect to ws without project by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/282
+
+### 🐛 Bug Fixes
+
+- fix: replace certificates, making sure no real ones exist by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/304
+- fix: don't consume SSL cert input stream when cloning api-client (#23842) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/303
+- fix: don't error saving kubeconf if it has no preferences (#23839) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/298
+- fix: dispose DevSpacesMainView upon exit, no mem leak (#23814) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/283
+- fix: refresh workspaces after (was: before) having created a new watch (23813) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/284
+- fix: double click listener fires twice by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/285
+- fix: Gateway: The DevWorkspaces are named differently on the Wizard vs.  Web Dashboard  #23822 by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/286
+- fix: Gateway: Newly created Dev Workspaces don't appear in Select running DevWorkspace wizard page #23821 by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/287
+
+### ⬆️ Dependency Updates
+
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.21.0 to 2.21.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/262
+- build(deps): Bump org.jetbrains.kotlinx.kover from 0.9.5 to 0.9.7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/259
+- build(deps): Bump junit-jupiter from 6.0.2 to 6.0.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/261
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.21.0 to 2.21.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/263
+- build(deps): Bump org.jetbrains.kotlin.jvm from 2.2.21 to 2.3.10 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/257
+- build(deps): Bump actions/upload-artifact from 6 to 7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/264
+- build(deps): Bump gradle-wrapper from 9.3.1 to 9.4.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/272
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.21.1 to 2.21.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/273
+- build(deps): Bump org.jetbrains.qodana from 2025.3.1 to 2025.3.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/270
+- build(deps): Bump gradle/actions from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/274
+- build(deps): Bump jtalk/url-health-check-action from 4 to 5 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/275
+- build(deps): Bump codecov/codecov-action from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/276
+- build(deps): Bump org.jetbrains.kotlin.jvm from 2.3.10 to 2.3.20 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/268
+- build(deps): Bump org.jetbrains.intellij.platform from 2.11.0 to 2.13.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/269
+- build(deps): Bump org.jetbrains.kotlin.jvm from 2.3.20 to 2.3.21 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/288
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.21.1 to 2.21.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/280
+- build(deps): Bump io.kubernetes:client-java from 25.0.0 to 26.0.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/278
+- build(deps): Bump org.jetbrains.kotlinx.kover from 0.9.7 to 0.9.8 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/281
+- build(deps): Bump org.jetbrains.intellij.platform from 2.13.1 to 2.15.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/290
+- build(deps): Bump org.jetbrains.qodana from 2025.3.2 to 2026.1.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/291
+- build(deps): Bump gradle-wrapper from 9.4.1 to 9.5.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/292
+- build(deps): Bump JetBrains/qodana-action from 2025.3 to 2026.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/289
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.21.2 to 2.21.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/293
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.21.2 to 2.21.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/294
+- build(deps): Bump org.jetbrains.intellij.platform from 2.15.0 to 2.16.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/296
+
 ## [0.0.15] - 2026-02-11
 
 ℹ️  Passed test output is hidden.
@@ -217,19 +265,20 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.15...HEAD
-[0.0.15]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.14...v0.0.15
-[0.0.14]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.13...v0.0.14
-[0.0.13]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.12...v0.0.13
-[0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.11...v0.0.12
-[0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.10...v0.0.11
-[0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.9...v0.0.10
-[0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.8...v0.0.9
-[0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.7...v0.0.8
-[0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.6...v0.0.7
-[0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.5...v0.0.6
-[0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.4...v0.0.5
-[0.0.4]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.3...v0.0.4
-[0.0.3]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.2...v0.0.3
-[0.0.2]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/redhat-developer/devspaces-gateway-plugin/commits/v0.0.1
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...HEAD
+[0.0.16]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.15...0.0.16
+[0.0.15]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.14...0.0.15
+[0.0.14]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.13...0.0.14
+[0.0.13]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.12...0.0.13
+[0.0.12]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.11...0.0.12
+[0.0.11]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.10...0.0.11
+[0.0.10]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.9...0.0.10
+[0.0.9]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.8...0.0.9
+[0.0.8]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.7...0.0.8
+[0.0.7]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.6...0.0.7
+[0.0.6]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.5...0.0.6
+[0.0.5]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.4...0.0.5
+[0.0.4]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.3...0.0.4
+[0.0.3]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.2...0.0.3
+[0.0.2]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.1...0.0.2
+[0.0.1]: https://github.com/redhat-developer/devspaces-gateway-plugin/commits/0.0.1
