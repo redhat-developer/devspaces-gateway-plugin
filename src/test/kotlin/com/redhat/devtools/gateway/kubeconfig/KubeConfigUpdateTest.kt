@@ -11,53 +11,59 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.auth.tls.PemUtils
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
+import io.kubernetes.client.persister.ConfigPersister
 import io.kubernetes.client.util.KubeConfig
 import io.mockk.*
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.nio.file.Files
+import java.io.File
 import java.nio.file.Path
 
 class KubeConfigUpdateTest {
 
-    private lateinit var tempKubeConfigFile: Path
+    private val kubeConfigPath = Path.of("/test/kubeconfig-primary")
+    private val persistersByFile = mutableMapOf<File, ConfigPersister>()
+    private val testPersisterFactory: (File) -> ConfigPersister = { file ->
+        persistersByFile.getOrPut(file) { mockk(relaxed = true) }
+    }
+
+    private fun persisterFor(path: Path): ConfigPersister {
+        return persistersByFile.getOrPut(path.toFile()) { mockk(relaxed = true) }
+    }
 
     @BeforeEach
     fun before() {
         mockkObject(KubeConfigUtils)
         mockkObject(Utils)
-        mockkConstructor(BlockStyleFilePersister::class)
-        every { anyConstructed<BlockStyleFilePersister>().save(any(), any(), any(), any(), any()) } returns Unit
-        this.tempKubeConfigFile = Files.createTempFile("test-kubeconfig", ".tmp")
     }
 
     @AfterEach
     fun after() {
-        unmockkConstructor(BlockStyleFilePersister::class)
         unmockkAll()
         clearAllMocks()
-        Files.deleteIfExists(tempKubeConfigFile)
     }
 
     @Test
     fun `#apply creates the context if it does not exist`() {
         // given
         val data = CreateContextTestData()
-        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath)
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
         
         // when
         update.apply()
         
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 match { contexts ->
                     assertThat(contexts).hasSize(1)
                     verifyContext(contexts[0] as Map<*, *>, "${data.clusterName}/${data.clusterName}", data.clusterName, data.clusterName)
@@ -77,22 +83,119 @@ class KubeConfigUpdateTest {
     }
 
     @Test
-    fun `#apply updates the token if context already exists`() {
+    fun `#apply CreateContextWithClientCert creates the context if it does not exist`() {
         // given
-        val data = UpdateTokenTestData()
-        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
-        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap)
+        val data = CreateContextWithClientCertTestData()
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath)
         val allConfigs = listOf(config)
-        val mockContext = setupUpdateTokenMocks(data, allConfigs, config, null)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs)
+        val update = KubeConfigUpdate.CreateContextWithClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            allConfigs,
+            testPersisterFactory,
+        )
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
+                match { contexts ->
+                    assertThat(contexts).hasSize(1)
+                    verifyContext(
+                        contexts[0] as Map<*, *>,
+                        "${data.clusterName}/${data.clusterName}",
+                        data.clusterName,
+                        data.clusterName
+                    )
+                },
+                match { clusters ->
+                    assertThat(clusters).hasSize(1)
+                    verifyCluster(clusters[0] as Map<*, *>, data.clusterName, data.clusterUrl)
+                },
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(
+                        users[0] as Map<*, *>,
+                        data.clusterName,
+                        data.clientCertPem,
+                        data.clientKeyPem
+                    )
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply CreateContextWithClientCert generates unique user name if user name already exists`() {
+        // given
+        val data = CreateContextWithClientCertTestData()
+        val existingUserMap = KubeConfigTestHelpers.createUserMap(data.clusterName, "existing-token")
+
+        val config = KubeConfigTestHelpers.createMockKubeConfig(
+            kubeConfigPath,
+            users = listOf(existingUserMap)
+        )
+        val allConfigs = listOf(config)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
+
+        val update = KubeConfigUpdate.CreateContextWithClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    verifyNewEntryInList(users, 2, "${data.clusterName}2") { userMap ->
+                        verifyUserWithClientCert(
+                            userMap,
+                            "${data.clusterName}2",
+                            data.clientCertPem,
+                            data.clientKeyPem
+                        )
+                    }
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply updates the token if context already exists`() {
+        // given
+        val data = UpdateTokenTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(kubeConfigPath).save(
                 match { contexts ->
                     assertThat(contexts).hasSize(1)
                     verifyContext(contexts[0] as Map<*, *>, data.clusterName, data.clusterName, data.userName)
@@ -116,42 +219,31 @@ class KubeConfigUpdateTest {
         // given
         val data = UpdateTokenTestData()
         val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
-        val configForToken = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap, "other-context")
-        val configForCurrentContext = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap, "other-context")
+        val configForToken = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "other-context")
+        val configForCurrentContext = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "other-context")
         val allConfigs = listOf(configForToken, configForCurrentContext)
-        val mockContext = setupUpdateTokenMocks(data, allConfigs, configForToken, configForCurrentContext)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, configForToken, configForCurrentContext)
 
-        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs)
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
-        // then - verify that save is called twice: once for token update, once for current context update
-        verify(exactly = 2) {
-            anyConstructed<BlockStyleFilePersister>().save(any(), any(), any(), any(), any())
+        // then - token and current-context changes are persisted in a single save
+        verify(exactly = 1) {
+            persisterFor(kubeConfigPath).save(any(), any(), any(), any(), any())
         }
-        
-        // Verify both calls were made: first with original context, second with context name
-        // The match function returns boolean - MockK will try calls until one matches
-        verify(atLeast = 1) {
-            anyConstructed<BlockStyleFilePersister>().save(
+
+        verify {
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
-                any(),
-                any(),
-                match { currentContext -> 
-                    currentContext == "other-context"
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUser(users[0] as Map<*, *>, data.userName, data.newToken)
                 },
-            )
-        }
-        
-        verify(atLeast = 1) {
-            anyConstructed<BlockStyleFilePersister>().save(
                 any(),
-                any(),
-                any(),
-                any(),
-                match { currentContext -> 
+                match { currentContext ->
                     currentContext == data.contextName
                 },
             )
@@ -159,22 +251,327 @@ class KubeConfigUpdateTest {
     }
 
     @Test
-    fun `#apply does not set current context when no config has current context`() {
+    fun `#apply UpdateToken saves user and current-context configs separately when on different files`() {
         // given
         val data = UpdateTokenTestData()
         val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
-        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap, "")
-        val allConfigs = listOf(config)
-        val mockContext = setupUpdateTokenMocks(data, allConfigs, config, null)
+        val userConfigFile = Path.of("/test/kubeconfig-user")
+        val currentContextConfigFile = Path.of("/test/kubeconfig-current-context")
+        val configForUser = KubeConfigTestHelpers.createMockKubeConfig(
+            userConfigFile,
+            existingUserMap,
+            existingClusterMap,
+            existingContextMap,
+            ""
+        )
+        val configForCurrentContext = KubeConfigTestHelpers.createMockKubeConfig(
+            currentContextConfigFile,
+            existingUserMap,
+            existingClusterMap,
+            existingContextMap,
+            "other-context"
+        )
+        val allConfigs = listOf(configForUser, configForCurrentContext)
+        val mockContext = setupUpdateExistingContextMocks(
+            data.clusterName,
+            data.userName,
+            data.contextName,
+            allConfigs,
+            configForUser,
+            configForCurrentContext
+        )
 
-        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs)
+        val update = KubeConfigUpdate.UpdateToken(
+            data.clusterName,
+            data.clusterUrl,
+            data.newToken,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
 
         // when
         update.apply()
 
-        // then - verify that save is called only once (for token update, not for current context)
+        // then - user config and current-context config are persisted separately, each by its own persister
+        val userFile = userConfigFile.toFile()
+        val currentContextFile = currentContextConfigFile.toFile()
+        val userPersister = persistersByFile[userFile]
+        val currentContextPersister = persistersByFile[currentContextFile]
+
         verify(exactly = 1) {
-            anyConstructed<BlockStyleFilePersister>().save(any(), any(), any(), any(), any())
+            userPersister!!.save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUser(users[0] as Map<*, *>, data.userName, data.newToken)
+                },
+                any(),
+                any(),
+            )
+        }
+
+        verify(exactly = 1) {
+            currentContextPersister!!.save(
+                any(),
+                any(),
+                any(),
+                any(),
+                match { currentContext ->
+                    currentContext == data.contextName
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateClientCert updates client cert if context already exists`() {
+        // given
+        val data = UpdateClientCertTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateClientCertTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(kubeConfigPath).save(
+                match { contexts ->
+                    assertThat(contexts).hasSize(1)
+                    verifyContext(contexts[0] as Map<*, *>, data.clusterName, data.clusterName, data.userName)
+                },
+                match { clusters ->
+                    assertThat(clusters).hasSize(1)
+                    verifyCluster(clusters[0] as Map<*, *>, data.clusterName, data.clusterUrl)
+                },
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(users[0] as Map<*, *>, data.userName, data.clientCertPem, data.clientKeyPem)
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateClientCert sets current context when updating client cert`() {
+        // given
+        val data = UpdateClientCertTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateClientCertTestMaps(data)
+        val configForUser = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "other-context")
+        val configForCurrentContext = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "other-context")
+        val allConfigs = listOf(configForUser, configForCurrentContext)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, configForUser, configForCurrentContext)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then - cert and current-context changes are persisted in a single save
+        verify(exactly = 1) {
+            persisterFor(kubeConfigPath).save(any(), any(), any(), any(), any())
+        }
+
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(users[0] as Map<*, *>, data.userName, data.clientCertPem, data.clientKeyPem)
+                },
+                any(),
+                match { currentContext ->
+                    currentContext == data.contextName
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateClientCert sets current context on primary config when no config has current context`() {
+        // given
+        val data = UpdateClientCertTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateClientCertTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "")
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then - cert and current-context are persisted in a single save on the primary config
+        verify(exactly = 1) {
+            persisterFor(kubeConfigPath).save(any(), any(), any(), any(), any())
+        }
+
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(users[0] as Map<*, *>, data.userName, data.clientCertPem, data.clientKeyPem)
+                },
+                any(),
+                match { currentContext ->
+                    currentContext == data.contextName
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateClientCert removes token when setting client cert`() {
+        // given
+        val data = UpdateClientCertWithTokenTestData()
+        val existingUserMap = KubeConfigTestHelpers.createUserMapWithClientCert(
+            data.userName,
+            data.oldToken,
+            data.oldClientCertPem,
+            data.oldClientKeyPem
+        )
+        val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, data.clusterUrl)
+        val existingContextMap = KubeConfigTestHelpers.createContextMap(data.contextName, data.clusterName, data.userName)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.newClientCertPem,
+            data.newClientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then - token should be removed, only the new certificates should remain
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(
+                        users[0] as Map<*, *>,
+                        data.userName,
+                        data.newClientCertPem,
+                        data.newClientKeyPem
+                    )
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateToken sets current context on primary config when no config has current context`() {
+        // given
+        val data = UpdateTokenTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap, "")
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then - token and current-context are persisted in a single save on the primary config
+        verify(exactly = 1) {
+            persisterFor(kubeConfigPath).save(any(), any(), any(), any(), any())
+        }
+
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUser(users[0] as Map<*, *>, data.userName, data.newToken)
+                },
+                any(),
+                match { currentContext ->
+                    currentContext == data.contextName
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateToken removes client-certificate-data and client-key-data when setting a new token`() {
+        // given
+        val data = UpdateTokenWithClientCertTestData()
+        val existingUserMap = KubeConfigTestHelpers.createUserMapWithClientCert(
+            data.userName,
+            data.oldToken,
+            data.clientCertPem,
+            data.clientKeyPem
+        )
+        val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, data.clusterUrl)
+        val existingContextMap = KubeConfigTestHelpers.createContextMap(data.contextName, data.clusterName, data.userName)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then - certificates should be removed, only the new token should remain
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUser(users[0] as Map<*, *>, data.userName, data.newToken)
+                },
+                any(),
+                any(),
+            )
         }
     }
 
@@ -185,20 +582,20 @@ class KubeConfigUpdateTest {
         val existingUserMap = KubeConfigTestHelpers.createUserMap(data.clusterName, "existing-token")
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             users = listOf(existingUserMap)
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 match { users ->
@@ -219,20 +616,20 @@ class KubeConfigUpdateTest {
         val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, "https://existing.com")
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             clusters = listOf(existingClusterMap)
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 match { clusters ->
                     verifyNewEntryInList(clusters, 2, "${data.clusterName}2") { clusterMap ->
@@ -253,20 +650,20 @@ class KubeConfigUpdateTest {
         val existingContextMap = KubeConfigTestHelpers.createContextMap("${data.clusterName}/${data.clusterName}", "other-cluster", "other-user")
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             contexts = listOf(existingContextMap)
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 match { contexts ->
                     verifyNewEntryInList(contexts, 2, "${data.clusterName}/${data.clusterName}2") { contextMap ->
                         verifyContext(contextMap, "${data.clusterName}/${data.clusterName}2", data.clusterName, data.clusterName)
@@ -289,20 +686,20 @@ class KubeConfigUpdateTest {
         val existingUser2 = KubeConfigTestHelpers.createUserMap("${data.clusterName}2", "token2")
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             users = listOf(existingUser1, existingUser2)
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 match { users ->
@@ -323,21 +720,21 @@ class KubeConfigUpdateTest {
         val existingUserMap = KubeConfigTestHelpers.createUserMap(data.clusterName, "existing-token")
 
         val config1 = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             users = listOf(existingUserMap)
         )
-        val config2 = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile)
+        val config2 = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath)
         val allConfigs = listOf(config1, config2)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then - should generate unique name even though the duplicate is in a different config
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 match { users ->
@@ -362,22 +759,22 @@ class KubeConfigUpdateTest {
         val existingContextMap = KubeConfigTestHelpers.createContextMap("${data.clusterName}/${data.clusterName}", "other-cluster", "other-user")
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             contexts = listOf(existingContextMap),
             clusters = listOf(existingClusterMap),
             users = listOf(existingUserMap)
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then - all three should have unique names with suffix 2
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 match { contexts ->
                     verifyNewEntryInList(contexts, 2, "${data.clusterName}2/${data.clusterName}2") { contextMap ->
                         verifyContext(contextMap, "${data.clusterName}2/${data.clusterName}2", "${data.clusterName}2", "${data.clusterName}2")
@@ -406,7 +803,7 @@ class KubeConfigUpdateTest {
         val expectedContextName = "${data.clusterName}/${data.clusterName}"
 
         val config = KubeConfigTestHelpers.createMockKubeConfig(
-            tempKubeConfigFile,
+            kubeConfigPath,
             setupContextCapture = { mockConfig ->
                 // Capture the context name set via setContext() and return it via currentContext
                 val contextNameSlot = slot<String>()
@@ -417,16 +814,16 @@ class KubeConfigUpdateTest {
             }
         )
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
         
         // when
         update.apply()
         
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 any(),
@@ -437,23 +834,70 @@ class KubeConfigUpdateTest {
     }
 
     @Test
+    fun `#apply addNewContext persists entries when config lists are null`() {
+        // given
+        val data = CreateContextTestData()
+        val config = mockk<KubeConfig>(relaxed = true)
+        every { config.users } returns null
+        every { config.clusters } returns null
+        every { config.contexts } returns null
+        every { config.currentContext } answers { "" }
+        every { config.path } returns kubeConfigPath
+        every { config.preferences } returns mockk()
+        every { config.setContext(any()) } returns true
+
+        val allConfigs = listOf(config)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
+
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(kubeConfigPath).save(
+                match { savedContexts ->
+                    assertThat(savedContexts).hasSize(1)
+                    verifyContext(
+                        savedContexts[0] as Map<*, *>,
+                        "${data.clusterName}/${data.clusterName}",
+                        data.clusterName,
+                        data.clusterName
+                    )
+                },
+                match { savedClusters ->
+                    assertThat(savedClusters).hasSize(1)
+                    verifyCluster(savedClusters[0] as Map<*, *>, data.clusterName, data.clusterUrl)
+                },
+                match { savedUsers ->
+                    assertThat(savedUsers).hasSize(1)
+                    verifyUser(savedUsers[0] as Map<*, *>, data.clusterName, data.token)
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
     fun `#apply works when preferences are null`() {
         // given
         val data = CreateContextTestData()
-        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath)
         every { config.preferences } returns null
         
         val allConfigs = listOf(config)
-        setupCreateContextMocks(data.clusterName, allConfigs, tempKubeConfigFile)
+        setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
-        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs)
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
         
         // when
         update.apply()
         
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 any(),
@@ -468,20 +912,56 @@ class KubeConfigUpdateTest {
         // given
         val data = UpdateTokenTestData()
         val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
-        val config = KubeConfigTestHelpers.createMockKubeConfig(tempKubeConfigFile, existingUserMap, existingClusterMap, existingContextMap)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
         every { config.preferences } returns null
         
         val allConfigs = listOf(config)
-        val mockContext = setupUpdateTokenMocks(data, allConfigs, config, null)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
 
-        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs)
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
 
         // when
         update.apply()
 
         // then
         verify {
-            anyConstructed<BlockStyleFilePersister>().save(
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                any(),
+                null,
+                any()
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateClientCert updates client cert when preferences are null`() {
+        // given
+        val data = UpdateClientCertTestData()
+        val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateClientCertTestMaps(data)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        every { config.preferences } returns null
+
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(kubeConfigPath).save(
                 any(),
                 any(),
                 any(),
@@ -504,6 +984,46 @@ class KubeConfigUpdateTest {
         val clusterName: String = "death-star",
         val clusterUrl: String = "https://death-star.com",
         val token: String = "join-the-dark-side"
+    )
+
+    private data class CreateContextWithClientCertTestData(
+        val clusterName: String = "death-star",
+        val clusterUrl: String = "https://death-star.com",
+        val clientCertPem: String = "empire-client-cert",
+        val clientKeyPem: String = "empire-client-key"
+    )
+
+    private data class UpdateClientCertTestData(
+        val oldToken: String = "use-the-force",
+        val clientCertPem: String = "rebel-client-cert",
+        val clientKeyPem: String = "rebel-client-key",
+        val clusterName: String = "yavin-4",
+        val clusterUrl: String = "https://yavin-4.com",
+        val userName: String = "leia-organa",
+        val contextName: String = clusterName
+    )
+
+    private data class UpdateTokenWithClientCertTestData(
+        val oldToken: String = "old-token",
+        val newToken: String = "new-token",
+        val clientCertPem: String = "existing-cert",
+        val clientKeyPem: String = "existing-key",
+        val clusterName: String = "endor",
+        val clusterUrl: String = "https://endor.com",
+        val userName: String = "lando-calrissian",
+        val contextName: String = clusterName
+    )
+
+    private data class UpdateClientCertWithTokenTestData(
+        val oldToken: String = "old-token",
+        val oldClientCertPem: String = "old-client-cert",
+        val oldClientKeyPem: String = "old-client-key",
+        val newClientCertPem: String = "new-client-cert",
+        val newClientKeyPem: String = "new-client-key",
+        val clusterName: String = "hoth",
+        val clusterUrl: String = "https://hoth.com",
+        val userName: String = "han-solo",
+        val contextName: String = clusterName
     )
 
     // Helper functions for test verification and data creation
@@ -543,6 +1063,22 @@ class KubeConfigUpdateTest {
         return true
     }
 
+    private fun verifyUserWithClientCert(
+        user: Map<*, *>,
+        expectedName: String,
+        expectedCertPem: String,
+        expectedKeyPem: String
+    ): Boolean {
+        val name = Utils.getValue(user, arrayOf("name")) as String
+        val cert = Utils.getValue(user, arrayOf("user", "client-certificate-data")) as String
+        val key = Utils.getValue(user, arrayOf("user", "client-key-data")) as String
+        assertThat(name).isEqualTo(expectedName)
+        assertThat(cert).isEqualTo(PemUtils.toBase64(expectedCertPem))
+        assertThat(key).isEqualTo(PemUtils.toBase64(expectedKeyPem))
+        assertThat(Utils.getValue(user, arrayOf("user", "token"))).isNull()
+        return true
+    }
+
     private fun verifyCurrentContext(currentContext: String?, expectedContextName: String): Boolean {
         assertThat(currentContext).isEqualTo(expectedContextName)
         return true
@@ -568,20 +1104,29 @@ class KubeConfigUpdateTest {
         return Triple(existingUserMap, existingClusterMap, existingContextMap)
     }
 
+    private fun createUpdateClientCertTestMaps(data: UpdateClientCertTestData): Triple<MutableMap<String, Any>, MutableMap<String, Any>, MutableMap<String, Any>> {
+        val existingUserMap = KubeConfigTestHelpers.createUserMap(data.userName, data.oldToken)
+        val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, data.clusterUrl)
+        val existingContextMap = KubeConfigTestHelpers.createContextMap(data.contextName, data.clusterName, data.userName)
+        return Triple(existingUserMap, existingClusterMap, existingContextMap)
+    }
 
-    private fun setupUpdateTokenMocks(
-        data: UpdateTokenTestData,
+    private fun setupUpdateExistingContextMocks(
+        clusterName: String,
+        userName: String,
+        contextName: String,
         allConfigs: List<KubeConfig>,
         configForUser: KubeConfig,
         configForCurrentContext: KubeConfig?
     ): KubeConfigNamedContext {
         mockkObject(KubeConfigNamedContext)
         val mockContext = mockk<KubeConfigNamedContext>(relaxed = true)
-        every { mockContext.context } returns KubeConfigContext(data.userName, data.clusterName)
-        every { mockContext.name } returns data.contextName
-        every { KubeConfigNamedContext.getByClusterName(data.clusterName, allConfigs) } returns mockContext
+        every { mockContext.context } returns KubeConfigContext(userName, clusterName)
+        every { mockContext.name } returns contextName
+        every { KubeConfigNamedContext.getByClusterName(clusterName, allConfigs) } returns mockContext
         every { KubeConfigUtils.getAllConfigs(any()) } returns allConfigs
-        every { KubeConfigUtils.getAllConfigFiles() } returns listOf(tempKubeConfigFile)
+        val configFiles = allConfigs.mapNotNull { it.path }.distinct()
+        every { KubeConfigUtils.getAllConfigFiles() } returns configFiles
         every { KubeConfigUtils.getConfigByUser(mockContext, allConfigs) } returns configForUser
         every { KubeConfigUtils.getConfigWithCurrentContext(allConfigs) } returns configForCurrentContext
         return mockContext

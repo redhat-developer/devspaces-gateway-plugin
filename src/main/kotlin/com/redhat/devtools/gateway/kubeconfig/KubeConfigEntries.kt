@@ -100,7 +100,8 @@ data class KubeConfigNamedContext(
 ) {
     companion object {
 
-        private fun toName(user: String, cluster: String): String {
+        @JvmStatic
+        fun toName(user: String, cluster: String): String {
             val sanitizedUser = sanitizeName(user)
             val sanitizedCluster = sanitizeName(cluster)
 
