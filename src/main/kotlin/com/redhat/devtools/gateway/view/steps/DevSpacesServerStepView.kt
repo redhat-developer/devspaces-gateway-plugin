@@ -43,6 +43,7 @@ import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
+import com.redhat.devtools.gateway.util.isLoginUserCancelled
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -405,8 +406,8 @@ class DevSpacesServerStepView(
                             server,
                             certAuthorityData,
                             tlsContext,
-                            indicator,
-                            devSpacesContext
+                            devSpacesContext,
+                            indicator
                         )
                         authResult = Result.success(Unit)
                     } catch (e: Exception) {
@@ -427,10 +428,12 @@ class DevSpacesServerStepView(
             },
             onFailure = { e ->
                 thisLogger().warn(e)
-                Dialogs.error(
-                    "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
-                    "Connection Failed"
-                )
+                if (!e.isLoginUserCancelled()) {
+                    Dialogs.error(
+                        "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
+                        "Connection Failed"
+                    )
+                }
                 false
             }
         )
