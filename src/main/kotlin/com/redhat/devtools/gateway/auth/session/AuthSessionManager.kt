@@ -12,19 +12,15 @@
 package com.redhat.devtools.gateway.auth.session
 
 import com.redhat.devtools.gateway.auth.code.SSOToken
-import java.net.URI
 import javax.net.ssl.SSLContext
 
 interface AuthSessionManager {
 
-    /** Called once on plugin startup to load any existing token. */
-    suspend fun initialize()
-
-    /** Starts login and returns browser URL */
-    suspend fun startLogin(apiServerUrl: String? = null, sslContext: SSLContext): URI
-
-    /** Awaits for the browser login result */
-    suspend fun awaitLoginResult(timeoutMs: Long): SSOToken
+    /**
+     * Starts a browser OAuth login and returns a handle to open the authorization URL
+     * and await the result.
+     */
+    suspend fun startBrowserLogin(apiServerUrl: String? = null, sslContext: SSLContext): BrowserLogin
 
     /** Starts login using the given credentials and returns a valid token */
     suspend fun loginWithCredentials(apiServerUrl: String, username: String, password: String, sslContext: SSLContext): SSOToken

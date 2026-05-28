@@ -18,14 +18,11 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.TokenModel
-import com.redhat.devtools.gateway.auth.session.LOGIN_TIMEOUT_MS
+import com.redhat.devtools.gateway.auth.session.AbstractAuthSessionManager
 import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import javax.swing.JPanel
 
 /**
@@ -56,49 +53,52 @@ class OpenShiftOAuthAuthenticationStrategy(
         server: String,
         certAuthority: String?,
         tlsContext: TlsContext,
-        indicator: ProgressIndicator,
-        devSpacesContext: DevSpacesContext
+        devSpacesContext: DevSpacesContext,
+        indicator: ProgressIndicator
     ) {
         indicator.text = "Authenticating with OpenShift..."
 
-        val openshiftSSessionManager = OpenShiftAuthSessionManager()
-        val uri = openshiftSSessionManager.startLogin(
+        val sessionManager = OpenShiftAuthSessionManager()
+        val login = sessionManager.startBrowserLogin(
             selectedCluster.url,
             tlsContext.sslContext
         )
         withContext(Dispatchers.Main) {
-            BrowserUtil.browse(uri)
+            BrowserUtil.browse(login.authorizationUri)
         }
 
         indicator.text = "Waiting for you to complete login in your browser..."
         currentCoroutineContext().ensureActive()
 
-        indicator.text = "Obtaining OpenShift access..."
-        val osToken = openshiftSSessionManager.awaitLoginResult(LOGIN_TIMEOUT_MS)
+        coroutineScope {
+            launchCancelWatcher(indicator) { login.cancel() }
 
-        val finalToken = TokenModel(
-            accessToken = osToken.accessToken,
-            expiresAt = osToken.expiresAt,
-            accountLabel = osToken.accountLabel,
-            kind = AuthTokenKind.TOKEN,
-            clusterApiUrl = selectedCluster.url
-        )
+            indicator.text = "Obtaining OpenShift access..."
+            val osToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
 
-        indicator.text = "Validating cluster access..."
+            val finalToken = TokenModel(
+                accessToken = osToken.accessToken,
+                expiresAt = osToken.expiresAt,
+                accountLabel = osToken.accountLabel,
+                kind = AuthTokenKind.TOKEN,
+                clusterApiUrl = selectedCluster.url
+            )
 
-        val client = createValidatedApiClient(
-            server,
-            certAuthority,
-            finalToken.accessToken,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
-        )
+            indicator.text = "Validating cluster access..."
+            val client = createValidatedApiClient(
+                server,
+                certAuthority,
+                finalToken.accessToken,
+                null,
+                null,
+                tlsContext,
+                "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
+            )
 
-        setTokenDisplay(finalToken.accessToken)
-        saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
-        devSpacesContext.client = client
+            setTokenDisplay(finalToken.accessToken)
+            saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+            devSpacesContext.client = client
+        }
     }
 
     override fun isNextEnabled(): Boolean =

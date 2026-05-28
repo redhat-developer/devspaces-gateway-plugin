@@ -55,8 +55,8 @@ interface AuthenticationStrategy {
         server: String,
         certAuthority: String?,
         tlsContext: TlsContext,
-        indicator: ProgressIndicator,
-        devSpacesContext: DevSpacesContext
+        devSpacesContext: DevSpacesContext,
+        indicator: ProgressIndicator
     )
 
     /**
