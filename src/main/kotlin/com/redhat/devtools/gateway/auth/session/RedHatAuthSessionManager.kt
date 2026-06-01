@@ -27,11 +27,8 @@ import com.redhat.devtools.gateway.auth.server.CallbackServer
 import com.redhat.devtools.gateway.auth.server.OAuthCallbackServer
 import com.redhat.devtools.gateway.auth.server.RedirectUrlBuilder
 import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
-import kotlinx.coroutines.*
-import java.net.URI
+import kotlinx.coroutines.runBlocking
 import javax.net.ssl.SSLContext
-
-const val LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
 class RedHatAuthSessionManager : AbstractAuthSessionManager() {
@@ -50,82 +47,42 @@ class RedHatAuthSessionManager : AbstractAuthSessionManager() {
 
     private lateinit var authFlow: RedHatAuthCodeFlow
 
-    /**
-     * Called once on plugin startup.
-     */
-    override suspend fun initialize() {
-        thisLogger().info("RedHatAuthSessionManager initialized")
-        notifyChanged()
-    }
+    override suspend fun startBrowserLogin(apiServerUrl: String?, sslContext: SSLContext): BrowserLogin =
+        withBrowserLoginLock {
+            endActiveLogin()
+            var login: BrowserLogin? = null
+            try {
+                callbackServer.stop()
+                val port = callbackServer.start()
+                thisLogger().debug("Callback server started on port: $port")
 
-    /**
-     * Starts the login process and returns browser URL.
-     */
-    override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
-        if (!loginInProgress.compareAndSet(false, true)) {
-            thisLogger().warn("Login already in progress")
-            throw IllegalStateException("Login already in progress")
-        }
+                authFlow = RedHatAuthCodeFlow(
+                    clientId = authConfig.clientId,
+                    redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
+                    providerMetadata = providerMetadata
+                )
 
-        thisLogger().info("Starting Red Hat SSO login")
-        pendingLogin = CompletableDeferred()
+                val request = authFlow.startAuthFlow()
+                thisLogger().info("Starting Red Hat SSO login, authorization URI: ${request.authorizationUri}")
 
-        try {
-            notifyChanged()
-
-            callbackServer.stop()
-            val port = callbackServer.start()
-            thisLogger().debug("Callback server started on port: $port")
-
-            authFlow = RedHatAuthCodeFlow(
-                clientId = authConfig.clientId,
-                redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                providerMetadata = providerMetadata
-            )
-
-            val request = authFlow.startAuthFlow()
-            thisLogger().debug("Auth flow started, authorization URI: ${request.authorizationUri}")
-
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    thisLogger().debug("Waiting for OAuth callback...")
-                    val params = callbackServer.awaitCallback(LOGIN_TIMEOUT_MS)
-                    if (params == null) {
-                        thisLogger().warn("OAuth callback timed out or was cancelled")
-                        pendingLogin?.completeExceptionally(
-                            SsoLoginException.Timeout()
-                        )
-                        notifyLoginCancelled()
-
-                        return@launch
-                    }
-
-                    thisLogger().debug("OAuth callback received, handling...")
+                login = createBrowserLogin(request.authorizationUri)
+                launchCallbackHandler(
+                    login = login,
+                    callbackTimeoutMs = LOGIN_TIMEOUT_MS,
+                    onCallbackTimeout = ::notifyLoginCancelled,
+                ) { params ->
                     val token = authFlow.handleCallback(params)
-                    currentToken = token
                     thisLogger().info("Red Hat SSO login successful for account: ${token.accountLabel}")
-
-                    pendingLogin?.complete(token)
-                } catch (e: Exception) {
-                    thisLogger().error("Red Hat SSO login failed", e)
-                    pendingLogin?.completeExceptionally(
-                        SsoLoginException.Failed(e.message ?: "SSO login failed")
-                    )
-                } finally {
-                    pendingLogin = null
-                    cancelLogin()
+                    token
                 }
-            }
 
-            return request.authorizationUri
-        } catch (e: Exception) {
-            thisLogger().error("Failed to start Red Hat SSO login", e)
-            pendingLogin?.completeExceptionally(e)
-            pendingLogin = null
-            cancelLogin()
-            throw e
+                login
+            } catch (e: Exception) {
+                thisLogger().error("Failed to start Red Hat SSO login", e)
+                login?.let { failBrowserLoginStart(it, e) }
+                throw e
+            }
         }
-    }
 
     override suspend fun loginWithCredentials(
         apiServerUrl: String,

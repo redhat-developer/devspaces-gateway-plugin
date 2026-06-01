@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.redhat.devtools.gateway.auth.session.SsoLoginException
 import kotlinx.coroutines.TimeoutCancellationException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
@@ -23,3 +24,6 @@ fun Throwable.messageWithoutPrefix(): String? {
 fun Throwable.isTimeoutException(): Boolean = (this is TimeoutCancellationException || this is TimeoutException )
 
 fun Throwable.isCancellationException(): Boolean = (this is CancellationException && !isTimeoutException() )
+
+fun Throwable.isLoginUserCancelled(): Boolean =
+    generateSequence(this) { it.cause }.any { it is SsoLoginException.Cancelled }

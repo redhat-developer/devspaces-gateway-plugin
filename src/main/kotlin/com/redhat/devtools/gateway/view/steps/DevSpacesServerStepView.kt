@@ -43,6 +43,8 @@ import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
+import com.redhat.devtools.gateway.util.isLoginUserCancelled
+import com.redhat.devtools.gateway.util.stripScheme
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -56,7 +58,7 @@ import javax.swing.event.DocumentListener
 class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
     private val enableNextButton: (() -> Unit)?,
-    private val triggerNextAction: (() -> Unit)? = null
+    private val triggerNextAction: (() -> Unit)? = null,
 ) : DevSpacesWizardStep {
 
     private lateinit var allClusters: List<Cluster>
@@ -381,7 +383,6 @@ class DevSpacesServerStepView(
     override fun onNext(): Boolean {
         val selectedCluster = getSelectedCluster() ?: return false
         val server = selectedCluster.url
-        val serverDisplay = server.removePrefix("https://").removePrefix("http://")
         val strategy = currentStrategy ?: return false
 
         if (!confirmAuthSwitchIfNeeded()) return false
@@ -405,8 +406,8 @@ class DevSpacesServerStepView(
                             server,
                             certAuthorityData,
                             tlsContext,
-                            indicator,
-                            devSpacesContext
+                            devSpacesContext,
+                            indicator
                         )
                         authResult = Result.success(Unit)
                     } catch (e: Exception) {
@@ -416,7 +417,8 @@ class DevSpacesServerStepView(
             },
             "Connecting to OpenShift...",
             true,
-            null
+            null,
+            component
         )
 
         val result = authResult!!
@@ -427,10 +429,12 @@ class DevSpacesServerStepView(
             },
             onFailure = { e ->
                 thisLogger().warn(e)
-                Dialogs.error(
-                    "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
-                    "Connection Failed"
-                )
+                if (!e.isLoginUserCancelled()) {
+                    Dialogs.error(
+                        "Could not connect to cluster ${server.stripScheme()}.\n\nReason: ${e.message ?: "Unknown error"}",
+                        "Connection Failed"
+                    )
+                }
                 false
             }
         )

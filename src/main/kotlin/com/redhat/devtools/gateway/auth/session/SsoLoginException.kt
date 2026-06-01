@@ -13,7 +13,8 @@ package com.redhat.devtools.gateway.auth.session
 
 import kotlin.Exception
 
-sealed class SsoLoginException : Exception() {
-    class Timeout : SsoLoginException()
-    data class Failed(val reason: String) : SsoLoginException()
+sealed class SsoLoginException(message: String) : Exception(message) {
+    class Timeout : SsoLoginException("Login timed out")
+    class Failed(message: String) : SsoLoginException(message)
+    class Cancelled : SsoLoginException("Login cancelled")
 }

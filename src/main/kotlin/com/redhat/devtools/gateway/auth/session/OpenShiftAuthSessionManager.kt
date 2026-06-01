@@ -17,18 +17,15 @@ import com.intellij.notification.Notifications
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
-import com.redhat.devtools.gateway.auth.code.Parameters
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.config.AuthType
 import com.redhat.devtools.gateway.auth.server.CallbackServer
 import com.redhat.devtools.gateway.auth.server.OAuthCallbackServer
 import com.redhat.devtools.gateway.auth.server.RedirectUrlBuilder
 import com.redhat.devtools.gateway.auth.server.ServerConfigProvider
-import kotlinx.coroutines.*
+import kotlinx.coroutines.runBlocking
 import java.net.URI
 import javax.net.ssl.SSLContext
-
-const val OPENSHIFT_LOGIN_TIMEOUT_MS = 2 * 60_000L
 
 @Service(Service.Level.APP)
 class OpenShiftAuthSessionManager : AbstractAuthSessionManager() {
@@ -41,75 +38,46 @@ class OpenShiftAuthSessionManager : AbstractAuthSessionManager() {
 
     private lateinit var authFlow: OpenShiftAuthCodeFlow
 
-    override suspend fun initialize() {
-        thisLogger().info("OpenShiftAuthSessionManager initialized")
-        notifyChanged()
-    }
-
-    override suspend fun startLogin(apiServerUrl: String?, sslContext: SSLContext): URI {
+    override suspend fun startBrowserLogin(apiServerUrl: String?, sslContext: SSLContext): BrowserLogin {
         if (apiServerUrl == null) {
             thisLogger().error("API Server URL is null")
             throw IllegalStateException("Provide API Server URL")
         }
 
-        if (!loginInProgress.compareAndSet(false, true)) {
-            thisLogger().warn("Login already in progress")
-            throw IllegalStateException("Login already in progress")
-        }
+        return withBrowserLoginLock {
+            endActiveLogin()
+            var login: BrowserLogin? = null
+            try {
+                callbackServer.stop()
+                val port = callbackServer.start()
+                thisLogger().debug("Callback server started on port: $port")
 
-        thisLogger().info("Starting OpenShift login for API server: $apiServerUrl")
-        pendingLogin = CompletableDeferred()
-        try {
-            notifyChanged()
+                authFlow = OpenShiftAuthCodeFlow(
+                    apiServerUrl = apiServerUrl,
+                    redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
+                    sslContext = sslContext
+                )
 
-            callbackServer.stop()
-            val port = callbackServer.start()
-            thisLogger().debug("Callback server started on port: $port")
+                val request = authFlow.startAuthFlow()
+                thisLogger().info("Starting OpenShift login for API server: $apiServerUrl, authorization URI: ${request.authorizationUri}")
 
-            authFlow = OpenShiftAuthCodeFlow(
-                apiServerUrl = apiServerUrl,
-                redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                sslContext = sslContext
-            )
-
-            val request = authFlow.startAuthFlow()
-            thisLogger().debug("Auth flow started, authorization URI: ${request.authorizationUri}")
-
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    thisLogger().debug("Waiting for OAuth callback...")
-                    val params: Parameters? = callbackServer.awaitCallback(OPENSHIFT_LOGIN_TIMEOUT_MS)
-                    if (params == null) {
-                        thisLogger().warn("OAuth callback timed out or was cancelled")
-                        pendingLogin?.completeExceptionally(SsoLoginException.Timeout())
-                        notifyLoginCancelled()
-                        return@launch
-                    }
-
-                    thisLogger().debug("OAuth callback received, handling...")
-                    val token: SSOToken = authFlow.handleCallback(params)
-                    currentToken = token
+                login = createBrowserLogin(request.authorizationUri)
+                launchCallbackHandler(
+                    login = login,
+                    callbackTimeoutMs = LOGIN_TIMEOUT_MS,
+                    onCallbackTimeout = ::notifyLoginCancelled,
+                ) { params ->
+                    val token = authFlow.handleCallback(params)
                     thisLogger().info("OpenShift login successful for account: ${token.accountLabel}")
-                    pendingLogin?.complete(token)
-
-                } catch (e: Exception) {
-                    thisLogger().error("OpenShift login failed", e)
-                    pendingLogin?.completeExceptionally(
-                        SsoLoginException.Failed(e.message ?: "OpenShift login failed")
-                    )
-                } finally {
-                    pendingLogin = null
-                    cancelLogin()
+                    token
                 }
-            }
 
-            return request.authorizationUri
-        } catch (e: Exception) {
-            thisLogger().error("Failed to start OpenShift login", e)
-            pendingLogin?.completeExceptionally(e)
-            pendingLogin = null
-            cancelLogin()
-            throw e
+                login
+            } catch (e: Exception) {
+                thisLogger().error("Failed to start OpenShift login", e)
+                login?.let { failBrowserLoginStart(it, e) }
+                throw e
+            }
         }
     }
 
@@ -130,15 +98,8 @@ class OpenShiftAuthSessionManager : AbstractAuthSessionManager() {
         password: String,
         sslContext: SSLContext
     ): SSOToken {
-        if (!loginInProgress.compareAndSet(false, true)) {
-            thisLogger().warn("Login with credentials already in progress")
-            throw IllegalStateException("Login already in progress")
-        }
-
         thisLogger().info("Starting OpenShift credential login for user: $username at $apiServerUrl")
         try {
-            notifyChanged()
-
             authFlow = OpenShiftAuthCodeFlow(
                 apiServerUrl = apiServerUrl,
                 redirectUri = URI("$apiServerUrl/oauth/token/implicit"),
@@ -158,9 +119,6 @@ class OpenShiftAuthSessionManager : AbstractAuthSessionManager() {
         } catch (e: Exception) {
             thisLogger().error("OpenShift credential login failed for user: $username", e)
             throw SsoLoginException.Failed(e.message ?: "OpenShift credential login failed")
-        } finally {
-            loginInProgress.set(false)
-            notifyChanged()
         }
     }
 }

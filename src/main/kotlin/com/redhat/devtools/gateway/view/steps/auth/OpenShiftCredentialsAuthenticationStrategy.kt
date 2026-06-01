@@ -106,8 +106,8 @@ class OpenShiftCredentialsAuthenticationStrategy(
         server: String,
         certAuthority: String?,
         tlsContext: TlsContext,
-        indicator: ProgressIndicator,
-        devSpacesContext: DevSpacesContext
+        devSpacesContext: DevSpacesContext,
+        indicator: ProgressIndicator
     ) {
         indicator.text = "Authenticating with OpenShift credentials..."
 

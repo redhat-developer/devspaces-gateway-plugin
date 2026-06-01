@@ -78,8 +78,8 @@ class ClientCertificateAuthenticationStrategy(
         server: String,
         certAuthority: String?,
         tlsContext: TlsContext,
-        indicator: ProgressIndicator,
-        devSpacesContext: DevSpacesContext
+        devSpacesContext: DevSpacesContext,
+        indicator: ProgressIndicator
     ) {
         indicator.text = "Validating client certificate..."
 
