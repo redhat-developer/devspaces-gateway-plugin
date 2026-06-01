@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.openshift
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toName
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.toUriWithHost
+import com.redhat.devtools.gateway.util.stripScheme
 
 data class Cluster(
     val name: String,
@@ -85,13 +86,7 @@ data class Cluster(
     }
 
     val id: String
-        get() {
-            return "$name@${
-                url
-                    .removePrefix("https://")
-                    .removePrefix("http://")
-            }"
-        }
+        get() = "$name@${url.stripScheme()}"
 
     override fun toString(): String {
         return "$name ($url)"

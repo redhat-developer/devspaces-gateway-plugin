@@ -44,6 +44,7 @@ import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import com.redhat.devtools.gateway.util.isLoginUserCancelled
+import com.redhat.devtools.gateway.util.stripScheme
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -382,7 +383,6 @@ class DevSpacesServerStepView(
     override fun onNext(): Boolean {
         val selectedCluster = getSelectedCluster() ?: return false
         val server = selectedCluster.url
-        val serverDisplay = server.removePrefix("https://").removePrefix("http://")
         val strategy = currentStrategy ?: return false
 
         if (!confirmAuthSwitchIfNeeded()) return false
@@ -431,7 +431,7 @@ class DevSpacesServerStepView(
                 thisLogger().warn(e)
                 if (!e.isLoginUserCancelled()) {
                     Dialogs.error(
-                        "Could not connect to cluster $serverDisplay.\n\nReason: ${e.message ?: "Unknown error"}",
+                        "Could not connect to cluster ${server.stripScheme()}.\n\nReason: ${e.message ?: "Unknown error"}",
                         "Connection Failed"
                     )
                 }
