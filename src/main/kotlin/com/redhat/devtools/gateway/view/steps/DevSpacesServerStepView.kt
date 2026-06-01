@@ -57,7 +57,7 @@ import javax.swing.event.DocumentListener
 class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
     private val enableNextButton: (() -> Unit)?,
-    private val triggerNextAction: (() -> Unit)? = null
+    private val triggerNextAction: (() -> Unit)? = null,
 ) : DevSpacesWizardStep {
 
     private lateinit var allClusters: List<Cluster>
@@ -417,7 +417,8 @@ class DevSpacesServerStepView(
             },
             "Connecting to OpenShift...",
             true,
-            null
+            null,
+            component
         )
 
         val result = authResult!!
