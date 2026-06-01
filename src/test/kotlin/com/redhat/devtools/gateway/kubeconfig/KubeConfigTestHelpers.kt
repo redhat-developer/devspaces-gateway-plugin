@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
+import com.redhat.devtools.gateway.auth.tls.PemUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import io.kubernetes.client.util.KubeConfig
 import io.mockk.every
@@ -111,6 +112,25 @@ object KubeConfigTestHelpers {
         return mutableMapOf(
             "name" to name,
             "user" to mutableMapOf("token" to token)
+        )
+    }
+
+    /**
+     * Creates a user map for testing with both token and client certificates
+     */
+    fun createUserMapWithClientCert(
+        name: String,
+        token: String,
+        clientCertPem: String,
+        clientKeyPem: String
+    ): MutableMap<String, Any> {
+        return mutableMapOf(
+            "name" to name,
+            "user" to mutableMapOf(
+                "token" to token,
+                "client-certificate-data" to PemUtils.toBase64(clientCertPem),
+                "client-key-data" to PemUtils.toBase64(clientKeyPem)
+            )
         )
     }
 

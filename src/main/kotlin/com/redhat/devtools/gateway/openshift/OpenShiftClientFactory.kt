@@ -279,32 +279,44 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
     }
 
     private fun createUser(usingToken: Boolean, token: CharArray?, clientCert: CertificateSource?, clientKey: CertificateSource?): Map<String, Any> {
-        val userAuth = mutableMapOf<String, Any>()
+        val user = mutableMapOf<String, Any>()
 
         if (usingToken
             && token != null
             && token.isNotEmpty()) {
-            userAuth["token"] = String(token).trim()
+            setToken(token, user)
         } else {
-            clientCert?.let { cert ->
-                if (cert.isFilePath) {
-                    userAuth["client-certificate"] = cert.value.trim()
-                } else {
-                    userAuth["client-certificate-data"] = PemUtils.toBase64(cert.value.trim())
-                }
-            }
-            clientKey?.let { key ->
-                if (key.isFilePath) {
-                    userAuth["client-key"] = key.value.trim()
-                } else {
-                    userAuth["client-key-data"] = PemUtils.toBase64(key.value.trim())
-                }
-            }
+            setClientCertificates(clientCert, clientKey, user)
         }
 
         return mapOf(
             "name" to userName,
-            "user" to userAuth
+            "user" to user
         )
+    }
+
+    private fun setToken(token: CharArray, user: MutableMap<String, Any>) {
+        user["token"] = String(token).trim()
+    }
+
+    private fun setClientCertificates(
+        clientCert: CertificateSource?,
+        clientKey: CertificateSource?,
+        user: MutableMap<String, Any>
+        ) {
+        clientCert?.let { cert ->
+            if (cert.isFilePath) {
+                user["client-certificate"] = cert.value.trim()
+            } else {
+                user["client-certificate-data"] = PemUtils.toBase64(cert.value.trim())
+            }
+        }
+        clientKey?.let { key ->
+            if (key.isFilePath) {
+                user["client-key"] = key.value.trim()
+            } else {
+                user["client-key-data"] = PemUtils.toBase64(key.value.trim())
+            }
+        }
     }
 }
