@@ -157,20 +157,6 @@ class DevSpacesWorkspacesStepView(
             return false
         } ?: return false // Canceled, stay on this step
 
-        if (!serverStatus.hasProject) {
-            val proceed = MessageDialogBuilder
-                .yesNo(
-                    "Workspace IDE Without Project",
-                    "The Workspace IDE has no project.\nWould you like to connect anyway?"
-                )
-                .asWarning()
-                .yesText("Connect Anyway")
-                .noText("Cancel")
-                .ask(component)
-
-            if (!proceed) return false // Stay on this step
-        }
-
         connect()
         return false // Stay on this step after connection
     }
