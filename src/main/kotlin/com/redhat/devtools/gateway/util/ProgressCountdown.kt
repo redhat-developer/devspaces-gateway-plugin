@@ -23,6 +23,7 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
 
     companion object {
         const val EN_DASH = "\u2013"
+        private val POLLING_DELAY: kotlin.time.Duration = 1.seconds
     }
 
     fun update(
@@ -46,7 +47,7 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
         job = scope.launch {
             while (remaining > 0 && isActive && !delegate.isCanceled) {
                 delegate.text2 = buildText2WithSuffix(remaining)
-                delay(1.seconds)
+                delay(POLLING_DELAY)
                 remaining--
             }
             delegate.text2 = baseText2

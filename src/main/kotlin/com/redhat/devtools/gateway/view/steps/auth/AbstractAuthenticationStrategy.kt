@@ -60,7 +60,7 @@ abstract class AbstractAuthenticationStrategy(
                 cancelAction()
                 return@launch
             }
-            delay(500.milliseconds)
+            delay(INDICATOR_POLL_DELAY)
         }
     }
 
@@ -100,5 +100,9 @@ abstract class AbstractAuthenticationStrategy(
         throw AuthenticationException(e.codeToReasonPhrase(), e)
     } catch (e: Exception) {
         throw AuthenticationException(e.message ?: "Authentication failed", e)
+    }
+
+    companion object {
+        val INDICATOR_POLL_DELAY: kotlin.time.Duration = 500.milliseconds
     }
 }

@@ -101,14 +101,19 @@ class SandboxClusterAuthProvider(
     }
 
     private suspend fun requestSecret(secretName: String, namespace: String, api: CoreV1Api): V1Secret? {
-        repeat(30) {
+        repeat(SECRET_POLL_RETRY_COUNT) {
             val secret = api.readNamespacedSecret(secretName, namespace).execute()
             if (secret.data?.containsKey("token") == true) {
                 return secret
             }
-            delay(1000.milliseconds)
+            delay(SECRET_POLL_RETRY_DELAY)
         }
         return null
+    }
+
+    companion object {
+        const val SECRET_POLL_RETRY_COUNT: Int = 30
+        val SECRET_POLL_RETRY_DELAY: kotlin.time.Duration = 1000.milliseconds
     }
 
     private fun extractToken(secret: V1Secret): String {

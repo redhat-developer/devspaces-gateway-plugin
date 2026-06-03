@@ -154,7 +154,7 @@ class DevWorkspaceRestart(
     private suspend fun close(thinClient: ThinClientHandle) {
         thisLogger().debug("Closing thin client for $namespace/$workspaceName")
         thinClient.close()
-        delay(1.seconds) // Give time for port forwarder cleanup
+        delay(PORT_FORWARDER_CLEANUP_WAIT)
     }
 
     private fun stopWorkspaceAndWait() {
@@ -172,8 +172,7 @@ class DevWorkspaceRestart(
         thisLogger().debug("Starting workspace and waiting...")
         workspaces.startAndWait(
             namespace,
-            workspaceName,
-            20
+            workspaceName
         )
         thisLogger().debug("Workspace started and running")
     }
@@ -187,7 +186,7 @@ class DevWorkspaceRestart(
                     indicator?.checkCanceled()
                     val pods = fetchPodsWithRetry(labelSelector)
                     if (pods.isEmpty()) break
-                    delay(2.seconds)
+                    delay(POD_DELETION_POLL_DELAY)
                 }
             }
         } catch (e: TimeoutCancellationException) {
@@ -201,7 +200,7 @@ class DevWorkspaceRestart(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             thisLogger().warn("Failed to list pods, retrying...", e)
-            delay(1.seconds)
+            delay(POD_FETCH_RETRY_DELAY)
             fetchPodsWithRetry(labelSelector)
         }
     }
@@ -225,6 +224,12 @@ class DevWorkspaceRestart(
         }.onFailure { e ->
             thisLogger().debug("Failed to remove restart annotation from $namespace/$workspaceName", e)
         }
+    }
+
+    companion object {
+        val POD_DELETION_POLL_DELAY: kotlin.time.Duration = 2.seconds
+        val POD_FETCH_RETRY_DELAY: kotlin.time.Duration = 1.seconds
+        val PORT_FORWARDER_CLEANUP_WAIT: kotlin.time.Duration = 1.seconds
     }
 
     private fun ProgressIndicator.update(text: String, fraction: Double) {

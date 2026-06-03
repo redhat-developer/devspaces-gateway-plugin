@@ -21,8 +21,13 @@ import io.kubernetes.client.util.PatchUtils
 /**
  * Patches a specific DevWorkspace resource.
  *
- * * annotation `che.eclipse.org/restart-in-progress`: signals that a restart of the workspace should happen
- * * resource value`spec.started`: starts/stops a workspace
+ * ## Session recovery routing
+ *
+ * [RESTART_KEY] selects the **user-initiated restart** path ([DevWorkspaceRestart] via
+ * [RestartDevWorkspaceAnnotationWatch]). While set, [com.redhat.devtools.gateway.WorkspacePodTracker]
+ * suppresses pod-roll reconnect ([com.redhat.devtools.gateway.ThinClientReconnect]).
+ *
+ * Other annotations and `spec.started` control workspace start/stop.
  *
  * @param namespace The namespace of the DevWorkspace.
  * @param name The name of the DevWorkspace.
@@ -44,6 +49,8 @@ class DevWorkspacePatch(
 
     companion object {
         private const val ANNOTATIONS_PATH = "/metadata/annotations"
+
+        /** DevWorkspace annotation that routes recovery to [DevWorkspaceRestart] instead of pod-roll reconnect. */
         const val RESTART_KEY = "che.eclipse.org/restart-in-progress"
         const val RESTART_VALUE = "true"
     }
