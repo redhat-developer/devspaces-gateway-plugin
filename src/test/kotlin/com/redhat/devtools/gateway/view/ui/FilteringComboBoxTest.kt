@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.BeforeEach
 import java.awt.event.KeyEvent
 import javax.swing.*
+import javax.swing.event.PopupMenuEvent
 
 class FilteringComboBoxTest {
 
@@ -550,6 +551,31 @@ class FilteringComboBoxTest {
 
         // then
         assertThat(comboBox.itemCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `#popupMenu does preserve selection when popup is closed without choosing`() {
+        // given
+        items.forEach { comboBox.addItem(it) }
+        SwingUtilities.invokeAndWait {
+            comboBox.selectedItem = items[2]
+        }
+        Thread.sleep(100)
+        val popupEvent = PopupMenuEvent(comboBox)
+
+        // when - open popup then close without selecting (same as clicking outside)
+        SwingUtilities.invokeAndWait {
+            comboBox.popupMenuListeners.forEach { listener ->
+                listener.popupMenuWillBecomeVisible(popupEvent)
+                listener.popupMenuWillBecomeInvisible(popupEvent)
+            }
+        }
+
+        // then
+        SwingUtilities.invokeAndWait {
+            assertThat(comboBox.selectedItem).isEqualTo(items[2])
+            assertThat(comboBox.selectedIndex).isGreaterThanOrEqualTo(0)
+        }
     }
 
     @Test

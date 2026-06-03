@@ -13,8 +13,6 @@ package com.redhat.devtools.gateway.view.ui
 
 import com.intellij.openapi.util.Key
 import java.awt.event.ActionListener
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
@@ -26,6 +24,7 @@ import javax.swing.text.JTextComponent
 object FilteringComboBox {
 
     private val popupOpened = PopupOpened()
+    private val popupSelection = PopupSelection()
 
     fun <T> create(
         toString: (T?) -> String = { it.toString() },
@@ -53,6 +52,7 @@ object FilteringComboBox {
         toString: (T) -> String
     ): PopupMenuListener = object : PopupMenuListener {
         override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
+            popupSelection.backup(comboBox)
             val allItems = comboBox.filteringModel().getAllItems()
             val editorText = getEditorComponent(comboBox)?.text ?: ""
             val visible = if (popupOpened.isProgrammatic(comboBox)) {
@@ -65,8 +65,13 @@ object FilteringComboBox {
             popupOpened.reset(comboBox)
         }
 
-        override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) {}
-        override fun popupMenuCanceled(e: PopupMenuEvent?) {}
+        override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) {
+            popupSelection.restore(comboBox)
+        }
+
+        override fun popupMenuCanceled(e: PopupMenuEvent?) {
+            popupSelection.restore(comboBox)
+        }
     }
 
     private fun <T> onListItemRendered(toString: (T) -> String): ListCellRenderer<T> =
@@ -121,7 +126,7 @@ object FilteringComboBox {
     ) {
         popupOpened.setProgrammatic(true, comboBox)
         val editor = getEditorComponent(comboBox)
-        val selection = Selection(comboBox.editor.editorComponent as? JTextComponent).backup()
+        val JTextSelection = JTextSelection(comboBox.editor.editorComponent as? JTextComponent).backup()
 
         val currentTextInEditor = editor?.text ?: ""
         comboBox.filteringModel().showOnly(items)
@@ -129,7 +134,8 @@ object FilteringComboBox {
         editor?.text = currentTextInEditor
 
         // Restore the selection after the model and text are set
-        selection.restore()
+        JTextSelection.restore()
+        popupSelection.backup(comboBox)
         comboBox.selectedIndex = -1 // prevent pre-selection
 
         if (items.isNotEmpty() && !comboBox.isPopupVisible) {
@@ -224,12 +230,12 @@ object FilteringComboBox {
         }
     }
 
-    private class Selection(private val component: JTextComponent?) {
+    private class JTextSelection(private val component: JTextComponent?) {
 
         private var selectionStart = -1
         private var selectionEnd = -1
 
-        fun backup(): Selection {
+        fun backup(): JTextSelection {
             if (component == null) {
                 return this
             }
@@ -243,6 +249,26 @@ object FilteringComboBox {
                 && selectionStart != -1
                 && selectionEnd != -1) {
                 component.select(selectionStart, selectionEnd)
+            }
+        }
+    }
+
+    private class PopupSelection {
+
+        private val key = Key.create<Any?>("${FilteringComboBox.javaClass.name}Selection")
+
+        fun backup(comboBox: JComboBox<*>) {
+            if (comboBox.getClientProperty(key) == null) {
+                // only backup once (multiple selection changes happen in normal flow)
+                comboBox.putClientProperty(key, comboBox.selectedItem)
+            }
+        }
+
+        fun restore(comboBox: JComboBox<*>) {
+            val backedUp = comboBox.getClientProperty(key) ?: return
+            comboBox.putClientProperty(key, null)
+            if (comboBox.selectedIndex == -1) {
+                comboBox.selectedItem = backedUp
             }
         }
     }
