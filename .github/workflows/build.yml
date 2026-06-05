@@ -89,13 +89,6 @@ jobs:
           name: ${{ steps.artifact.outputs.filename }}
           path: ./build/distributions/content/*/*
 
-      # Store plugin zip for easy download
-      - name: Upload plugin zip
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.artifact.outputs.filename }}-zip
-          path: ./build/distributions/*.zip
-
   # Run tests and upload a code coverage report
   test:
     name: Test
@@ -238,7 +231,7 @@ jobs:
         run: |
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "✅ Build successful! [Download plugin zip](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) from the Artifacts section."
+            --body "✅ Build successful! For testing, [download plugin zip](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) from the Artifacts section."
 
   # Prepare a draft release for GitHub Releases page for the manual verification
   # If accepted and published, release workflow would be triggered
