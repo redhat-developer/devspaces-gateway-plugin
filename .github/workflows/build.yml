@@ -89,6 +89,13 @@ jobs:
           name: ${{ steps.artifact.outputs.filename }}
           path: ./build/distributions/content/*/*
 
+      # Store plugin zip for easy download
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact.outputs.filename }}-zip
+          path: ./build/distributions/*.zip
+
   # Run tests and upload a code coverage report
   test:
     name: Test
@@ -215,6 +222,23 @@ jobs:
         with:
           name: pluginVerifier-result
           path: ${{ github.workspace }}/build/reports/pluginVerifier
+
+  # Post a comment on PRs with a link to download the plugin
+  prComment:
+    name: PR comment
+    if: github.event_name == 'pull_request'
+    needs: [ build, test, inspectCode, verify ]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post artifact link
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "✅ Build successful! [Download plugin zip](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) from the Artifacts section."
 
   # Prepare a draft release for GitHub Releases page for the manual verification
   # If accepted and published, release workflow would be triggered
