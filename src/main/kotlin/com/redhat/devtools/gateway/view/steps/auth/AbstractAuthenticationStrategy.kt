@@ -25,8 +25,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -65,40 +68,74 @@ abstract class AbstractAuthenticationStrategy(
     }
 
     /**
-     * Creates a validated API client.
+     * Builds a token-authenticated API client using the wizard TLS context.
+     * Runs synchronously so it is safe inside [ProgressManager.runProcessWithProgressSynchronously].
+     */
+    protected fun createTokenApiClient(
+        server: String,
+        token: String,
+        tlsContext: TlsContext,
+    ): ApiClient =
+        OpenShiftClientFactory(KubeConfigUtils).create(
+            server,
+            certificateAuthority = null,
+            token = token.toCharArray(),
+            clientCert = null,
+            clientKey = null,
+            tlsContext = tlsContext,
+        )
+
+    /**
+     * Creates a validated API client on a worker thread.
+     * Cluster TLS trust comes from [tlsContext] (established earlier in the wizard), not from
+     * kubeconfig certificate-authority paths that may be stale on this machine.
      */
     @Throws(AuthenticationException::class)
-    protected fun createValidatedApiClient(
+    protected suspend fun createValidatedApiClient(
         server: String,
-        certAuthority: String? = null,
         token: String? = null,
         clientCert: String? = null,
         clientKey: String? = null,
         tlsContext: TlsContext,
+        probeApiAccess: Boolean = true,
         errorMessage: String? = null
-    ): ApiClient = try {
-        val caSource = CertificateSource.fromPathOrPem(certAuthority)
-        caSource?.validate()
-        val certSource = CertificateSource.fromPathOrPem(clientCert)
-        certSource?.validate()
-        val keySource = CertificateSource.fromPathOrPem(clientKey)
-        keySource?.validate()
+    ): ApiClient = withContext(Dispatchers.IO) {
+        coroutineContext.ensureActive()
+        try {
+            val certSource = resolveRequiredCertificateSource(clientCert)
+            val keySource = resolveRequiredCertificateSource(clientKey)
 
-        OpenShiftClientFactory(KubeConfigUtils)
-            .create(
-                server,
-                caSource,
-                token?.toCharArray(),
-                certSource,
-                keySource,
-                tlsContext
-            )
-            .also { client ->
-                require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
-            }
-    } catch (e: ApiException) {
-        throw AuthenticationException(e.codeToReasonPhrase(), e)
-    } catch (e: Exception) {
-        throw AuthenticationException(e.message ?: "Authentication failed", e)
+            OpenShiftClientFactory(KubeConfigUtils)
+                .create(
+                    server,
+                    certificateAuthority = null,
+                    token?.toCharArray(),
+                    certSource,
+                    keySource,
+                    tlsContext
+                )
+                .also { client ->
+                    if (probeApiAccess) {
+                        coroutineContext.ensureActive()
+                        val authenticated = runInterruptible {
+                            Projects(client).isAuthenticated()
+                        }
+                        require(authenticated) { errorMessage ?: "Not authenticated" }
+                    }
+                }
+        } catch (e: ApiException) {
+            throw AuthenticationException(e.codeToReasonPhrase(), e)
+        } catch (e: Exception) {
+            throw AuthenticationException(e.message ?: "Authentication failed", e)
+        }
+    }
+
+    /**
+     * Resolves client certificate/key input. Missing files fail authentication.
+     */
+    private fun resolveRequiredCertificateSource(input: String?): CertificateSource? {
+        val source = CertificateSource.fromPathOrPem(input) ?: return null
+        source.validate()
+        return source
     }
 }

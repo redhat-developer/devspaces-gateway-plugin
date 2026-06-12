@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.view.steps.auth
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.ui.dsl.builder.panel
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -31,7 +32,7 @@ import javax.swing.JPanel
 class OpenShiftOAuthAuthenticationStrategy(
     tfServer: Any,
     saveKubeconfig: suspend (Cluster, String, ProgressIndicator) -> Unit,
-    private val setTokenDisplay: suspend (String) -> Unit
+    private val setTokenDisplay: (String) -> Unit,
 ) : AbstractAuthenticationStrategy(
     tfServer,
     saveKubeconfig
@@ -56,48 +57,41 @@ class OpenShiftOAuthAuthenticationStrategy(
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
     ) {
-        indicator.text = "Authenticating with OpenShift..."
-
         val sessionManager = OpenShiftAuthSessionManager()
         val login = sessionManager.startBrowserLogin(
             selectedCluster.url,
-            tlsContext.sslContext
+            tlsContext.sslContext,
         )
-        withContext(Dispatchers.Main) {
+
+        ApplicationManager.getApplication().invokeLater {
             BrowserUtil.browse(login.authorizationUri)
         }
 
         indicator.text = "Waiting for you to complete login in your browser..."
         currentCoroutineContext().ensureActive()
 
-        coroutineScope {
-            launchCancelWatcher(indicator) { login.cancel() }
+        supervisorScope {
+            val cancelJob = launchCancelWatcher(indicator) { login.cancel() }
+            try {
+                indicator.text = "Obtaining OpenShift access..."
+                val osToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
 
-            indicator.text = "Obtaining OpenShift access..."
-            val osToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
+                val finalToken = TokenModel(
+                    accessToken = osToken.accessToken,
+                    expiresAt = osToken.expiresAt,
+                    accountLabel = osToken.accountLabel,
+                    kind = AuthTokenKind.TOKEN,
+                    clusterApiUrl = selectedCluster.url
+                )
 
-            val finalToken = TokenModel(
-                accessToken = osToken.accessToken,
-                expiresAt = osToken.expiresAt,
-                accountLabel = osToken.accountLabel,
-                kind = AuthTokenKind.TOKEN,
-                clusterApiUrl = selectedCluster.url
-            )
-
-            indicator.text = "Validating cluster access..."
-            val client = createValidatedApiClient(
-                server,
-                certAuthority,
-                finalToken.accessToken,
-                null,
-                null,
-                tlsContext,
-                "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
-            )
-
-            setTokenDisplay(finalToken.accessToken)
-            saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
-            devSpacesContext.client = client
+                indicator.text = "Finishing connection..."
+                val client = createTokenApiClient(server, finalToken.accessToken, tlsContext)
+                devSpacesContext.client = client
+                setTokenDisplay(finalToken.accessToken)
+                saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+            } finally {
+                cancelJob.cancel()
+            }
         }
     }
 

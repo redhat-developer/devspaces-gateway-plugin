@@ -96,12 +96,9 @@ class TokenAuthenticationStrategy(
 
         val client = createValidatedApiClient(
             server,
-            certAuthority,
             token,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: invalid server URL or token."
+            tlsContext = tlsContext,
+            errorMessage = "Authentication failed: invalid server URL or token."
         )
 
         saveKubeconfig.invoke(selectedCluster, token, indicator)

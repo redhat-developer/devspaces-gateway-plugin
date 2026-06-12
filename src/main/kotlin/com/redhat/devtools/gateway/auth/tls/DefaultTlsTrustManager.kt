@@ -11,7 +11,9 @@
  */
 package com.redhat.devtools.gateway.auth.tls
 
+import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
+import com.redhat.devtools.gateway.util.toServerBaseUrl
 import io.kubernetes.client.util.KubeConfig
 import kotlinx.coroutines.*
 import java.net.URI
@@ -42,20 +44,24 @@ class DefaultTlsTrustManager(
             return SslContextFactory.insecure()
         }
 
+        val sessionCerts = sessionTrustStore.allCertificates()
         val trustedCerts = mutableListOf<X509Certificate>()
-        namedCluster?.let {
-            trustedCerts += KubeConfigTlsUtils.extractCaCertificates(it)
+
+        // Stale kubeconfig or persistent trust must not override session trust from this wizard.
+        if (sessionCerts.isEmpty()) {
+            namedCluster?.let {
+                trustedCerts += KubeConfigTlsUtils.extractCaCertificates(it)
+            }
+
+            val keyStore = persistentKeyStore.loadOrCreate()
+            val persistentCert = keyStore.getCertificate("host:${serverUri.host}")
+            if (persistentCert is X509Certificate) {
+                trustedCerts += persistentCert
+            }
         }
 
         trustedCerts += sessionTrustStore.get(serverUrl)
-
-        val keyStore = persistentKeyStore.loadOrCreate()
-        val persistentAlias = "host:${serverUri.host}"
-
-        val persistentCert = keyStore.getCertificate(persistentAlias)
-        if (persistentCert is X509Certificate) {
-            trustedCerts += persistentCert
-        }
+        trustedCerts += sessionCerts
 
         if (trustedCerts.isNotEmpty()) {
             try {
@@ -102,6 +108,9 @@ class DefaultTlsTrustManager(
                 throw TlsTrustRejectedException()
             }
 
+            val keyStore = persistentKeyStore.loadOrCreate()
+            val persistentAlias = "host:${serverUri.host}"
+
             when (decision.scope) {
                 TlsTrustScope.SESSION_ONLY -> {
                     sessionTrustStore.put(serverUrl, listOf(trustAnchor))
@@ -131,7 +140,60 @@ class DefaultTlsTrustManager(
         }
     }
 
-    /** Private helper: SHA-256 fingerprint of a certificate */
+    /**
+     * Resolves TLS trust for the API server and OAuth endpoints discovered from it.
+     */
+    suspend fun ensureOpenShiftTlsContext(
+        apiServerUrl: String,
+        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
+    ): TlsContext {
+        val apiBaseUrl = URI(apiServerUrl).toServerBaseUrl()
+
+        ensureTrusted(apiBaseUrl, decisionHandler)
+
+        val apiTls = mergedContextFor(listOf(apiBaseUrl))
+        val oauthUrls = runCatching {
+            OpenShiftAuthCodeFlow.discoverOAuthEndpointBaseUrls(
+                apiBaseUrl,
+                apiTls.sslContext,
+            )
+        }.getOrDefault(emptyList())
+
+        val allUrls = (listOf(apiBaseUrl) + oauthUrls).distinct()
+        for (url in allUrls) {
+            if (url != apiBaseUrl) {
+                ensureTrusted(url, decisionHandler)
+            }
+        }
+
+        return mergedContextFor(allUrls)
+    }
+
+    suspend fun mergedContextFor(serverUrls: Collection<String>): TlsContext {
+        val configs = kubeConfigProvider()
+        val keyStore = persistentKeyStore.loadOrCreate()
+        val allCerts = mutableListOf<X509Certificate>()
+        val sessionCerts = sessionTrustStore.allCertificates()
+
+        for (serverUrl in serverUrls.distinct()) {
+            val uri = URI(serverUrl)
+            if (sessionCerts.isEmpty()) {
+                KubeConfigTlsUtils.findClusterByServer(serverUrl, configs)?.let {
+                    allCerts += KubeConfigTlsUtils.extractCaCertificates(it)
+                }
+                val persistentCert = keyStore.getCertificate("host:${uri.host}")
+                if (persistentCert is X509Certificate) {
+                    allCerts += persistentCert
+                }
+            }
+            allCerts += sessionTrustStore.get(serverUrl)
+            allCerts += sessionCerts
+        }
+
+        require(allCerts.isNotEmpty()) { "No trusted certificates for: $serverUrls" }
+        return SslContextFactory.fromTrustedCerts(allCerts.distinctBy { it.serialNumber })
+    }
+
     private fun sha256Fingerprint(cert: X509Certificate): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(cert.encoded)

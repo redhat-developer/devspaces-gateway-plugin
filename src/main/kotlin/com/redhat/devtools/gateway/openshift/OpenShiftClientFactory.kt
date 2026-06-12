@@ -20,6 +20,9 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.KubeConfig
+import io.kubernetes.client.util.credentials.AccessTokenAuthentication
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import java.io.IOException
 import kotlin.io.path.readText
 import java.security.KeyStore
@@ -28,7 +31,6 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.KeyManager
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
@@ -37,6 +39,10 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
     private val clusterName = "openshift_cluster"
 
     private var lastUsedKubeConfig: KubeConfig? = null
+
+    companion object {
+        private const val DEFAULT_HTTP_TIMEOUT_SECONDS = 30L
+    }
 
     class Builder internal constructor(
         private val factory: OpenShiftClientFactory,
@@ -117,24 +123,50 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         val kubeConfig = createKubeConfig(server, certificateAuthority, token, clientCert, clientKey)
         lastUsedKubeConfig = kubeConfig
 
-        val client = Config.fromConfig(kubeConfig)
-        val trustManager: X509TrustManager = createTrustManager(certificateAuthority, tlsContext)
-        val sslContext = createSSLContext(trustManager, usingClientCert, clientCert, clientKey)
-        client.httpClient = client.httpClient.newBuilder()
-            .sslSocketFactory(sslContext.socketFactory, trustManager)
-            .build()
+        return if (usingClientCert) {
+            createWithClientCert(kubeConfig, clientCert, clientKey, tlsContext)
+        } else {
+            createWithToken(server, token!!, tlsContext)
+        }
+    }
 
+    /**
+     * Builds a token-authenticated client using the same [TlsContext] SSL stack as OAuth.
+     * Avoids [Config.fromConfig], which applies JVM default trust via [ApiClient.applySslSettings].
+     */
+    private fun createWithToken(server: String, token: CharArray, tlsContext: TlsContext): ApiClient {
+        val client = ApiClient(buildHttpClient(tlsContext.sslContext, tlsContext.trustManager))
+        client.basePath = normalizeBasePath(server)
+        AccessTokenAuthentication(String(token).trim()).provide(client)
         return client
     }
 
-    private fun createTrustManager(
-        certificateAuthority: CertificateSource?,
+    private fun createWithClientCert(
+        kubeConfig: KubeConfig,
+        clientCert: CertificateSource,
+        clientKey: CertificateSource,
         tlsContext: TlsContext
-    ): X509TrustManager = if (certificateAuthority != null) {
-        createTrustManager(certificateAuthority)
-    } else {
-        tlsContext.trustManager
+    ): ApiClient {
+        val trustManager = tlsContext.trustManager
+        val sslContext = createSSLContext(trustManager, true, clientCert, clientKey)
+        val client = Config.fromConfig(kubeConfig)
+        client.httpClient = buildHttpClient(sslContext, trustManager)
+        return client
     }
+
+    private fun buildHttpClient(sslContext: SSLContext, trustManager: X509TrustManager): OkHttpClient {
+        return OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .connectTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            // Match OAuth HttpClient (HTTP/1.1); some clusters hang on HTTP/2.
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .build()
+    }
+
+    private fun normalizeBasePath(server: String): String = server.trim().removeSuffix("/")
 
     private fun createSSLContext(
         trustManager: X509TrustManager,
@@ -156,27 +188,6 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
                 SecureRandom()
             )
         }
-    }
-
-    private fun createTrustManager(
-        caSource: CertificateSource
-    ): X509TrustManager {
-
-        val caContent = resolve(caSource)
-        val caCert = PemUtils.parseCertificate(caContent)
-
-        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-        keyStore.load(null, null)
-        keyStore.setCertificateEntry("ca", caCert)
-
-        val tmf = TrustManagerFactory.getInstance(
-            TrustManagerFactory.getDefaultAlgorithm()
-        )
-        tmf.init(keyStore)
-
-        return tmf.trustManagers
-            .filterIsInstance<X509TrustManager>()
-            .first()
     }
 
     private fun createKeyManagers(

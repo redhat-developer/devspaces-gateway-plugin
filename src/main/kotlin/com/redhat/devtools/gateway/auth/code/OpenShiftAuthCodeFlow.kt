@@ -18,6 +18,7 @@ import com.nimbusds.oauth2.sdk.id.State
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
+import com.redhat.devtools.gateway.util.toServerBaseUrl
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.SerialName
@@ -76,6 +77,37 @@ class OpenShiftAuthCodeFlow(
         @SerialName("token_endpoint")
         val tokenEndpoint: String
     )
+
+    companion object {
+        private val discoveryJson = Json { ignoreUnknownKeys = true }
+
+        /** OAuth HTTP endpoint base URLs discovered from the API server. */
+        suspend fun discoverOAuthEndpointBaseUrls(
+            apiServerUrl: String,
+            sslContext: SSLContext,
+        ): List<String> {
+            val client = HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build()
+
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create("$apiServerUrl/.well-known/oauth-authorization-server"))
+                .GET()
+                .build()
+
+            val response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+            if (response.statusCode() !in 200..299) {
+                error("OAuth discovery failed: ${response.statusCode()}\n${response.body()}")
+            }
+
+            val metadata = discoveryJson.decodeFromString(OAuthMetadata.serializer(), response.body())
+            return listOf(metadata.tokenEndpoint, metadata.authorizationEndpoint)
+                .map { URI(it).toServerBaseUrl() }
+                .distinct()
+        }
+    }
 
     /**
      * Discover OAuth endpoints from the cluster.

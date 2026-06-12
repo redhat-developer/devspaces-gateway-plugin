@@ -16,6 +16,7 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.ui.MessageDialogBuilder
@@ -31,7 +32,7 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.*
-import com.redhat.devtools.gateway.auth.tls.ui.UiTlsDecisionAdapter
+import com.redhat.devtools.gateway.auth.tls.ui.UITlsDecisionAdapter
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
@@ -116,8 +117,8 @@ class DevSpacesServerStepView(
             ::createEnterKeyListener
         )
 
-        val setTokenDisplay: suspend (String) -> Unit = { token ->
-            withContext(Dispatchers.Main) {
+        val setTokenDisplay: (String) -> Unit = { token ->
+            ApplicationManager.getApplication().invokeLater {
                 tokenStrategy.tfToken.text = token
             }
         }
@@ -127,7 +128,7 @@ class DevSpacesServerStepView(
             OpenShiftOAuthAuthenticationStrategy(
                 tfServer,
                 ::saveKubeconfig,
-                setTokenDisplay
+                setTokenDisplay,
             ),
             ClientCertificateAuthenticationStrategy(
                 tfServer,
@@ -140,7 +141,7 @@ class DevSpacesServerStepView(
                 ::saveKubeconfig,
                 ::onFieldChanged,
                 ::createEnterKeyListener,
-                setTokenDisplay
+                setTokenDisplay,
             ),
             RedHatSSOAuthenticationStrategy(
                 tfServer,
@@ -395,10 +396,12 @@ class DevSpacesServerStepView(
             {
                 runBlocking {
                     val indicator = ProgressManager.getInstance().progressIndicator
-                    indicator.text = "Connecting to cluster..."
 
                     try {
-                        val tlsContext = resolveSslContext(server)
+                        indicator.text = "Establishing secure connection..."
+                        val tlsContext = resolveTlsContext(server, strategy.getAuthMethod())
+
+                        indicator.text = "Connecting to cluster..."
                         val certAuthorityData = tfCertAuthority.text.ifBlank { null }
 
                         strategy.authenticate(
@@ -410,6 +413,8 @@ class DevSpacesServerStepView(
                             indicator
                         )
                         authResult = Result.success(Unit)
+                    } catch (e: ProcessCanceledException) {
+                        throw e
                     } catch (e: Exception) {
                         authResult = Result.failure(e)
                     }
@@ -504,10 +509,23 @@ class DevSpacesServerStepView(
         persistentKeyStore = persistentKeyStore
     )
 
+    private suspend fun resolveTlsContext(serverUrl: String, authMethod: AuthMethod): TlsContext {
+        return when (authMethod) {
+            AuthMethod.OPENSHIFT, AuthMethod.OPENSHIFT_CREDENTIALS ->
+                tlsTrustManager.ensureOpenShiftTlsContext(
+                    apiServerUrl = serverUrl,
+                    decisionHandler = UITlsDecisionAdapter::decide,
+                )
+
+            else ->
+                resolveSslContext(serverUrl)
+        }
+    }
+
     private suspend fun resolveSslContext(serverUrl: String): TlsContext {
         return tlsTrustManager.ensureTrusted(
             serverUrl = serverUrl,
-            decisionHandler = UiTlsDecisionAdapter::decide
+            decisionHandler = UITlsDecisionAdapter::decide
         )
     }
 
@@ -516,7 +534,7 @@ class DevSpacesServerStepView(
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+            runInterruptible(Dispatchers.IO) {
                 KubeConfigUpdate
                     .create(
                         cluster.name.trim(),
@@ -527,7 +545,7 @@ class DevSpacesServerStepView(
 
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
+            ApplicationManager.getApplication().invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
@@ -541,7 +559,7 @@ class DevSpacesServerStepView(
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+            runInterruptible(Dispatchers.IO) {
                 KubeConfigUpdate
                     .create(
                         cluster.name.trim(),
@@ -552,7 +570,7 @@ class DevSpacesServerStepView(
             }
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
+            ApplicationManager.getApplication().invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }

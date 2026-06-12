@@ -79,12 +79,10 @@ class RedHatSSOAuthenticationStrategy(
 
             try {
                 val client = createValidatedApiClient(
-                    server, certAuthority,
+                    server,
                     finalToken.accessToken,
-                    null,
-                    null,
-                    tlsContext,
-                    "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
+                    tlsContext = tlsContext,
+                    errorMessage = "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
                 )
 
                 // Do not save SSO tokens

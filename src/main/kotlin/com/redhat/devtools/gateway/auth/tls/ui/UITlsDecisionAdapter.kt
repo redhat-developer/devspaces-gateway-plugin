@@ -12,20 +12,24 @@
 package com.redhat.devtools.gateway.auth.tls.ui
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.redhat.devtools.gateway.auth.tls.*
 
-object UiTlsDecisionAdapter {
+object UITlsDecisionAdapter {
 
     suspend fun decide(info: TlsServerCertificateInfo): TlsTrustDecision {
         lateinit var dialog: TLSTrustDecisionHandler
 
-        ApplicationManager.getApplication().invokeAndWait {
-            dialog = TLSTrustDecisionHandler(
-                serverUrl = info.serverUrl,
-                certificateInfo = PemUtils.toPem(info.certificateChain.first())
-            )
-            dialog.show()
-        }
+        ApplicationManager.getApplication().invokeAndWait(
+            {
+                dialog = TLSTrustDecisionHandler(
+                    serverUrl = info.serverUrl,
+                    certificateInfo = PemUtils.toPem(info.certificateChain.first())
+                )
+                dialog.show()
+            },
+            ModalityState.any(),
+        )
 
         return when {
             !dialog.isTrusted ->
