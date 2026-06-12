@@ -34,10 +34,14 @@ object KubeConfigTlsUtils {
         namedCluster: KubeConfigNamedCluster
     ): List<X509Certificate> {
         val caSource = namedCluster.cluster.certificateAuthority ?: return emptyList()
-        val caContent = if (caSource.isFilePath) {
-            caSource.toPath().readText()
-        } else {
-            Base64.getDecoder().decode(caSource.value).toString(Charsets.UTF_8)
+        val caContent = try {
+            if (caSource.isFilePath) {
+                caSource.toPath().readText()
+            } else {
+                Base64.getDecoder().decode(caSource.value).toString(Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            return emptyList()
         }
 
         val factory = CertificateFactory.getInstance("X.509")
