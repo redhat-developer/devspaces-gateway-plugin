@@ -14,9 +14,8 @@ package com.redhat.devtools.gateway.view.steps.auth
 import com.intellij.openapi.progress.ProgressIndicator
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.auth.tls.TlsContext
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
+import com.redhat.devtools.gateway.openshift.TlsClientBuilder
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.codeToReasonPhrase
 import io.kubernetes.client.openapi.ApiClient
@@ -76,14 +75,13 @@ abstract class AbstractAuthenticationStrategy(
         token: String,
         tlsContext: TlsContext,
     ): ApiClient =
-        OpenShiftClientFactory(KubeConfigUtils).create(
-            server,
-            certificateAuthority = null,
-            token = token.toCharArray(),
+        TlsClientBuilder(
+            server = server,
+            token = token,
             clientCert = null,
             clientKey = null,
             tlsContext = tlsContext,
-        )
+        ).build()
 
     /**
      * Creates a validated API client on a worker thread.
@@ -105,15 +103,13 @@ abstract class AbstractAuthenticationStrategy(
             val certSource = resolveRequiredCertificateSource(clientCert)
             val keySource = resolveRequiredCertificateSource(clientKey)
 
-            OpenShiftClientFactory(KubeConfigUtils)
-                .create(
-                    server,
-                    certificateAuthority = null,
-                    token?.toCharArray(),
-                    certSource,
-                    keySource,
-                    tlsContext
-                )
+            TlsClientBuilder(
+                server = server,
+                token = token,
+                clientCert = certSource,
+                clientKey = keySource,
+                tlsContext = tlsContext
+            ).build()
                 .also { client ->
                     if (probeApiAccess) {
                         coroutineContext.ensureActive()

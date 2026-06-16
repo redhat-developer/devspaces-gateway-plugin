@@ -14,9 +14,7 @@ package com.redhat.devtools.gateway.auth.sandbox
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.code.TokenModel
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import io.kubernetes.client.openapi.ApiClient
+import com.redhat.devtools.gateway.openshift.TokenClientBuilder
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Secret
@@ -29,8 +27,7 @@ class SandboxClusterAuthProvider(
     private val sandboxApi: SandboxApi = SandboxApi(
         SandboxDefaults.SANDBOX_API_BASE_URL,
         SandboxDefaults.SANDBOX_API_TIMEOUT_MS
-    ),
-    private val clientFactory: OpenShiftClientFactory = OpenShiftClientFactory(KubeConfigUtils)
+    )
 ) {
     suspend fun authenticate(ssoToken: SSOToken): TokenModel {
         val signup = sandboxApi.getSignUpStatus(ssoToken.idToken)
@@ -41,8 +38,7 @@ class SandboxClusterAuthProvider(
         val username = signup.compliantUsername ?: signup.username
         val namespace = "$username-dev"
 
-        val client = clientFactory
-            .builder(signup.proxyUrl!!, ssoToken.idToken)
+        val client = TokenClientBuilder(signup.proxyUrl!!, ssoToken.idToken)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
 
