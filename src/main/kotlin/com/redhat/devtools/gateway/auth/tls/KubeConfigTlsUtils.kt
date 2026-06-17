@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.auth.tls
 
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
-import io.kubernetes.client.util.KubeConfig
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
@@ -20,15 +19,6 @@ import java.util.Base64
 import kotlin.io.path.readText
 
 object KubeConfigTlsUtils {
-
-    fun findClusterByServer(
-        serverUrl: String,
-        kubeConfigs: List<KubeConfig>
-    ): KubeConfigNamedCluster? =
-        kubeConfigs
-            .flatMap { it.clusters ?: emptyList() }
-            .mapNotNull { KubeConfigNamedCluster.fromMap(it as Map<*, *>) }
-            .firstOrNull { it.cluster.server == serverUrl }
 
     fun extractCaCertificates(
         namedCluster: KubeConfigNamedCluster

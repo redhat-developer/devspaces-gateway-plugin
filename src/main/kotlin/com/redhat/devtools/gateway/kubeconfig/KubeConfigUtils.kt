@@ -34,6 +34,15 @@ object KubeConfigUtils {
         return currentUser?.user?.token != null
     }
 
+    fun getClusterByServer(
+        serverUrl: String,
+        kubeConfigs: List<KubeConfig>
+    ): KubeConfigNamedCluster? =
+        kubeConfigs
+            .flatMap { it.clusters ?: emptyList() }
+            .mapNotNull { KubeConfigNamedCluster.fromMap(it as Map<*, *>) }
+            .firstOrNull { it.cluster.server == serverUrl }
+
     fun getClusters(kubeconfigPaths: List<Path>): List<Cluster> {
         logger.info("Getting clusters from kubeconfig paths: $kubeconfigPaths")
         val kubeConfigs = toKubeConfigs(kubeconfigPaths)

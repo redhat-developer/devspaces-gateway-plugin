@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.auth.tls
 
 import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.util.toServerBaseUrl
 import io.kubernetes.client.util.KubeConfig
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,7 @@ class DefaultTlsTrustManager(
         val serverUri = URI(serverUrl)
 
         val namedCluster =
-            KubeConfigTlsUtils.findClusterByServer(
+            KubeConfigUtils.getClusterByServer(
                 serverUrl,
                 kubeConfigProvider()
             )
@@ -162,7 +163,7 @@ class DefaultTlsTrustManager(
         for (serverUrl in serverUrls.distinct()) {
             val uri = URI(serverUrl)
             if (sessionCerts.isEmpty()) {
-                KubeConfigTlsUtils.findClusterByServer(serverUrl, configs)?.let {
+                KubeConfigUtils.getClusterByServer(serverUrl, configs)?.let {
                     allCerts += KubeConfigTlsUtils.extractCaCertificates(it)
                 }
                 val persistentCert = keyStore.getCertificate(hostAlias(uri.host))
