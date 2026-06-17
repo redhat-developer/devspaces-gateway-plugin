@@ -15,7 +15,8 @@ import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
 import com.redhat.devtools.gateway.util.toServerBaseUrl
 import io.kubernetes.client.util.KubeConfig
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URI
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLHandshakeException
@@ -44,24 +45,7 @@ class DefaultTlsTrustManager(
             return SslContextFactory.insecure()
         }
 
-        val sessionCerts = sessionTrustStore.allCertificates()
-        val trustedCerts = mutableListOf<X509Certificate>()
-
-        // Stale kubeconfig or persistent trust must not override session trust from this wizard.
-        if (sessionCerts.isEmpty()) {
-            namedCluster?.let {
-                trustedCerts += KubeConfigTlsUtils.extractCaCertificates(it)
-            }
-
-            val keyStore = persistentKeyStore.loadOrCreate()
-            val persistentCert = keyStore.getCertificate("host:${serverUri.host}")
-            if (persistentCert is X509Certificate) {
-                trustedCerts += persistentCert
-            }
-        }
-
-        trustedCerts += sessionTrustStore.get(serverUrl)
-        trustedCerts += sessionCerts
+        val trustedCerts = getTrustedCerts(namedCluster, serverUri.host) + sessionTrustStore.get(serverUrl)
 
         if (trustedCerts.isNotEmpty()) {
             try {
@@ -109,7 +93,7 @@ class DefaultTlsTrustManager(
             }
 
             val keyStore = persistentKeyStore.loadOrCreate()
-            val persistentAlias = "host:${serverUri.host}"
+            val persistentAlias = hostAlias(serverUri.host)
 
             when (decision.scope) {
                 TlsTrustScope.SESSION_ONLY -> {
@@ -181,7 +165,7 @@ class DefaultTlsTrustManager(
                 KubeConfigTlsUtils.findClusterByServer(serverUrl, configs)?.let {
                     allCerts += KubeConfigTlsUtils.extractCaCertificates(it)
                 }
-                val persistentCert = keyStore.getCertificate("host:${uri.host}")
+                val persistentCert = keyStore.getCertificate(hostAlias(uri.host))
                 if (persistentCert is X509Certificate) {
                     allCerts += persistentCert
                 }
@@ -193,6 +177,42 @@ class DefaultTlsTrustManager(
         require(allCerts.isNotEmpty()) { "No trusted certificates for: $serverUrls" }
         return SslContextFactory.fromTrustedCerts(allCerts.distinctBy { it.serialNumber })
     }
+
+    /**
+     * Returns the list of trusted X.509 certificates for a server URL.
+     *
+     * <p>Session trust (from TLS wizard) takes precedence over stale kubeconfig or persistent store entries.
+     * If session certificates are present, they are added without duplicates. Otherwise, CA certificates
+     * from the named cluster and any persisted certificate for the host are added.</p>
+     *
+     * @param namedCluster The optional Kubernetes cluster configuration from kubeconfig
+     * @param host The hostname to look up in the persistent keystore (without scheme)
+     * @return List of X.509 certificates to trust for TLS verification
+     */
+    private fun getTrustedCerts(namedCluster: KubeConfigNamedCluster?, host: String): List<X509Certificate> {
+        val sessionCerts = sessionTrustStore.allCertificates()
+
+        return buildList {
+            if (sessionCerts.isEmpty()) {
+                namedCluster?.let {
+                    addAll(KubeConfigTlsUtils.extractCaCertificates(it))
+                }
+                val persistentCert = persistentKeyStore.loadOrCreate()
+                    .getCertificate(hostAlias(host))
+                if (persistentCert is X509Certificate) {
+                    add(persistentCert)
+                }
+            } else {
+                sessionCerts.forEach { cert ->
+                    if (cert !in this) {
+                        add(cert)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun hostAlias(host: String) = "host:$host"
 
     private fun sha256Fingerprint(cert: X509Certificate): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
