@@ -399,15 +399,17 @@ class DevSpacesServerStepView(
 
                     try {
                         indicator.text = "Establishing secure connection..."
-                        val tlsContext = resolveTlsContext(server, strategy.getAuthMethod())
+                        val certificateAuthority = resolveCertificateAuthority(tfCertAuthority.text)
+                        val tlsContext = resolveTlsContext(
+                            server,
+                            strategy.getAuthMethod(),
+                            certificateAuthority,
+                        )
 
                         indicator.text = "Connecting to cluster..."
-                        val certAuthorityData = tfCertAuthority.text.ifBlank { null }
-
                         strategy.authenticate(
                             selectedCluster,
                             server,
-                            certAuthorityData,
                             tlsContext,
                             devSpacesContext,
                             indicator
@@ -509,24 +511,39 @@ class DevSpacesServerStepView(
         persistentKeyStore = persistentKeyStore
     )
 
-    private suspend fun resolveTlsContext(serverUrl: String, authMethod: AuthMethod): TlsContext {
+    private suspend fun resolveTlsContext(
+        serverUrl: String,
+        authMethod: AuthMethod,
+        certificateAuthority: CertificateSource?,
+    ): TlsContext {
         return when (authMethod) {
-            AuthMethod.OPENSHIFT, AuthMethod.OPENSHIFT_CREDENTIALS ->
+            AuthMethod.OPENSHIFT,
+            AuthMethod.OPENSHIFT_CREDENTIALS ->
                 tlsTrustManager.ensureOpenShiftTlsContext(
-                    apiServerUrl = serverUrl,
-                    decisionHandler = UITlsDecisionAdapter::decide,
+                    serverUrl,
+                    UITlsDecisionAdapter::decide,
+                    certificateAuthority,
                 )
-
             else ->
-                resolveSslContext(serverUrl)
+                resolveSslContext(serverUrl, certificateAuthority)
         }
     }
 
-    private suspend fun resolveSslContext(serverUrl: String): TlsContext {
+    private suspend fun resolveSslContext(
+        serverUrl: String,
+        certificateAuthority: CertificateSource?,
+    ): TlsContext {
         return tlsTrustManager.ensureTrusted(
-            serverUrl = serverUrl,
-            decisionHandler = UITlsDecisionAdapter::decide
+            serverUrl,
+            UITlsDecisionAdapter::decide,
+            certificateAuthority,
         )
+    }
+
+    private fun resolveCertificateAuthority(input: String): CertificateSource? {
+        val source = CertificateSource.fromPathOrPem(input) ?: return null
+        source.validate()
+        return source
     }
 
     private suspend fun saveKubeconfig(cluster: Cluster, token: String, indicator: ProgressIndicator) {

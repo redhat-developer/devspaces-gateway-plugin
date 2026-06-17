@@ -85,7 +85,6 @@ class TokenAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator

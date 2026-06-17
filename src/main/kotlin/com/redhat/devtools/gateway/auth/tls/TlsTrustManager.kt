@@ -21,6 +21,7 @@ interface TlsTrustManager {
      */
     suspend fun ensureTrusted(
         serverUrl: String,
-        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision
+        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
+        certificateAuthority: CertificateSource? = null,
     ): TlsContext
 }

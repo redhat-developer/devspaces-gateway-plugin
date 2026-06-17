@@ -31,7 +31,8 @@ class DefaultTlsTrustManager(
 
     override suspend fun ensureTrusted(
         serverUrl: String,
-        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision
+        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
+        certificateAuthority: CertificateSource?,
     ): TlsContext {
 
         val serverUri = URI(serverUrl)
@@ -46,7 +47,8 @@ class DefaultTlsTrustManager(
             return SslContextFactory.insecure()
         }
 
-        val trustedCerts = getTrustedCerts(namedCluster, serverUri.host) + sessionTrustStore.get(serverUrl)
+        val trustedCerts = getTrustedCerts(namedCluster, serverUri.host, certificateAuthority) +
+            sessionTrustStore.get(serverUrl)
 
         if (trustedCerts.isNotEmpty()) {
             try {
@@ -131,12 +133,13 @@ class DefaultTlsTrustManager(
     suspend fun ensureOpenShiftTlsContext(
         apiServerUrl: String,
         decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
+        certificateAuthority: CertificateSource? = null,
     ): TlsContext {
         val apiBaseUrl = URI(apiServerUrl).toServerBaseUrl()
 
-        ensureTrusted(apiBaseUrl, decisionHandler)
+        ensureTrusted(apiBaseUrl, decisionHandler, certificateAuthority)
 
-        val apiTls = mergedContextFor(listOf(apiBaseUrl))
+        val apiTls = mergedContextFor(listOf(apiBaseUrl), certificateAuthority)
         val oauthUrls = runCatching {
             OpenShiftAuthCodeFlow.discoverOAuthEndpointBaseUrls(
                 apiBaseUrl,
@@ -147,14 +150,17 @@ class DefaultTlsTrustManager(
         val allUrls = (listOf(apiBaseUrl) + oauthUrls).distinct()
         for (url in allUrls) {
             if (url != apiBaseUrl) {
-                ensureTrusted(url, decisionHandler)
+                ensureTrusted(url, decisionHandler, certificateAuthority)
             }
         }
 
-        return mergedContextFor(allUrls)
+        return mergedContextFor(allUrls, certificateAuthority)
     }
 
-    suspend fun mergedContextFor(serverUrls: Collection<String>): TlsContext {
+    suspend fun mergedContextFor(
+        serverUrls: Collection<String>,
+        certificateAuthority: CertificateSource? = null,
+    ): TlsContext {
         val configs = kubeConfigProvider()
         val keyStore = persistentKeyStore.loadOrCreate()
         val allCerts = mutableListOf<X509Certificate>()
@@ -163,6 +169,9 @@ class DefaultTlsTrustManager(
         for (serverUrl in serverUrls.distinct()) {
             val uri = URI(serverUrl)
             if (sessionCerts.isEmpty()) {
+                certificateAuthority?.let {
+                    allCerts += KubeConfigTlsUtils.extractCaCertificates(it)
+                }
                 KubeConfigUtils.getClusterByServer(serverUrl, configs)?.let {
                     allCerts += KubeConfigTlsUtils.extractCaCertificates(it)
                 }
@@ -190,11 +199,18 @@ class DefaultTlsTrustManager(
      * @param host The hostname to look up in the persistent keystore (without scheme)
      * @return List of X.509 certificates to trust for TLS verification
      */
-    private fun getTrustedCerts(namedCluster: KubeConfigNamedCluster?, host: String): List<X509Certificate> {
+    private fun getTrustedCerts(
+        namedCluster: KubeConfigNamedCluster?,
+        host: String,
+        certificateAuthority: CertificateSource?,
+    ): List<X509Certificate> {
         val sessionCerts = sessionTrustStore.allCertificates()
 
         return buildList {
             if (sessionCerts.isEmpty()) {
+                certificateAuthority?.let {
+                    addAll(KubeConfigTlsUtils.extractCaCertificates(it))
+                }
                 namedCluster?.let {
                     addAll(KubeConfigTlsUtils.extractCaCertificates(it))
                 }

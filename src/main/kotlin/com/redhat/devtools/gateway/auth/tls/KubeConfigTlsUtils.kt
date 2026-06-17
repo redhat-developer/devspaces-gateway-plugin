@@ -22,8 +22,12 @@ object KubeConfigTlsUtils {
 
     fun extractCaCertificates(
         namedCluster: KubeConfigNamedCluster
-    ): List<X509Certificate> {
-        val caSource = namedCluster.cluster.certificateAuthority ?: return emptyList()
+    ): List<X509Certificate> =
+        namedCluster.cluster.certificateAuthority
+            ?.let(::extractCaCertificates)
+            .orEmpty()
+
+    fun extractCaCertificates(caSource: CertificateSource): List<X509Certificate> {
         val caContent = try {
             if (caSource.isFilePath) {
                 caSource.toPath().readText()

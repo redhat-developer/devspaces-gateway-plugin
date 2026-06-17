@@ -44,16 +44,13 @@ interface AuthenticationStrategy {
      *
      * @param selectedCluster The cluster to authenticate against
      * @param server The server URL
-     * @param certAuthority The certificate authority data
      * @param tlsContext The TLS context for secure connections
-     * @param indicator The progress indicator
      * @param devSpacesContext The DevSpaces context to update
-     * @return true if authentication succeeded, false otherwise
+     * @param indicator The progress indicator
      */
     suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
