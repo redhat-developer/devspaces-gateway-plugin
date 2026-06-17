@@ -22,7 +22,9 @@ import com.intellij.ui.dsl.builder.BottomGap
 import com.intellij.ui.dsl.builder.TopGap
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
+import com.redhat.devtools.gateway.auth.tls.TlsEndpointKind
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.event.ActionEvent
@@ -38,9 +40,11 @@ import javax.swing.JPanel
  * @param certificateInfo PEM/text representation of the certificate.
  */
 class TLSTrustDecisionHandler(
+    parent: Component,
     private val serverUrl: String,
+    private val endpointKind: TlsEndpointKind,
     private val certificateInfo: String
-) : DialogWrapper(true) {
+) : DialogWrapper(parent, true) {
 
     companion object {
         val PREFERRED_SIZE = Dimension(500, 400)
@@ -55,7 +59,7 @@ class TLSTrustDecisionHandler(
         private set
 
     init {
-        title = "Untrusted TLS Certificate"
+        title = "Untrusted TLS Certificate — ${endpointKind.label}"
         init()
     }
 
@@ -75,7 +79,7 @@ class TLSTrustDecisionHandler(
                         isOpaque = false
                         add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                                 isOpaque = false
-                                add(JBLabel("The server at "))
+                                add(JBLabel("The ${endpointKind.label} at "))
                                 add(HyperlinkLabel(serverUrl).apply { setHyperlinkTarget(serverUrl) })
                                 add(JBTextArea("presents a TLS certificate that is not trusted."))
                             }

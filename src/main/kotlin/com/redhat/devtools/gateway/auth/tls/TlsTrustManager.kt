@@ -23,5 +23,6 @@ interface TlsTrustManager {
         serverUrl: String,
         decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
         certificateAuthority: CertificateSource? = null,
+        endpointKind: TlsEndpointKind = TlsEndpointKind.UNKNOWN,
     ): TlsContext
 }

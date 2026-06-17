@@ -45,6 +45,7 @@ import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import com.redhat.devtools.gateway.util.isLoginUserCancelled
+import com.redhat.devtools.gateway.util.isTlsRelated
 import com.redhat.devtools.gateway.util.stripScheme
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
@@ -391,60 +392,101 @@ class DevSpacesServerStepView(
         onDispose()
 
         var authResult: Result<Unit>? = null
+        val certificateAuthority = resolveCertificateAuthority(tfCertAuthority.text)
+        if (certificateAuthority != null) {
+            thisLogger().info(
+                "TLS trust: wizard Certificate Authority provided " +
+                    "(file=${certificateAuthority.isFilePath})"
+            )
+        }
 
-        ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            {
-                runBlocking {
-                    val indicator = ProgressManager.getInstance().progressIndicator
+        var tlsContext: TlsContext? = null
 
-                    try {
+        try {
+            ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                {
+                    runBlocking {
+                        val indicator = ProgressManager.getInstance().progressIndicator
                         indicator.text = "Establishing secure connection..."
-                        val certificateAuthority = resolveCertificateAuthority(tfCertAuthority.text)
-                        val tlsContext = resolveTlsContext(
+                        tlsContext = resolveTlsContext(
                             server,
                             strategy.getAuthMethod(),
                             certificateAuthority,
                         )
-
-                        indicator.text = "Connecting to cluster..."
-                        strategy.authenticate(
-                            selectedCluster,
-                            server,
-                            tlsContext,
-                            devSpacesContext,
-                            indicator
-                        )
-                        authResult = Result.success(Unit)
-                    } catch (e: ProcessCanceledException) {
-                        throw e
-                    } catch (e: Exception) {
-                        authResult = Result.failure(e)
                     }
-                }
-            },
-            "Connecting to OpenShift...",
-            true,
-            null,
-            component
-        )
+                },
+                "Establishing secure connection...",
+                true,
+                null,
+                component
+            )
+        } catch (e: ProcessCanceledException) {
+            return false
+        } catch (e: Exception) {
+            return handleConnectionFailure(server, e)
+        }
 
-        val result = authResult!!
+        val resolvedTlsContext = tlsContext
+            ?: return handleConnectionFailure(server, IllegalStateException("TLS context was not established"))
+
+        try {
+            ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                {
+                    runBlocking {
+                        val indicator = ProgressManager.getInstance().progressIndicator
+
+                        try {
+                            indicator.text = "Connecting to cluster..."
+                            strategy.authenticate(
+                                selectedCluster,
+                                server,
+                                resolvedTlsContext,
+                                devSpacesContext,
+                                indicator
+                            )
+                            authResult = Result.success(Unit)
+                        } catch (e: ProcessCanceledException) {
+                            throw e
+                        } catch (e: Exception) {
+                            authResult = Result.failure(e)
+                        }
+                    }
+                },
+                "Connecting to OpenShift...",
+                true,
+                null,
+                component
+            )
+        } catch (e: ProcessCanceledException) {
+            return false
+        }
+
+        val result = authResult
+            ?: return handleConnectionFailure(server, IllegalStateException("Authentication did not complete"))
         return result.fold(
             onSuccess = {
                 settings.save(selectedCluster)
                 true
             },
-            onFailure = { e ->
-                thisLogger().warn(e)
-                if (!e.isLoginUserCancelled()) {
-                    Dialogs.error(
-                        "Could not connect to cluster ${server.stripScheme()}.\n\nReason: ${e.message ?: "Unknown error"}",
-                        "Connection Failed"
-                    )
-                }
-                false
-            }
+            onFailure = { e -> handleConnectionFailure(server, e) }
         )
+    }
+
+    private fun handleConnectionFailure(server: String, e: Throwable): Boolean {
+        thisLogger().warn("Connection to $server failed", e)
+        if (!e.isLoginUserCancelled()) {
+            val reason = e.message ?: "Unknown error"
+            val tlsHint = if (e.isTlsRelated()) {
+                "\n\nTLS details were written to idea.log (search for \"TLS trust\")."
+            } else {
+                ""
+            }
+            Dialogs.error(
+                "Could not connect to cluster ${server.stripScheme()}.\n\nReason: $reason$tlsHint",
+                "Connection Failed"
+            )
+        }
+        return false
     }
 
     private fun confirmAuthSwitchIfNeeded(): Boolean {
@@ -516,12 +558,15 @@ class DevSpacesServerStepView(
         authMethod: AuthMethod,
         certificateAuthority: CertificateSource?,
     ): TlsContext {
+        val decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision = { info ->
+            UITlsDecisionAdapter.decide(info, component)
+        }
         return when (authMethod) {
             AuthMethod.OPENSHIFT,
             AuthMethod.OPENSHIFT_CREDENTIALS ->
                 tlsTrustManager.ensureOpenShiftTlsContext(
                     serverUrl,
-                    UITlsDecisionAdapter::decide,
+                    decisionHandler,
                     certificateAuthority,
                 )
             else ->
@@ -533,10 +578,14 @@ class DevSpacesServerStepView(
         serverUrl: String,
         certificateAuthority: CertificateSource?,
     ): TlsContext {
+        val decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision = { info ->
+            UITlsDecisionAdapter.decide(info, component)
+        }
         return tlsTrustManager.ensureTrusted(
             serverUrl,
-            UITlsDecisionAdapter::decide,
+            decisionHandler,
             certificateAuthority,
+            TlsEndpointKind.UNKNOWN,
         )
     }
 

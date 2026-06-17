@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.tls
 
+import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
@@ -29,13 +30,20 @@ class DefaultTlsTrustManager(
     private val persistentKeyStore: PersistentKeyStore
 ) : TlsTrustManager {
 
+    private val logger = thisLogger()
+
     override suspend fun ensureTrusted(
         serverUrl: String,
         decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
         certificateAuthority: CertificateSource?,
+        endpointKind: TlsEndpointKind,
     ): TlsContext {
 
         val serverUri = URI(serverUrl)
+        logger.info(
+            "TLS trust: probing ${endpointKind.label} at $serverUrl " +
+                "(wizard CA=${certificateAuthority != null}, kind=$endpointKind)"
+        )
 
         val namedCluster =
             KubeConfigUtils.getClusterByServer(
@@ -44,6 +52,7 @@ class DefaultTlsTrustManager(
             )
 
         if (namedCluster?.cluster?.insecureSkipTlsVerify == true) {
+            logger.warn("TLS trust: using insecure skip for $serverUrl (kubeconfig insecure-skip-tls-verify)")
             return SslContextFactory.insecure()
         }
 
@@ -51,15 +60,26 @@ class DefaultTlsTrustManager(
             sessionTrustStore.get(serverUrl)
 
         if (trustedCerts.isNotEmpty()) {
+            logger.debug(
+                "TLS trust: trying ${trustedCerts.size} known certificate(s) for $serverUrl " +
+                    "(session=${sessionTrustStore.get(serverUrl).size}, " +
+                    "preconfigured=${trustedCerts.size - sessionTrustStore.get(serverUrl).size})"
+            )
             try {
                 val tlsContext = SslContextFactory.fromTrustedCerts(trustedCerts)
                 withContext(Dispatchers.IO) {
                     TlsProbe.connect(serverUri, tlsContext.sslContext)
                 }
+                logger.info("TLS trust: existing trust accepted for $serverUrl")
                 return tlsContext
             } catch (e: SSLHandshakeException) {
-                // Certificate changed or invalid → continue to capture
+                logger.warn(
+                    "TLS trust: handshake failed with known certificate(s) for $serverUrl; " +
+                        "will prompt (${e.message})"
+                )
             }
+        } else {
+            logger.info("TLS trust: no known certificate for $serverUrl; will capture server certificate")
         }
 
         val captureContext = SslContextFactory.captureOnly()
@@ -68,6 +88,7 @@ class DefaultTlsTrustManager(
             withContext(Dispatchers.IO) {
                 TlsProbe.connect(serverUri, captureContext.sslContext)
             }
+            logger.warn("TLS trust: probe unexpectedly succeeded without trust for $serverUrl")
             return captureContext // should not normally succeed
         } catch (e: SSLHandshakeException) {
             val chain = (captureContext.trustManager as? CapturingTrustManager)
@@ -87,13 +108,25 @@ class DefaultTlsTrustManager(
                 serverUrl = serverUrl,
                 certificateChain = chain,
                 fingerprintSha256 = sha256Fingerprint(trustAnchor),
-                problem = problem
+                problem = problem,
+                endpointKind = endpointKind,
+            )
+
+            logger.info(
+                "TLS trust: prompting user for ${endpointKind.label} at $serverUrl " +
+                    "(problem=$problem, fingerprint=${info.fingerprintSha256})"
             )
 
             val decision = decisionHandler(info)
             if (!decision.trusted) {
+                logger.info("TLS trust: user rejected certificate for $serverUrl")
                 throw TlsTrustRejectedException()
             }
+
+            logger.info(
+                "TLS trust: user accepted certificate for $serverUrl " +
+                    "(scope=${decision.scope}, endpoint=${endpointKind.label})"
+            )
 
             val keyStore = persistentKeyStore.loadOrCreate()
             val persistentAlias = hostAlias(serverUri.host)
@@ -123,7 +156,12 @@ class DefaultTlsTrustManager(
             val finalCerts = (trustedCerts + trustAnchor)
                 .distinctBy { it.serialNumber }
 
-            return SslContextFactory.fromTrustedCerts(finalCerts)
+            val tlsContext = SslContextFactory.fromTrustedCerts(finalCerts)
+            withContext(Dispatchers.IO) {
+                TlsProbe.connect(serverUri, tlsContext.sslContext)
+            }
+            logger.info("TLS trust: verified connection to $serverUrl after user acceptance")
+            return tlsContext
         }
     }
 
@@ -136,25 +174,57 @@ class DefaultTlsTrustManager(
         certificateAuthority: CertificateSource? = null,
     ): TlsContext {
         val apiBaseUrl = URI(apiServerUrl).toServerBaseUrl()
+        logger.info("TLS trust: establishing OpenShift TLS context for API $apiBaseUrl")
 
-        ensureTrusted(apiBaseUrl, decisionHandler, certificateAuthority)
+        ensureTrusted(
+            apiBaseUrl,
+            decisionHandler,
+            certificateAuthority,
+            TlsEndpointKind.API_SERVER,
+        )
 
         val apiTls = mergedContextFor(listOf(apiBaseUrl), certificateAuthority)
-        val oauthUrls = runCatching {
+        val oauthUrls = try {
             OpenShiftAuthCodeFlow.discoverOAuthEndpointBaseUrls(
                 apiBaseUrl,
                 apiTls.sslContext,
             )
-        }.getOrDefault(emptyList())
+        } catch (e: Exception) {
+            logger.error(
+                "TLS trust: failed to discover OAuth endpoints from $apiBaseUrl. " +
+                    "Login may fail if the OAuth host uses a different certificate.",
+                e
+            )
+            throw e
+        }
+
+        if (oauthUrls.isEmpty()) {
+            logger.warn(
+                "TLS trust: OAuth discovery returned no endpoints for $apiBaseUrl. " +
+                    "Only the API server certificate will be trusted."
+            )
+        } else {
+            logger.info("TLS trust: discovered OAuth endpoint host(s): ${oauthUrls.joinToString()}")
+        }
 
         val allUrls = (listOf(apiBaseUrl) + oauthUrls).distinct()
         for (url in allUrls) {
             if (url != apiBaseUrl) {
-                ensureTrusted(url, decisionHandler, certificateAuthority)
+                ensureTrusted(
+                    url,
+                    decisionHandler,
+                    certificateAuthority,
+                    TlsEndpointKind.OAUTH,
+                )
             }
         }
 
-        return mergedContextFor(allUrls, certificateAuthority)
+        val merged = mergedContextFor(allUrls, certificateAuthority)
+        logger.info(
+            "TLS trust: OpenShift TLS context ready for ${allUrls.size} endpoint(s): " +
+                allUrls.joinToString()
+        )
+        return merged
     }
 
     suspend fun mergedContextFor(

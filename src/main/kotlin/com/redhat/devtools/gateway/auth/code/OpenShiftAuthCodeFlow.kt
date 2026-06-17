@@ -18,6 +18,7 @@ import com.nimbusds.oauth2.sdk.id.State
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
+import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.toServerBaseUrl
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.SerialName
@@ -43,6 +44,8 @@ class OpenShiftAuthCodeFlow(
     private val redirectUri: URI?,           // Local callback server URI (optional)
     private val sslContext: SSLContext
 ) : AuthCodeFlow {
+
+    private val logger = logger<OpenShiftAuthCodeFlow>()
 
     private lateinit var codeVerifier: CodeVerifier
     private lateinit var state: State
@@ -75,6 +78,7 @@ class OpenShiftAuthCodeFlow(
     )
 
     companion object {
+        private val logger = logger<OpenShiftAuthCodeFlow>()
         private val json = Json { ignoreUnknownKeys = true }
 
         /** OAuth HTTP endpoint base URLs discovered from the API server. */
@@ -82,17 +86,29 @@ class OpenShiftAuthCodeFlow(
             apiServerUrl: String,
             sslContext: SSLContext,
         ): List<String> {
+            val discoveryUrl = "$apiServerUrl/.well-known/oauth-authorization-server"
+            logger.info("TLS trust: discovering OAuth endpoints from $discoveryUrl")
             val client = HttpClient.newBuilder()
                 .sslContext(sslContext)
                 .version(HttpClient.Version.HTTP_1_1)
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build()
 
-            val response = sendGetRequest(client, "$apiServerUrl/.well-known/oauth-authorization-server", "OAuth discovery failed")
+            val response = try {
+                sendGetRequest(client, discoveryUrl, "OAuth discovery failed")
+            } catch (e: Exception) {
+                logger.error("TLS trust: OAuth discovery request to $discoveryUrl failed", e)
+                throw e
+            }
             val metadata = json.decodeFromString(OAuthMetadata.serializer(), response.body())
-            return listOf(metadata.tokenEndpoint, metadata.authorizationEndpoint)
+            val urls = listOf(metadata.tokenEndpoint, metadata.authorizationEndpoint)
                 .map { URI(it).toServerBaseUrl() }
                 .distinct()
+            logger.info(
+                "TLS trust: OAuth discovery succeeded (issuer=${metadata.issuer}, " +
+                    "endpoints=${urls.joinToString()})"
+            )
+            return urls
         }
 
         private suspend fun sendGetRequest(httpClient: HttpClient, url: String, errorPrefix: String = "Request failed"): HttpResponse<String> {
@@ -211,7 +227,12 @@ class OpenShiftAuthCodeFlow(
             *if (clientIdInForm) arrayOf("client_id" to clientId) else emptyArray()
         )
 
-        val token = sendPostRequest(client, metadata.tokenEndpoint, authHeader, form, errorPrefix = "Token request failed")
+        val token = try {
+            sendPostRequest(client, metadata.tokenEndpoint, authHeader, form, errorPrefix = "Token request failed")
+        } catch (e: Exception) {
+            logger.error("TLS trust: token request to ${metadata.tokenEndpoint} failed", e)
+            throw e
+        }
         val expiresAt = if (token.expiresIn > 0) System.currentTimeMillis() + token.expiresIn * 1000 else null
         return SSOToken(accessToken = token.accessToken, idToken = "", accountLabel = accountLabel, expiresAt = expiresAt)
     }
