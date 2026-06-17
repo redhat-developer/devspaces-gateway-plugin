@@ -11,43 +11,42 @@
  */
 package com.redhat.devtools.gateway.auth.tls.ui
 
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.VerticalFlowLayout
-import com.intellij.ui.HyperlinkLabel
-import com.intellij.ui.components.JBLabel
+import com.intellij.ui.HyperlinkAdapter
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.dsl.builder.AlignX
-import com.intellij.ui.dsl.builder.BottomGap
-import com.intellij.ui.dsl.builder.TopGap
-import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.auth.tls.TlsEndpointKind
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
-import java.awt.FlowLayout
 import java.awt.event.ActionEvent
 import javax.swing.Action
 import javax.swing.BorderFactory
 import javax.swing.JComponent
+import javax.swing.JEditorPane
 import javax.swing.JPanel
+import javax.swing.UIManager
+import javax.swing.event.HyperlinkEvent
 
 /**
  * Dialog that asks the user to trust a TLS certificate from a server.
  *
+ * @param parent the parent component for modality; if null, dialog is centered on screen.
  * @param serverUrl The URL of the server presenting the certificate.
+ * @param endpointKind The kind of TLS endpoint (server or client).
  * @param certificateInfo PEM/text representation of the certificate.
  */
-class TLSTrustDecisionHandler(
-    parent: Component,
+class TLSTrustDecisionDialog(
+    parent: Component?,
     private val serverUrl: String,
     private val endpointKind: TlsEndpointKind,
     private val certificateInfo: String
-) : DialogWrapper(parent, true) {
+) : DialogWrapper(parent ?: JPanel(), true) {
 
     companion object {
-        val PREFERRED_SIZE = Dimension(500, 400)
+        val PREFERRED_SIZE = Dimension(600, 400)
     }
 
     /** Will be true if user chose to persist the trust decision. */
@@ -64,50 +63,57 @@ class TLSTrustDecisionHandler(
     }
 
     override fun createCenterPanel(): JComponent {
-        val panel = JPanel(BorderLayout(8, 8))
-
-        val message = panel {
-            row {
-                cell(
-                    JPanel(VerticalFlowLayout(
-                            VerticalFlowLayout.LEFT,
-                            0,
-                            JBUI.scale(4),
-                            true,
-                            false
-                    )).apply {
-                        isOpaque = false
-                        add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-                                isOpaque = false
-                                add(JBLabel("The ${endpointKind.label} at "))
-                                add(HyperlinkLabel(serverUrl).apply { setHyperlinkTarget(serverUrl) })
-                                add(JBTextArea("presents a TLS certificate that is not trusted."))
-                            }
-                        )
-                        add(
-                            JBTextArea(
-                                "You can choose to trust it permanently, trust it for this session only, or cancel the connection."
-                            )
-                        )
-                    }
-                ).align(AlignX.FILL)
-            }.topGap(TopGap.MEDIUM).bottomGap(BottomGap.MEDIUM)
+        val panel = JPanel(BorderLayout(16, 16)).apply {
+            border = JBUI.Borders.empty(JBUI.scale(8))
         }
+
+        val wrappedUrl = serverUrl.chunked(40).joinToString("\u200B")
+        val htmlText = """
+            <html>
+            <head>
+                <style>
+                    body { margin: 0; padding: 0; }
+                </style>
+            </head>
+            <body>
+                The ${endpointKind.label} at <a href="$serverUrl">$wrappedUrl</a> presents a TLS certificate that is not trusted.
+                <br>
+                You can choose to trust it permanently, trust it for this session only, or cancel the connection.
+            </body>
+            </html>
+        """.trimIndent()
+
+        val messagePane = object : JEditorPane("text/html", htmlText) {
+            override fun getPreferredSize(): Dimension {
+                val size = super.getPreferredSize()
+                return Dimension(PREFERRED_SIZE.width, size.height)
+            }
+        }.apply {
+            isEditable = false
+            isOpaque = false
+            putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+            font = UIManager.getFont("Label.font")
+            addHyperlinkListener(object : HyperlinkAdapter() {
+                override fun hyperlinkActivated(e: HyperlinkEvent) {
+                    BrowserUtil.browse(e.url)
+                }
+            })
+        }
+        panel.add(messagePane, BorderLayout.NORTH)
 
         val certArea = JBTextArea(certificateInfo).apply {
             isEditable = false
-            lineWrap = false
-            //font = JBLabel().font
+            lineWrap = true
+            wrapStyleWord = true
             border = BorderFactory.createEmptyBorder()
         }
 
         val scrollPane = JBScrollPane(certArea).apply {
             preferredSize = PREFERRED_SIZE
-            setBorder(JBUI.Borders.empty())
+            setBorder(null)
             setViewportBorder(null)
         }
 
-        panel.add(message, BorderLayout.NORTH)
         panel.add(scrollPane, BorderLayout.CENTER)
 
         return panel

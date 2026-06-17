@@ -14,9 +14,10 @@ package com.redhat.devtools.gateway.auth.tls.ui
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
-import com.redhat.devtools.gateway.auth.tls.*
+import com.redhat.devtools.gateway.auth.tls.PemUtils
+import com.redhat.devtools.gateway.auth.tls.TlsServerCertificateInfo
+import com.redhat.devtools.gateway.auth.tls.TlsTrustDecision
 import java.awt.Component
-import javax.swing.JPanel
 
 object UITlsDecisionAdapter {
 
@@ -29,21 +30,20 @@ object UITlsDecisionAdapter {
      *               background thread runs).
      */
     suspend fun decide(info: TlsServerCertificateInfo, parent: Component? = null): TlsTrustDecision {
-        val resolvedParent = parent
         logger.info(
             "TLS trust: showing trust dialog for ${info.endpointKind.label} at ${info.serverUrl} " +
-                "(parent=${resolvedParent?.javaClass?.simpleName ?: "none"})"
+                "(parent=${parent?.javaClass?.simpleName ?: "none"})"
         )
 
-        lateinit var dialog: TLSTrustDecisionHandler
+        lateinit var dialog: TLSTrustDecisionDialog
 
         // invokeAndWait is required here: trust runs on a progress worker thread while the EDT
         // is blocked by runProcessWithProgressSynchronously. invokeLater would queue the dialog
         // on the EDT and never run it. ModalityState.any() allows the dialog above the progress UI.
         ApplicationManager.getApplication().invokeAndWait(
             {
-                dialog = TLSTrustDecisionHandler(
-                    parent = resolvedParent ?: JPanel(),
+                dialog = TLSTrustDecisionDialog(
+                    parent = parent,
                     serverUrl = info.serverUrl,
                     endpointKind = info.endpointKind,
                     certificateInfo = PemUtils.toPem(info.certificateChain.first()),
