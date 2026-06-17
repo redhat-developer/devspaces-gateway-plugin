@@ -19,11 +19,8 @@ import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.intellij.openapi.diagnostic.logger
-import com.redhat.devtools.gateway.util.toServerBaseUrl
+import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.future.await
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.lang.Void
 import java.net.URI
 import java.net.URLDecoder
@@ -42,10 +39,9 @@ import javax.net.ssl.SSLContext
 class OpenShiftAuthCodeFlow(
     private val apiServerUrl: String,        // Cluster API server
     private val redirectUri: URI?,           // Local callback server URI (optional)
-    private val sslContext: SSLContext
+    private val sslContext: SSLContext,
+    private val discovery: OAuthDiscovery = OAuthDiscovery(apiServerUrl, sslContext),
 ) : AuthCodeFlow {
-
-    private val logger = logger<OpenShiftAuthCodeFlow>()
 
     private lateinit var codeVerifier: CodeVerifier
     private lateinit var state: State
@@ -68,102 +64,8 @@ class OpenShiftAuthCodeFlow(
             .build()
     }
 
-    @Serializable
-    private data class OAuthMetadata(
-        val issuer: String,
-        @SerialName("authorization_endpoint")
-        val authorizationEndpoint: String,
-        @SerialName("token_endpoint")
-        val tokenEndpoint: String
-    )
-
-    companion object {
-        private val logger = logger<OpenShiftAuthCodeFlow>()
-        private val json = Json { ignoreUnknownKeys = true }
-
-        /** OAuth HTTP endpoint base URLs discovered from the API server. */
-        suspend fun discoverOAuthEndpointBaseUrls(
-            apiServerUrl: String,
-            sslContext: SSLContext,
-        ): List<String> {
-            val discoveryUrl = "$apiServerUrl/.well-known/oauth-authorization-server"
-            logger.info("TLS trust: discovering OAuth endpoints from $discoveryUrl")
-            val client = HttpClient.newBuilder()
-                .sslContext(sslContext)
-                .version(HttpClient.Version.HTTP_1_1)
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build()
-
-            val response = try {
-                sendGetRequest(client, discoveryUrl, "OAuth discovery failed")
-            } catch (e: Exception) {
-                logger.error("TLS trust: OAuth discovery request to $discoveryUrl failed", e)
-                throw e
-            }
-            val metadata = json.decodeFromString(OAuthMetadata.serializer(), response.body())
-            val urls = listOf(metadata.tokenEndpoint, metadata.authorizationEndpoint)
-                .map { URI(it).toServerBaseUrl() }
-                .distinct()
-            logger.info(
-                "TLS trust: OAuth discovery succeeded (issuer=${metadata.issuer}, " +
-                    "endpoints=${urls.joinToString()})"
-            )
-            return urls
-        }
-
-        private suspend fun sendGetRequest(httpClient: HttpClient, url: String, errorPrefix: String = "Request failed"): HttpResponse<String> {
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .GET()
-                .build()
-
-            val response = httpClient.sendAsync(
-                request,
-                HttpResponse.BodyHandlers.ofString()
-            ).await()
-            if (response.statusCode() !in 200..299) {
-                error("$errorPrefix: ${response.statusCode()}\n${response.body()}")
-            }
-            return response
-        }
-
-        private suspend fun sendPostRequest(
-            httpClient: HttpClient,
-            url: String,
-            authHeader: String,
-            formBody: String,
-            errorPrefix: String = "Request failed"
-        ): AccessTokenResponseJson {
-            val request = HttpRequest.newBuilder()
-                .uri(URI(url))
-                .header("Authorization", authHeader)
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(formBody))
-                .build()
-
-            val response = httpClient.sendAsync(
-                request,
-                HttpResponse.BodyHandlers.ofString()
-            ).await()
-            if (response.statusCode() !in 200..299) {
-                error("$errorPrefix: ${response.statusCode()}\n${response.body()}")
-            }
-
-            return json.decodeFromString(AccessTokenResponseJson.serializer(), response.body())
-        }
-    }
-
-    /**
-     * Discover OAuth endpoints from the cluster.
-     */
-    private suspend fun discoverOAuthMetadata(): OAuthMetadata {
-        val response = sendGetRequest(discoveryClient, "$apiServerUrl/.well-known/oauth-authorization-server")
-        return json.decodeFromString(OAuthMetadata.serializer(), response.body())
-    }
-
     override suspend fun startAuthFlow(): AuthCodeRequest {
-        metadata = discoverOAuthMetadata()
+        metadata = discovery.discoverOAuthMetadata()
         codeVerifier = CodeVerifier()
         state = State()
 
@@ -182,12 +84,6 @@ class OpenShiftAuthCodeFlow(
             nonce = Nonce()
         )
     }
-
-    @Serializable
-    data class AccessTokenResponseJson(
-        @SerialName("access_token") val accessToken: String,
-        @SerialName("expires_in") val expiresIn: Long
-    )
 
     override suspend fun handleCallback(parameters: Parameters): SSOToken {
         val code: String = parameters["code"] ?: error("Missing 'code' parameter in callback")
@@ -228,9 +124,9 @@ class OpenShiftAuthCodeFlow(
         )
 
         val token = try {
-            sendPostRequest(client, metadata.tokenEndpoint, authHeader, form, errorPrefix = "Token request failed")
+            client.sendPostRequest(metadata.tokenEndpoint, authHeader, form, errorPrefix = "Token request failed")
         } catch (e: Exception) {
-            logger.error("TLS trust: token request to ${metadata.tokenEndpoint} failed", e)
+            thisLogger().error("TLS trust: token request to ${metadata.tokenEndpoint} failed", e)
             throw e
         }
         val expiresAt = if (token.expiresIn > 0) System.currentTimeMillis() + token.expiresIn * 1000 else null
@@ -241,7 +137,7 @@ class OpenShiftAuthCodeFlow(
         val username = parameters["username"] ?: error("Missing 'username'")
         val password = parameters["password"] ?: error("Missing 'password'")
 
-        metadata = discoverOAuthMetadata()
+        metadata = discovery.discoverOAuthMetadata()
         codeVerifier = CodeVerifier()
         state = State()
 

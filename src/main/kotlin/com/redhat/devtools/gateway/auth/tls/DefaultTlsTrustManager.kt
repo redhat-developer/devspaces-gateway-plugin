@@ -12,7 +12,7 @@
 package com.redhat.devtools.gateway.auth.tls
 
 import com.intellij.openapi.diagnostic.thisLogger
-import com.redhat.devtools.gateway.auth.code.OpenShiftAuthCodeFlow
+import com.redhat.devtools.gateway.auth.code.OAuthDiscovery
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.util.toServerBaseUrl
@@ -185,10 +185,7 @@ class DefaultTlsTrustManager(
 
         val apiTls = mergedContextFor(listOf(apiBaseUrl), certificateAuthority)
         val oauthUrls = try {
-            OpenShiftAuthCodeFlow.discoverOAuthEndpointBaseUrls(
-                apiBaseUrl,
-                apiTls.sslContext,
-            )
+            OAuthDiscovery(apiBaseUrl, apiTls.sslContext).endpointBaseUrls()
         } catch (e: Exception) {
             logger.error(
                 "TLS trust: failed to discover OAuth endpoints from $apiBaseUrl. " +
