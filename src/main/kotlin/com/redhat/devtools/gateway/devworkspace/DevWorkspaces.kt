@@ -285,7 +285,7 @@ class DevWorkspaces(private val client: ApiClient) {
 
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     delay(1.seconds)
                     continue
                 }
