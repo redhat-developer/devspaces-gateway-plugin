@@ -249,9 +249,12 @@ class DevWorkspaces(private val client: ApiClient) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
-                } catch (_: Exception) {
-                    delay(1.seconds)
-                    continue
+                } catch (e: ApiException) {
+                    if (e.code in setOf(429, 500, 502, 503, 504)) {
+                        delay(1.seconds)
+                        continue
+                    }
+                    throw e
                 }
 
                 checkCancelled?.invoke()
