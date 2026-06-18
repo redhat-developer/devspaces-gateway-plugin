@@ -88,6 +88,9 @@ class DevWorkspaceWatchManager(
 
     fun start(lastResourceVersions: Map<String, String?> = emptyMap()) {
         lastResourceVersions.forEach { (ns, resourceVersion) ->
+            if (resourceVersion == null) {
+                return@forEach
+            }
             val w = DevWorkspaceWatcher(
                 namespace = ns,
                 createWatcher = createWatcher,
@@ -105,4 +108,3 @@ class DevWorkspaceWatchManager(
         watchers.clear()
     }
 }
-

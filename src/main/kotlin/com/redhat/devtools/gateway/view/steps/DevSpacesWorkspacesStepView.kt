@@ -86,10 +86,10 @@ class DevSpacesWorkspacesStepView(
 
         row {
             cell(JBScrollPane(listDevWorkspaces)
-                    .apply {
-                        preferredSize = Dimension(preferredSize.width, 200)
-                        minimumSize = Dimension(minimumSize.width, 100)
-                    })
+                .apply {
+                    preferredSize = Dimension(preferredSize.width, 200)
+                    minimumSize = Dimension(minimumSize.width, 100)
+                })
                 .align(AlignX.FILL)
                 .align(AlignY.FILL)
         }.resizableRow().bottomGap(BottomGap.MEDIUM)
@@ -204,11 +204,7 @@ class DevSpacesWorkspacesStepView(
             .map { Utils.getValue(it, arrayOf("metadata", "name")) as String }
             .flatMap { namespace ->
                 val dwListResult = DevWorkspaces(devSpacesContext.client).listWithResult(namespace)
-
-                dwListResult.resourceVersion?.let { rv ->
-                    lastResourceVersions[namespace] = rv
-                }
-
+                lastResourceVersions[namespace] = dwListResult.resourceVersion
                 dwListResult.items
             }
 
@@ -345,7 +341,7 @@ class DevSpacesWorkspacesStepView(
         }
     }
 
-        private fun connect() {
+    private fun connect() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
@@ -506,7 +502,7 @@ class DevSpacesWorkspacesStepView(
     }
 
     private class WorkspacesWatch(
-        client: ApiClient,
+        private val client: ApiClient,
         private val workspacesDataModel: DefaultListModel<DevWorkspace>
     ) {
         private val devWorkspaces = DevWorkspaces(client)
