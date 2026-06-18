@@ -17,7 +17,6 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.ColoredListCellRenderer
@@ -143,7 +142,7 @@ class DevSpacesWorkspacesStepView(
             return false
         }
         devSpacesContext.devWorkspace = workspace
-        val serverStatus = try {
+        try {
             getServerStatus()
         } catch (e: Exception) {
             if (e.isCancellationException()) {
@@ -205,7 +204,11 @@ class DevSpacesWorkspacesStepView(
             .map { Utils.getValue(it, arrayOf("metadata", "name")) as String }
             .flatMap { namespace ->
                 val dwListResult = DevWorkspaces(devSpacesContext.client).listWithResult(namespace)
-                lastResourceVersions[namespace] = dwListResult.resourceVersion
+
+                dwListResult.resourceVersion?.let { rv ->
+                    lastResourceVersions[namespace] = rv
+                }
+
                 dwListResult.items
             }
 
@@ -503,12 +506,11 @@ class DevSpacesWorkspacesStepView(
     }
 
     private class WorkspacesWatch(
-        private val client: ApiClient,
+        client: ApiClient,
         private val workspacesDataModel: DefaultListModel<DevWorkspace>
     ) {
         private val devWorkspaces = DevWorkspaces(client)
         private val watchManager = DevWorkspaceWatchManager(
-            client = client,
             createWatcher = { ns, latestResourceVersion ->
                 devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
             },
