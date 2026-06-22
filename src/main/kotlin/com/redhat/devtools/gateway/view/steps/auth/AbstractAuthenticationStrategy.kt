@@ -21,13 +21,6 @@ import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.codeToReasonPhrase
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Abstract base class for authentication strategies.
@@ -46,23 +39,6 @@ abstract class AbstractAuthenticationStrategy(
     }
 
     override fun isDirty(saved: Cluster): Boolean = false
-
-    /**
-     * Starts a cancellation watcher that polls the progress indicator
-     * and cancels the given action when the user cancels the operation.
-     */
-    protected fun CoroutineScope.launchCancelWatcher(
-        indicator: ProgressIndicator,
-        cancelAction: suspend () -> Unit
-    ): Job = launch(Dispatchers.Default) {
-        while (isActive) {
-            if (indicator.isCanceled) {
-                cancelAction()
-                return@launch
-            }
-            delay(INDICATOR_POLL_DELAY)
-        }
-    }
 
     /**
      * Creates a validated API client.
@@ -100,9 +76,5 @@ abstract class AbstractAuthenticationStrategy(
         throw AuthenticationException(e.codeToReasonPhrase(), e)
     } catch (e: Exception) {
         throw AuthenticationException(e.message ?: "Authentication failed", e)
-    }
-
-    companion object {
-        val INDICATOR_POLL_DELAY: kotlin.time.Duration = 500.milliseconds
     }
 }

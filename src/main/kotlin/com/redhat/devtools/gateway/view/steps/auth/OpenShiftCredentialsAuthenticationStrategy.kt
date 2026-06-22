@@ -27,6 +27,7 @@ import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.TokenModel
 import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.TlsContext
+import com.redhat.devtools.gateway.util.withProgressCancellation
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.view.ui.PasswordFieldWithToggle
 import javax.swing.JComponent
@@ -116,12 +117,14 @@ class OpenShiftCredentialsAuthenticationStrategy(
 
         val sessionManager = OpenShiftAuthSessionManager()
 
-        val osToken = sessionManager.loginWithCredentials(
-            apiServerUrl = selectedCluster.url,
-            username = username,
-            password = password,
-            tlsContext.sslContext
-        )
+        val osToken = withProgressCancellation(indicator) {
+            sessionManager.loginWithCredentials(
+                apiServerUrl = selectedCluster.url,
+                username = username,
+                password = password,
+                tlsContext.sslContext,
+            )
+        }
 
         val finalToken = TokenModel(
             accessToken = osToken.accessToken,
@@ -133,15 +136,17 @@ class OpenShiftCredentialsAuthenticationStrategy(
 
         indicator.text = "Validating cluster access..."
 
-        val client = createValidatedApiClient(
-            server,
-            certAuthority,
-            finalToken.accessToken,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: invalid OpenShift credentials."
-        )
+        val client = withProgressCancellation(indicator) {
+            createValidatedApiClient(
+                server,
+                certAuthority,
+                finalToken.accessToken,
+                null,
+                null,
+                tlsContext,
+                "Authentication failed: invalid OpenShift credentials."
+            )
+        }
 
         setTokenDisplay(finalToken.accessToken)
         saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)

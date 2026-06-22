@@ -45,6 +45,7 @@ import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import com.redhat.devtools.gateway.util.isLoginUserCancelled
 import com.redhat.devtools.gateway.util.stripScheme
+import com.redhat.devtools.gateway.util.withProgressCancellation
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -516,7 +517,7 @@ class DevSpacesServerStepView(
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+            withProgressCancellation(indicator) {
                 KubeConfigUpdate
                     .create(
                         cluster.name.trim(),
@@ -524,7 +525,6 @@ class DevSpacesServerStepView(
                         token.trim())
                     .apply()
             }
-
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
             withContext(Dispatchers.Main) {
@@ -541,7 +541,7 @@ class DevSpacesServerStepView(
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+            withProgressCancellation(indicator) {
                 KubeConfigUpdate
                     .create(
                         cluster.name.trim(),

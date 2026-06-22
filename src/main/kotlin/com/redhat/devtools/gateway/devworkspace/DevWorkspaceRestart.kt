@@ -23,6 +23,9 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.util.updateProgress
+import com.redhat.devtools.gateway.util.checkProgressCanceled
+import com.redhat.devtools.gateway.util.WorkspaceSessionProgress
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.Dispatchers
@@ -35,15 +38,27 @@ import kotlin.time.Duration.Companion.seconds
 private const val TIMEOUT_SECONDS_DELETE_PODS = 120
 
 /**
- * Handles the restart of a DevWorkspace when triggered by the restart annotation.
+ * Restarts a DevWorkspace after a **user-initiated** restart from the Remote IDE.
  *
- * The restart process:
+ * ## Session recovery routing
+ *
+ * Entry point: [RestartDevWorkspaceAnnotationWatch] when [DevWorkspacePatch.RESTART_KEY] appears
+ * on the DevWorkspace CR. This is the annotated-restart path; it does **not** use
+ * [com.redhat.devtools.gateway.WorkspacePodTracker] or [com.redhat.devtools.gateway.ThinClientReconnect].
+ *
+ * While the annotation is set, [WorkspacePodTracker] skips pod-roll reconnect so both handlers
+ * never run concurrently (pod rolls during stop/start are expected but ignored by the tracker).
+ *
+ * Progress title: "Restart workspace". Steps use [com.redhat.devtools.gateway.util.WorkspaceSessionProgress].
+ *
+ * Restart sequence:
  * 1. Close the thin client connection
  * 2. Stop the workspace (spec.started = false)
  * 3. Wait for all pods to be deleted
  * 4. Start the workspace (spec.started = true)
- * 5. Reconnect the IDE; then [execute] removes the restart annotation in a `finally` block
- *    (once per attempt, success or failure).
+ * 5. Reconnect the IDE via a new [DevSpacesConnection.connect]
+ *
+ * [execute] removes the restart annotation in a `finally` block (success or failure).
  */
 class DevWorkspaceRestart(
     private val devSpacesContext: DevSpacesContext,
@@ -86,28 +101,29 @@ class DevWorkspaceRestart(
         thinClient: ThinClientHandle,
         indicator: ProgressIndicator?
     ) {
-        indicator?.update("Closing IDE connection...", 0.0)
+        indicator?.updateProgress(WorkspaceSessionProgress.CLOSING_IDE, 0.0)
         close(thinClient)
 
-        indicator?.update("Stopping workspace...", 0.2)
+        indicator?.updateProgress(WorkspaceSessionProgress.STOPPING_WORKSPACE, 0.2)
         stopWorkspaceAndWait()
 
-        indicator?.update("Waiting for pods to terminate...", 0.4)
+        indicator?.updateProgress(WorkspaceSessionProgress.WAITING_PODS_TERMINATE, 0.4)
         waitForPodsDeleted(indicator)
 
-        indicator?.update("Starting workspace...", 0.6)
+        indicator?.updateProgress(WorkspaceSessionProgress.STARTING_WORKSPACE, 0.6)
         startWorkspaceAndWait()
 
-        indicator?.update("Waiting for IDE to be ready...", 0.8)
-        waitForIDEReady()
+        indicator?.updateProgress(WorkspaceSessionProgress.WAITING_FOR_IDE, 0.8)
+        waitForIDEReady(indicator)
 
-        indicator?.update("Connecting to IDE...", 1.0)
+        indicator?.updateProgress(WorkspaceSessionProgress.CONNECTING_TO_IDE, 1.0)
         connectIDE()
     }
 
-    private suspend fun waitForIDEReady() {
+    private suspend fun waitForIDEReady(indicator: ProgressIndicator?) {
         thisLogger().debug("Waiting for IDE server to be ready...")
-        createRemoteIDEServer().waitServerReady()
+        val checkCancelled = indicator?.let { ind -> { checkProgressCanceled(ind) } }
+        createRemoteIDEServer().awaitJoinLink(checkCancelled = checkCancelled)
         thisLogger().debug("IDE server is ready")
     }
 
@@ -183,7 +199,7 @@ class DevWorkspaceRestart(
         try {
             withTimeout(TIMEOUT_SECONDS_DELETE_PODS.seconds) {
                 while (true) {
-                    indicator?.checkCanceled()
+                    indicator?.let { checkProgressCanceled(it) }
                     val pods = fetchPodsWithRetry(labelSelector)
                     if (pods.isEmpty()) break
                     delay(POD_DELETION_POLL_DELAY)
@@ -230,11 +246,5 @@ class DevWorkspaceRestart(
         val POD_DELETION_POLL_DELAY: kotlin.time.Duration = 2.seconds
         val POD_FETCH_RETRY_DELAY: kotlin.time.Duration = 1.seconds
         val PORT_FORWARDER_CLEANUP_WAIT: kotlin.time.Duration = 1.seconds
-    }
-
-    private fun ProgressIndicator.update(text: String, fraction: Double) {
-        this.fraction = fraction
-        this.text = text
-
     }
 }

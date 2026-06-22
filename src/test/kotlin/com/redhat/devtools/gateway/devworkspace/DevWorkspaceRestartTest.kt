@@ -52,6 +52,7 @@ class DevWorkspaceRestartTest {
         pods = mockk(relaxed = true)
         thinClient = mockk(relaxed = true)
         indicator = mockk(relaxed = true)
+        every { indicator.isRunning } returns true
         remoteIDEServer = mockk(relaxed = true)
         devSpacesConnection = mockk(relaxed = true)
 
@@ -66,7 +67,7 @@ class DevWorkspaceRestartTest {
         // Default: no pods remaining
         every { pods.list(any(), any()) } returns V1PodList().items(emptyList())
         // Default: IDE ready and connection succeed (`just Awaits` never completes — hangs runTest)
-        coJustRun { remoteIDEServer.waitServerReady() }
+        coJustRun { remoteIDEServer.awaitJoinLink(pod = any(), checkCancelled = any()) }
         coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
     }
 
@@ -178,7 +179,7 @@ class DevWorkspaceRestartTest {
         // when
         restart.restart(thinClient, indicator)
         // then
-        coVerify { remoteIDEServer.waitServerReady() }
+        coVerify { remoteIDEServer.awaitJoinLink(pod = any(), checkCancelled = any()) }
     }
 
     @Test
@@ -195,7 +196,7 @@ class DevWorkspaceRestartTest {
         restart.restart(thinClient, indicator)
         // then
         coVerifyOrder {
-            remoteIDEServer.waitServerReady()
+            remoteIDEServer.awaitJoinLink(pod = any(), checkCancelled = any())
             devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
         }
     }
@@ -240,7 +241,7 @@ class DevWorkspaceRestartTest {
             workspaces.startAndWait(namespace, workspaceName, any())
         }
         coVerifyOrder {
-            remoteIDEServer.waitServerReady()
+            remoteIDEServer.awaitJoinLink(pod = any(), checkCancelled = any())
             devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
         }
     }
@@ -285,7 +286,7 @@ class DevWorkspaceRestartTest {
     fun `#doRestart fails when IDE ready fails`() = runTest {
         // given
         val exception = RuntimeException("IDE not ready")
-        coEvery { remoteIDEServer.waitServerReady() } throws exception
+        coEvery { remoteIDEServer.awaitJoinLink(pod = any(), checkCancelled = any()) } throws exception
         // when
         val result = runCatching { restart.restart(thinClient, indicator) }
         // then
