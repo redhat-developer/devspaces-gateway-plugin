@@ -216,10 +216,11 @@ jobs:
           name: pluginVerifier-result
           path: ${{ github.workspace }}/build/reports/pluginVerifier
 
-  # Post a comment on PRs with a link to download the plugin
+  # Post a comment on PRs with a link to download the plugin.
+  # Skip for fork PRs - GITHUB_TOKEN lacks write access to the base repo.
   prComment:
     name: PR comment
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: [ build, test, inspectCode, verify ]
     runs-on: ubuntu-latest
     permissions:
