@@ -18,7 +18,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.runBlockingCancellable
 import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.redhat.devtools.gateway.auth.tls.browseCertificate
@@ -72,6 +72,13 @@ class DevSpacesServerStepView(
     private var currentContextClusterName: String? = null
 
     private val settings: ServerSettings = ServerSettings()
+
+    @Volatile
+    private var connectInProgress = false
+
+    /** Snapshot of [saveConfig] captured on the EDT when connect starts. */
+    @Volatile
+    private var saveConfigForConnect = false
 
     private lateinit var kubeconfigScope: CoroutineScope
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
@@ -382,16 +389,19 @@ class DevSpacesServerStepView(
         return true
     }
 
-    override fun onNext(): Boolean {
-        val selectedCluster = getSelectedCluster() ?: return false
-        val server = selectedCluster.url
-        val strategy = currentStrategy ?: return false
+    override fun onNext(): Boolean = false
 
-        if (!confirmAuthSwitchIfNeeded()) return false
+    override fun isNavigationEnabled(): Boolean = !connectInProgress
+
+    override fun startAsyncNext(): WizardAsyncWork? {
+        val selectedCluster = getSelectedCluster() ?: return null
+        val server = selectedCluster.url
+        val strategy = currentStrategy ?: return null
+
+        if (!confirmAuthSwitchIfNeeded()) return null
 
         onDispose()
 
-        var authResult: Result<Unit>? = null
         val certificateAuthority = resolveCertificateAuthority(tfCertAuthority.text)
         if (certificateAuthority != null) {
             thisLogger().info(
@@ -400,79 +410,46 @@ class DevSpacesServerStepView(
             )
         }
 
-        var tlsContext: TlsContext? = null
+        saveConfigForConnect = saveConfig
 
-        try {
-            ProgressManager.getInstance().runProcessWithProgressSynchronously(
-                {
-                    runBlocking {
-                        val indicator = ProgressManager.getInstance().progressIndicator
-                        indicator.text = "Establishing secure connection..."
-                        tlsContext = resolveTlsContext(
-                            server,
-                            strategy.getAuthMethod(),
-                            certificateAuthority,
-                        )
-                    }
-                },
-                "Establishing secure connection...",
-                true,
-                null,
-                component
-            )
-        } catch (e: ProcessCanceledException) {
-            return false
-        } catch (e: Exception) {
-            return handleConnectionFailure(server, e)
-        }
+        return WizardAsyncWork { indicator, onFinished ->
+            connectInProgress = true
+            try {
+                indicator.isIndeterminate = true
+                indicator.text = "Establishing secure connection..."
+                val tlsContext = runBlockingCancellable {
+                    resolveTlsContext(
+                        server,
+                        strategy.getAuthMethod(),
+                        certificateAuthority,
+                    )
+                }
 
-        val resolvedTlsContext = tlsContext
-            ?: return handleConnectionFailure(server, IllegalStateException("TLS context was not established"))
+                indicator.text = "Connecting to cluster..."
+                runBlockingCancellable {
+                    strategy.authenticate(
+                        selectedCluster,
+                        server,
+                        tlsContext,
+                        devSpacesContext,
+                        indicator,
+                    )
+                }
 
-        try {
-            ProgressManager.getInstance().runProcessWithProgressSynchronously(
-                {
-                    runBlocking {
-                        val indicator = ProgressManager.getInstance().progressIndicator
-
-                        try {
-                            indicator.text = "Connecting to cluster..."
-                            strategy.authenticate(
-                                selectedCluster,
-                                server,
-                                resolvedTlsContext,
-                                devSpacesContext,
-                                indicator
-                            )
-                            authResult = Result.success(Unit)
-                        } catch (e: ProcessCanceledException) {
-                            throw e
-                        } catch (e: Exception) {
-                            authResult = Result.failure(e)
-                        }
-                    }
-                },
-                "Connecting to OpenShift...",
-                true,
-                null,
-                component
-            )
-        } catch (e: ProcessCanceledException) {
-            return false
-        }
-
-        val result = authResult
-            ?: return handleConnectionFailure(server, IllegalStateException("Authentication did not complete"))
-        return result.fold(
-            onSuccess = {
                 settings.save(selectedCluster)
-                true
-            },
-            onFailure = { e -> handleConnectionFailure(server, e) }
-        )
+                onFinished(true)
+            } catch (e: ProcessCanceledException) {
+                throw e
+            } catch (e: Exception) {
+                handleConnectionFailure(server, e)
+                onFinished(false)
+            } finally {
+                connectInProgress = false
+            }
+        }
     }
 
-    private fun handleConnectionFailure(server: String, e: Throwable): Boolean {
+    private fun handleConnectionFailure(server: String, e: Throwable) {
         thisLogger().warn("Connection to $server failed", e)
         if (!e.isLoginUserCancelled()) {
             val reason = e.message ?: "Unknown error"
@@ -486,7 +463,6 @@ class DevSpacesServerStepView(
                 "Connection Failed"
             )
         }
-        return false
     }
 
     private fun confirmAuthSwitchIfNeeded(): Boolean {
@@ -596,19 +572,11 @@ class DevSpacesServerStepView(
     }
 
     private suspend fun saveKubeconfig(cluster: Cluster, token: String, indicator: ProgressIndicator) {
-        if (!saveConfig || token.isBlank()) return
+        if (!saveConfigForConnect || token.isBlank()) return
 
         try {
             indicator.text = "Updating Kube config..."
-            runInterruptible(Dispatchers.IO) {
-                KubeConfigUpdate
-                    .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        token.trim())
-                    .apply()
-            }
-
+            applyKubeconfigTokenUpdate(cluster, token)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
             ApplicationManager.getApplication().invokeLater {
@@ -618,28 +586,46 @@ class DevSpacesServerStepView(
     }
 
     private suspend fun saveKubeconfigWithCert(cluster: Cluster, clientCertPem: String, clientKeyPem: String, indicator: ProgressIndicator) {
-        if (!saveConfig
+        if (!saveConfigForConnect
             || clientCertPem.isBlank()
             || clientKeyPem.isBlank())
             return
 
         try {
             indicator.text = "Updating Kube config..."
-            runInterruptible(Dispatchers.IO) {
-                KubeConfigUpdate
-                    .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        clientCertPem.trim(),
-                        clientKeyPem.trim())
-                    .apply()
-            }
+            applyKubeconfigClientCertUpdate(cluster, clientCertPem, clientKeyPem)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
             ApplicationManager.getApplication().invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
+    }
+
+    /**
+     * Blocking kubeconfig write on the progress background thread.
+     * Avoids nesting [kotlinx.coroutines.runInterruptible] inside [runBlockingCancellable], which can
+     * deadlock when the platform handles VFS refresh on the EDT.
+     */
+    private fun applyKubeconfigTokenUpdate(cluster: Cluster, token: String) {
+        KubeConfigUpdate
+            .create(
+                cluster.name.trim(),
+                cluster.url.trim(),
+                token.trim(),
+            )
+            .apply()
+    }
+
+    private fun applyKubeconfigClientCertUpdate(cluster: Cluster, clientCertPem: String, clientKeyPem: String) {
+        KubeConfigUpdate
+            .create(
+                cluster.name.trim(),
+                cluster.url.trim(),
+                clientCertPem.trim(),
+                clientKeyPem.trim(),
+            )
+            .apply()
     }
 
     private fun setClusters(clusters: List<Cluster>) {

@@ -43,7 +43,10 @@ class TLSTrustDecisionDialog(
     private val serverUrl: String,
     private val endpointKind: TlsEndpointKind,
     private val certificateInfo: String
-) : DialogWrapper(parent ?: JPanel(), true) {
+) : DialogWrapper(
+    parent ?: JPanel(),
+    parent != null,
+) {
 
     companion object {
         val PREFERRED_SIZE = Dimension(600, 400)
