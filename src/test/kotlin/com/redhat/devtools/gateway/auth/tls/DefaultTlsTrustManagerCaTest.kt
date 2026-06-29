@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.tls
 
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigTestHelpers
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -71,6 +72,43 @@ class DefaultTlsTrustManagerCaTest {
             .map { it.serialNumber }
 
         assertThat(trustedSerials).containsExactly(sessionCert.serialNumber)
+        }
+    }
+
+    @Test
+    fun `#ensureOpenShiftTlsContext honors kubeconfig insecure-skip-tls-verify`() {
+        runBlocking {
+            val serverUrl = "https://api.example.com:6443"
+            val kubeConfig = KubeConfigTestHelpers.createMockKubeConfig(
+                clusters = listOf(
+                    mapOf(
+                        "name" to "dogfood",
+                        "cluster" to mapOf(
+                            "server" to serverUrl,
+                            "insecure-skip-tls-verify" to true,
+                        ),
+                    ),
+                ),
+            )
+            val manager = DefaultTlsTrustManager(
+                kubeConfigProvider = { listOf(kubeConfig) },
+                kubeConfigWriter = { _, _ -> },
+                sessionTrustStore = SessionTlsTrustStore(),
+                persistentKeyStore = PersistentKeyStore(
+                    Files.createTempDirectory("tls-trust-insecure").resolve("truststore.p12"),
+                ),
+            )
+
+            val tlsContext = manager.ensureOpenShiftTlsContext(
+                serverUrl,
+                decisionHandler = {
+                    error("trust dialog must not be shown when insecure-skip-tls-verify is set")
+                },
+            )
+
+            val trustManager = tlsContext.trustManager as X509TrustManager
+            trustManager.checkServerTrusted(emptyArray(), "RSA")
+            assertThat(trustManager.acceptedIssuers).isEmpty()
         }
     }
 }

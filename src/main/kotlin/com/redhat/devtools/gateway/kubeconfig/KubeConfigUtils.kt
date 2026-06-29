@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.kubeconfig
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.EnvironmentUtil
 import com.redhat.devtools.gateway.openshift.Cluster
+import com.redhat.devtools.gateway.util.toServerBaseUrl
 import io.kubernetes.client.util.KubeConfig
 import java.io.File
 import java.net.URI
@@ -37,11 +38,16 @@ object KubeConfigUtils {
     fun getClusterByServer(
         serverUrl: String,
         kubeConfigs: List<KubeConfig>
-    ): KubeConfigNamedCluster? =
-        kubeConfigs
+    ): KubeConfigNamedCluster? {
+        val baseUrl = runCatching { URI(serverUrl).toServerBaseUrl() }.getOrNull()
+        return kubeConfigs
             .flatMap { it.clusters ?: emptyList() }
             .mapNotNull { KubeConfigNamedCluster.fromMap(it as Map<*, *>) }
-            .firstOrNull { it.cluster.server == serverUrl }
+            .firstOrNull { cluster ->
+                cluster.cluster.server == serverUrl ||
+                    (baseUrl != null && cluster.cluster.server == baseUrl)
+            }
+    }
 
     fun getClusters(kubeconfigPaths: List<Path>): List<Cluster> {
         logger.info("Getting clusters from kubeconfig paths: $kubeconfigPaths")

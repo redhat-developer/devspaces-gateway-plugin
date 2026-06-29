@@ -176,16 +176,26 @@ class DefaultTlsTrustManager(
         val apiBaseUrl = URI(apiServerUrl).toServerBaseUrl()
         logger.info("TLS trust: establishing OpenShift TLS context for API $apiBaseUrl")
 
-        ensureTrusted(
+        val configs = kubeConfigProvider()
+        KubeConfigUtils.getClusterByServer(apiServerUrl, configs)?.let { namedCluster ->
+            if (namedCluster.cluster.insecureSkipTlsVerify == true) {
+                logger.warn(
+                    "TLS trust: using insecure skip for OpenShift cluster ${namedCluster.name} " +
+                        "(kubeconfig insecure-skip-tls-verify)"
+                )
+                return SslContextFactory.insecure()
+            }
+        }
+
+        val apiTlsContext = ensureTrusted(
             apiBaseUrl,
             decisionHandler,
             certificateAuthority,
             TlsEndpointKind.API_SERVER,
         )
 
-        val apiTls = mergedContextFor(listOf(apiBaseUrl), certificateAuthority)
         val oauthUrls = try {
-            OAuthDiscovery(apiBaseUrl, apiTls.sslContext).endpointBaseUrls()
+            OAuthDiscovery(apiBaseUrl, apiTlsContext.sslContext).endpointBaseUrls()
         } catch (e: Exception) {
             logger.error(
                 "TLS trust: failed to discover OAuth endpoints from $apiBaseUrl. " +
@@ -229,6 +239,18 @@ class DefaultTlsTrustManager(
         certificateAuthority: CertificateSource? = null,
     ): TlsContext {
         val configs = kubeConfigProvider()
+
+        for (serverUrl in serverUrls.distinct()) {
+            KubeConfigUtils.getClusterByServer(serverUrl, configs)?.let { namedCluster ->
+                if (namedCluster.cluster.insecureSkipTlsVerify == true) {
+                    logger.warn(
+                        "TLS trust: using insecure skip for $serverUrl (kubeconfig insecure-skip-tls-verify)"
+                    )
+                    return SslContextFactory.insecure()
+                }
+            }
+        }
+
         val keyStore = persistentKeyStore.loadOrCreate()
         val allCerts = mutableListOf<X509Certificate>()
         val sessionCerts = sessionTrustStore.allCertificates()
