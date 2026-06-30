@@ -78,7 +78,7 @@ dependencies {
     implementation("io.ktor:ktor-server-netty-jvm:3.4.3")
     implementation("io.ktor:ktor-server-content-negotiation-jvm:3.4.3")
 
-    implementation("com.nimbusds:oauth2-oidc-sdk:11.15")  // Core OIDC/OAuth2
+    implementation("com.nimbusds:oauth2-oidc-sdk:11.37.2")  // Core OIDC/OAuth2
     implementation("com.nimbusds:nimbus-jose-jwt:10.9")   // JWT processing
 
     // JSON serialization
