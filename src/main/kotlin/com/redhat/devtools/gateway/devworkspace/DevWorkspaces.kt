@@ -12,8 +12,8 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.google.gson.reflect.TypeToken
-import com.redhat.devtools.gateway.openshift.Utils
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
@@ -23,7 +23,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 data class DevWorkspaceListResult(
@@ -140,28 +139,38 @@ class DevWorkspaces(private val client: ApiClient) {
 
     // Returns a map of DW Owner UID tp list of DW Templates
     private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
-        val dwTemplateList = customApi
-            .listNamespacedCustomObject(
-                "workspace.devfile.io",
-                "v1alpha2",
-                namespace,
-                "devworkspacetemplates",
-            )
-            .execute()
+        try {
+            val dwTemplateList = customApi
+                .listNamespacedCustomObject(
+                    "workspace.devfile.io",
+                    "v1alpha2",
+                    namespace,
+                    "devworkspacetemplates",
+                )
+                .execute()
 
-        val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
-        return items
-            .map { DevWorkspaceTemplate.from(it) }
-            .flatMap { templ ->
-                templ.ownerRefencesUids.map { uid -> uid to templ }
+            val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
+            return items
+                .map { DevWorkspaceTemplate.from(it) }
+                .flatMap { templ ->
+                    templ.ownerRefencesUids.map { uid -> uid to templ }
+                }
+                .groupBy(
+                    keySelector = { it.first },   // UID
+                    valueTransform = { it.second } // DevWorkspaceTemplate
+                )
+        } catch (e: ApiException) {
+            thisLogger().info(e.message)
+
+            if (e.code == 403) {
+                return emptyMap()
             }
-            .groupBy(
-                keySelector = { it.first },   // UID
-                valueTransform = { it.second } // DevWorkspaceTemplate
-            )
+
+            throw e
+        }
     }
 
-    @Throws(ApiException::class)
+@Throws(ApiException::class)
     fun start(namespace: String, name: String) {
         DevWorkspacePatch(namespace, name, client) {
             get(namespace, name)
@@ -240,9 +249,12 @@ class DevWorkspaces(private val client: ApiClient) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
-                } catch (_: Exception) {
-                    delay(1.seconds)
-                    continue
+                } catch (e: ApiException) {
+                    if (e.code in setOf(429, 500, 502, 503, 504)) {
+                        delay(1.seconds)
+                        continue
+                    }
+                    throw e
                 }
 
                 checkCancelled?.invoke()

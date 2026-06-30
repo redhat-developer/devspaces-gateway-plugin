@@ -17,7 +17,6 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.ColoredListCellRenderer
@@ -87,10 +86,10 @@ class DevSpacesWorkspacesStepView(
 
         row {
             cell(JBScrollPane(listDevWorkspaces)
-                    .apply {
-                        preferredSize = Dimension(preferredSize.width, 200)
-                        minimumSize = Dimension(minimumSize.width, 100)
-                    })
+                .apply {
+                    preferredSize = Dimension(preferredSize.width, 200)
+                    minimumSize = Dimension(minimumSize.width, 100)
+                })
                 .align(AlignX.FILL)
                 .align(AlignY.FILL)
         }.resizableRow().bottomGap(BottomGap.MEDIUM)
@@ -143,7 +142,7 @@ class DevSpacesWorkspacesStepView(
             return false
         }
         devSpacesContext.devWorkspace = workspace
-        val serverStatus = try {
+        try {
             getServerStatus()
         } catch (e: Exception) {
             if (e.isCancellationException()) {
@@ -342,7 +341,7 @@ class DevSpacesWorkspacesStepView(
         }
     }
 
-        private fun connect() {
+    private fun connect() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
@@ -508,7 +507,6 @@ class DevSpacesWorkspacesStepView(
     ) {
         private val devWorkspaces = DevWorkspaces(client)
         private val watchManager = DevWorkspaceWatchManager(
-            client = client,
             createWatcher = { ns, latestResourceVersion ->
                 devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
             },
