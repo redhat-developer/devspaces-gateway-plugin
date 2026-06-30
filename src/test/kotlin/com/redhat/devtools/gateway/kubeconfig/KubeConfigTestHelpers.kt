@@ -116,7 +116,8 @@ object KubeConfigTestHelpers {
     }
 
     /**
-     * Creates a user map for testing with both token and client certificates
+     * Creates a user map for testing with token, data-path, and file-path client certificate fields.
+     * Includes both file-path and data-path fields so tests can assert cleanup of each.
      */
     fun createUserMapWithClientCert(
         name: String,
@@ -128,6 +129,8 @@ object KubeConfigTestHelpers {
             "name" to name,
             "user" to mutableMapOf(
                 "token" to token,
+                "client-certificate" to "/path/to/cert",
+                "client-key" to "/path/to/key",
                 "client-certificate-data" to PemUtils.toBase64(clientCertPem),
                 "client-key-data" to PemUtils.toBase64(clientKeyPem)
             )
