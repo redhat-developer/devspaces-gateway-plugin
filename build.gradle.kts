@@ -71,7 +71,7 @@ dependencies {
 
     implementation("io.kubernetes:client-java:26.0.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.3")
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.0")
 
     // RedHat Auth dependencies
     implementation("io.ktor:ktor-server-core-jvm:3.4.3")
