@@ -31,6 +31,12 @@ abstract class KubeConfigUpdate private constructor(
 ) {
 
     companion object {
+        private val USER = arrayOf("user")
+        private val USER_TOKEN = USER + "token"
+        private val USER_CLIENT_CERT = USER + "client-certificate"
+        private val USER_CLIENT_KEY = USER + "client-key"
+        private val USER_CLIENT_CERT_DATA = USER + "client-certificate-data"
+        private val USER_CLIENT_KEY_DATA = USER + "client-key-data"
         fun create(clusterName: String, clusterUrl: String, token: String): KubeConfigUpdate {
             val allConfigs = KubeConfigUtils.getAllConfigs(KubeConfigUtils.getAllConfigFiles())
             val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs)
@@ -119,11 +125,11 @@ abstract class KubeConfigUpdate private constructor(
         namedUser: Any,
         token: String
     ) {
-        Utils.setValue(namedUser, token, arrayOf("user", "token"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-certificate"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-key"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-certificate-data"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-key-data"))
+        Utils.setValue(namedUser, token, USER_TOKEN)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT_DATA)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY_DATA)
     }
 
     protected fun setClientCertificateAuthentication(
@@ -131,11 +137,11 @@ abstract class KubeConfigUpdate private constructor(
         clientCertPem: String,
         clientKeyPem: String
     ) {
-        Utils.setValue(namedUser, PemUtils.toBase64(clientCertPem), arrayOf("user", "client-certificate-data"))
-        Utils.setValue(namedUser, PemUtils.toBase64(clientKeyPem), arrayOf("user", "client-key-data"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-certificate"))
-        Utils.removeValue(namedUser, arrayOf("user", "client-key"))
-        Utils.removeValue(namedUser, arrayOf("user", "token"))
+        Utils.setValue(namedUser, PemUtils.toBase64(clientCertPem), USER_CLIENT_CERT_DATA)
+        Utils.setValue(namedUser, PemUtils.toBase64(clientKeyPem), USER_CLIENT_KEY_DATA)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY)
+        Utils.removeValue(namedUser, USER_TOKEN)
     }
 
     protected data class ContextEntries(
