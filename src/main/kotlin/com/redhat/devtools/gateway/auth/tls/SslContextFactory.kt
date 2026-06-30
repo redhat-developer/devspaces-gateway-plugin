@@ -36,7 +36,7 @@ object SslContextFactory {
             init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
         }
 
-        return TlsContext(sslContext, trustAll)
+        return TlsContext(sslContext, trustAll, isInsecure = true)
     }
 
     fun fromTrustedCerts(certs: List<X509Certificate>): TlsContext {
@@ -77,7 +77,7 @@ object SslContextFactory {
             )
         }
 
-        return TlsContext(sslContext, capturingTrustManager)
+        return TlsContext(sslContext, capturingTrustManager, isCapturingProbe = true)
     }
 
 }

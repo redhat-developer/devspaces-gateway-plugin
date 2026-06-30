@@ -26,6 +26,8 @@ data class KubeConfigNamedCluster(
     val name: String = toName(cluster)
 ) {
 
+    fun isSkipTlsVerify(): Boolean = cluster.isSkipTlsVerify()
+
     companion object {
         fun fromMap(map: Map<*,*>): KubeConfigNamedCluster? {
             val name = map["name"] as? String ?: return null
@@ -92,6 +94,8 @@ data class KubeConfigCluster(
         insecureSkipTlsVerify?.let { map["insecure-skip-tls-verify"] = it }
         return map
     }
+
+    fun isSkipTlsVerify(): Boolean = insecureSkipTlsVerify == true
 }
 
 data class KubeConfigNamedContext(

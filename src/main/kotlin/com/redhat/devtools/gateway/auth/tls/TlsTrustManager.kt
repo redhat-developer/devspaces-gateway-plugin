@@ -19,10 +19,22 @@ interface TlsTrustManager {
      * @throws TlsTrustRejectedException if the user rejects the certificate
      * @throws javax.net.ssl.SSLHandshakeException if TLS ultimately fails
      */
-    suspend fun ensureTrusted(
+    suspend fun createTlsContext(
         serverUrl: String,
         decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
         certificateAuthority: CertificateSource? = null,
         endpointKind: TlsEndpointKind = TlsEndpointKind.UNKNOWN,
+    ): TlsContext
+
+    /**
+     * Ensures the OpenShift API server and its OAuth endpoints are trusted.
+     *
+     * @throws TlsTrustRejectedException if the user rejects a certificate
+     * @throws javax.net.ssl.SSLHandshakeException if TLS ultimately fails
+     */
+    suspend fun createOpenShiftTlsContext(
+        apiServerUrl: String,
+        decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision,
+        certificateAuthority: CertificateSource? = null,
     ): TlsContext
 }

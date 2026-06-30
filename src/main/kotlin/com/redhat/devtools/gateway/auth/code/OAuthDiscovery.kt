@@ -11,7 +11,6 @@
  */
 package com.redhat.devtools.gateway.auth.code
 
-import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.util.toServerBaseUrl
 import kotlinx.serialization.SerialName

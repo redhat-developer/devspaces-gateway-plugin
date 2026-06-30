@@ -86,9 +86,17 @@ class OpenShiftAuthCodeFlow(
     }
 
     override suspend fun handleCallback(parameters: Parameters): SSOToken {
-        val code: String = parameters["code"] ?: error("Missing 'code' parameter in callback")
-        val uri = redirectUri ?: error("redirectUri is required for code exchange")
-        return exchangeCodeForToken(code, discoveryClient, "openshift-cli-client", uri, accountLabel = "openshift-user")
+        val code: String = parameters["code"]
+            ?: error("Missing 'code' parameter in callback")
+        val uri = redirectUri
+            ?: error("redirectUri is required for code exchange")
+        return exchangeCodeForToken(
+            code,
+            discoveryClient,
+            "openshift-cli-client",
+            uri,
+            accountLabel = "openshift-user"
+        )
     }
 
     private fun encodeForm(vararg pairs: Pair<String, String>): String =
@@ -123,14 +131,23 @@ class OpenShiftAuthCodeFlow(
             *if (clientIdInForm) arrayOf("client_id" to clientId) else emptyArray()
         )
 
+        val token = requestToken(client, authHeader, form)
+        val expiresAt = if (token.expiresIn > 0) System.currentTimeMillis() + token.expiresIn * 1000 else null
+        return SSOToken(accessToken = token.accessToken, idToken = "", accountLabel = accountLabel, expiresAt = expiresAt)
+    }
+
+    private suspend fun requestToken(
+        client: HttpClient,
+        authHeader: String,
+        form: String
+    ): AccessTokenResponseJson {
         val token = try {
             client.sendPostRequest(metadata.tokenEndpoint, authHeader, form, errorPrefix = "Token request failed")
         } catch (e: Exception) {
             thisLogger().error("TLS trust: token request to ${metadata.tokenEndpoint} failed", e)
             throw e
         }
-        val expiresAt = if (token.expiresIn > 0) System.currentTimeMillis() + token.expiresIn * 1000 else null
-        return SSOToken(accessToken = token.accessToken, idToken = "", accountLabel = accountLabel, expiresAt = expiresAt)
+        return token
     }
 
     override suspend fun login(parameters: Parameters): SSOToken {
@@ -161,13 +178,10 @@ class OpenShiftAuthCodeFlow(
             .encodeToString("$username:$password".toByteArray(StandardCharsets.UTF_8))
 
         val response = sendWithRetryOn401(noRedirectClient, authorizeUri, basicAuth)
-
         val location = response.headers().firstValue("Location")
             .orElseThrow { error("Missing redirect Location header") }
         val params = parseRedirectQuery(location)
-
         val code = params["code"] ?: error("Authorization code not found in redirect")
-
         val token = exchangeCodeForToken(code, noRedirectClient, "openshift-challenging-client", redirectUri, clientIdInForm = false)
 
         return SSOToken(
@@ -189,7 +203,9 @@ class OpenShiftAuthCodeFlow(
             .GET()
             .build()
 
-        var response = client.sendAsync(request, HttpResponse.BodyHandlers.discarding()).await()
+        var response = client
+            .sendAsync(request, HttpResponse.BodyHandlers.discarding())
+            .await()
 
         if (response.statusCode() == 401) {
             request = HttpRequest.newBuilder()

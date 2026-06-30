@@ -16,5 +16,7 @@ import javax.net.ssl.X509TrustManager
 
 data class TlsContext(
     val sslContext: SSLContext,
-    val trustManager: X509TrustManager
+    val trustManager: X509TrustManager,
+    val isInsecure: Boolean = false,
+    val isCapturingProbe: Boolean = false,
 )

@@ -512,7 +512,7 @@ class DevSpacesServerStepView(
         password = CharArray(0)
     )
 
-    private val tlsTrustManager = DefaultTlsTrustManager(
+    private val tlsTrustManager: TlsTrustManager = DefaultTlsTrustManager(
         kubeConfigProvider = {
             withContext(Dispatchers.IO) {
                 KubeConfigUtils.getAllConfigs(
@@ -540,29 +540,19 @@ class DevSpacesServerStepView(
         return when (authMethod) {
             AuthMethod.OPENSHIFT,
             AuthMethod.OPENSHIFT_CREDENTIALS ->
-                tlsTrustManager.ensureOpenShiftTlsContext(
+                tlsTrustManager.createOpenShiftTlsContext(
+                    serverUrl,
+                    decisionHandler,
+                    certificateAuthority
+                )
+            else ->
+                tlsTrustManager.createTlsContext(
                     serverUrl,
                     decisionHandler,
                     certificateAuthority,
+                    TlsEndpointKind.UNKNOWN,
                 )
-            else ->
-                resolveSslContext(serverUrl, certificateAuthority)
         }
-    }
-
-    private suspend fun resolveSslContext(
-        serverUrl: String,
-        certificateAuthority: CertificateSource?,
-    ): TlsContext {
-        val decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision = { info ->
-            UITlsDecisionAdapter.decide(info, component)
-        }
-        return tlsTrustManager.ensureTrusted(
-            serverUrl,
-            decisionHandler,
-            certificateAuthority,
-            TlsEndpointKind.UNKNOWN,
-        )
     }
 
     private fun resolveCertificateAuthority(input: String): CertificateSource? {
