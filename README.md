@@ -11,6 +11,7 @@ Plugin for JetBrains Gateway enables local desktop development experience with t
 
 ![image](https://github.com/user-attachments/assets/0fd641e6-880a-44af-8f64-581d81f03276)
 
+
 ## Feedback
 We love to hear from users and developers.
 
