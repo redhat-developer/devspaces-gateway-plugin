@@ -193,7 +193,7 @@ data class KubeConfigNamedUser(
         fun getByName(userName: String, config: KubeConfig?): KubeConfigNamedUser? {
             return (config?.users ?: emptyList<Any>())
                 .mapNotNull {
-                    it as? Map<String, Any>
+                    it as? Map<*, *>
                 }
                 .firstOrNull { user ->
                     userName == user["name"]
@@ -223,11 +223,6 @@ data class KubeConfigNamedUser(
 
         fun getUserTokenForCluster(clusterName: String, kubeConfig: KubeConfig): String? =
             getUserForCluster(clusterName, kubeConfig)?.token
-
-        fun getUserClientCertForCluster(clusterName: String, kubeConfig: KubeConfig): Pair<CertificateSource?, CertificateSource?>? {
-            val user = getUserForCluster(clusterName, kubeConfig) ?: return null
-            return Pair(user.clientCertificate, user.clientKey)
-        }
 
         fun isTokenAuth(kubeConfig: KubeConfig): Boolean {
             return kubeConfig.credentials?.containsKey(KubeConfig.CRED_TOKEN_KEY) == true
@@ -275,6 +270,20 @@ data class KubeConfigUser(
                 password = map["password"] as? String
             )
         }
+
+        fun tokenOnly(token: String): KubeConfigUser =
+            KubeConfigUser(
+                token = token.trim(),
+                clientCertificate = null,
+                clientKey = null
+            )
+
+        fun clientCertOnly(cert: CertificateSource, key: CertificateSource): KubeConfigUser =
+            KubeConfigUser(
+                token = null,
+                clientCertificate = cert,
+                clientKey = key
+            )
     }
 
     fun toMap(): MutableMap<String, Any> {
