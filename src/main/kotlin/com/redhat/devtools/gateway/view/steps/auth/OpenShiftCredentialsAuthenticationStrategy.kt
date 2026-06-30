@@ -40,7 +40,7 @@ class OpenShiftCredentialsAuthenticationStrategy(
     saveKubeconfig: suspend (Cluster, String, ProgressIndicator) -> Unit,
     private val onFieldChanged: () -> DocumentListener,
     private val createEnterKeyListener: () -> KeyListener,
-    private val setTokenDisplay: suspend (String) -> Unit
+    private val setTokenDisplay: (String) -> Unit,
 ) : AbstractAuthenticationStrategy(
     tfServer,
     saveKubeconfig
@@ -104,7 +104,6 @@ class OpenShiftCredentialsAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
@@ -120,7 +119,7 @@ class OpenShiftCredentialsAuthenticationStrategy(
             apiServerUrl = selectedCluster.url,
             username = username,
             password = password,
-            tlsContext.sslContext
+            tlsContext.sslContext,
         )
 
         val finalToken = TokenModel(
@@ -131,17 +130,8 @@ class OpenShiftCredentialsAuthenticationStrategy(
             clusterApiUrl = selectedCluster.url
         )
 
-        indicator.text = "Validating cluster access..."
-
-        val client = createValidatedApiClient(
-            server,
-            certAuthority,
-            finalToken.accessToken,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: invalid OpenShift credentials."
-        )
+        indicator.text = "Finishing connection..."
+        val client = createTokenApiClient(server, finalToken.accessToken, tlsContext)
 
         setTokenDisplay(finalToken.accessToken)
         saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)

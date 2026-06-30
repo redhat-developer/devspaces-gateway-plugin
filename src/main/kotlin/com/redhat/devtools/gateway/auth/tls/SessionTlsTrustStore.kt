@@ -24,4 +24,8 @@ class SessionTlsTrustStore {
     fun put(serverUrl: String, certificates: List<X509Certificate>) {
         trusted[serverUrl] = certificates
     }
+
+    /** All certificates accepted in this wizard session, across every server URL. */
+    fun allCertificates(): List<X509Certificate> =
+        trusted.values.flatten().distinctBy { it.serialNumber }
 }

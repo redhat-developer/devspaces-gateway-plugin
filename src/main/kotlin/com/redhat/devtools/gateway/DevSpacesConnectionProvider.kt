@@ -20,9 +20,9 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
+import com.redhat.devtools.gateway.openshift.apiclient.DefaultClientBuilder
 import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isUnauthorized
 import com.redhat.devtools.gateway.util.ProgressCountdown
@@ -31,12 +31,7 @@ import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.SelectClusterDialog
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -205,8 +200,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         val ctx = DevSpacesContext()
 
         indicator.update(message = "Initializing Kubernetes connection…")
-        val factory = OpenShiftClientFactory(KubeConfigUtils)
-        ctx.client = factory.create()
+        ctx.client = DefaultClientBuilder(KubeConfigUtils).build()
 
         indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)

@@ -25,10 +25,22 @@ sealed interface DevSpacesWizardStep {
     fun onNext(): Boolean
 
     /**
+     * Optional background work before advancing (e.g. cluster connect on the server step).
+     * When non-null, the wizard runs this on a background thread and advances when the work
+     * reports success via its [WizardAsyncWork] callback.
+     */
+    fun startAsyncNext(): WizardAsyncWork? = null
+
+    /**
      * Determines if the next button should be enabled.
      * Default implementation returns true.
      */
     fun isNextEnabled(): Boolean = true
+
+    /**
+     * Whether Previous/Next navigation is allowed. Disabled while async work runs.
+     */
+    fun isNavigationEnabled(): Boolean = true
 
     fun onDispose() {}
 }

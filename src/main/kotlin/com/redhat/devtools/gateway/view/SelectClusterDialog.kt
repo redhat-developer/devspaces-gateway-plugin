@@ -15,6 +15,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.view.steps.DevSpacesServerStepView
+import com.redhat.devtools.gateway.view.steps.WizardAsyncWork
 import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.JComponent
@@ -51,12 +52,21 @@ class SelectClusterDialog(
     }
 
     override fun doOKAction() {
-        if (stepView.onNext()) {
-            super.doOKAction()
+        if (!isOKActionEnabled) return
+
+        stepView.startAsyncNext()?.let { work ->
+            WizardAsyncWork.invalidatePending()
+            isOKActionEnabled = false
+            WizardAsyncWork.execute("Connecting to OpenShift...", work) { success ->
+                isOKActionEnabled = true
+                if (success) close(OK_EXIT_CODE)
+            }
+            return
         }
     }
 
     override fun doCancelAction() {
+        WizardAsyncWork.invalidatePending()
         stepView.onDispose()
         super.doCancelAction()
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025-2026 Red Hat, Inc.
+ * Copyright (c) 2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -11,12 +11,9 @@
  */
 package com.redhat.devtools.gateway.auth.tls
 
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
-
-data class TlsContext(
-    val sslContext: SSLContext,
-    val trustManager: X509TrustManager,
-    val isInsecure: Boolean = false,
-    val isCapturingProbe: Boolean = false,
-)
+/** Identifies which cluster endpoint triggered a TLS trust prompt or handshake. */
+enum class TlsEndpointKind(val label: String) {
+    UNKNOWN("server"),
+    API_SERVER("OpenShift API server"),
+    OAUTH("OpenShift OAuth endpoint"),
+}
