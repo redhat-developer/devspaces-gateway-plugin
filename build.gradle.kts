@@ -45,7 +45,7 @@ dependencies {
 
     // Do NOT bundle kotlinx-coroutines: IntelliJ/Gateway provides its own version.
     // Adding another copy causes classloader conflicts, broken cancellation, and runtime errors.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2") {
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0") {
         // prevent coroutines-core from ending up inside the plugin
         exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
     }
