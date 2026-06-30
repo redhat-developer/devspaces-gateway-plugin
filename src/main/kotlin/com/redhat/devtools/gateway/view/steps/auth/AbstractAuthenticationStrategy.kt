@@ -15,7 +15,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
-import com.redhat.devtools.gateway.openshift.TlsClientBuilder
+import com.redhat.devtools.gateway.openshift.apiclient.TlsClientBuilder
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.codeToReasonPhrase
 import io.kubernetes.client.openapi.ApiClient

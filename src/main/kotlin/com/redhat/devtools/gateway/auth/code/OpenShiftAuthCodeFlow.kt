@@ -18,7 +18,6 @@ import com.nimbusds.oauth2.sdk.id.State
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
-import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.future.await
 import java.lang.Void

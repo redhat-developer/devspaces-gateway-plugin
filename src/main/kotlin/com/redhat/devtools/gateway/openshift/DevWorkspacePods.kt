@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException

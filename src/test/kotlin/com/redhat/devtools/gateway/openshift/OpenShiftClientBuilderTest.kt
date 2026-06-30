@@ -9,6 +9,9 @@
 package com.redhat.devtools.gateway.openshift
 
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
+import com.redhat.devtools.gateway.openshift.apiclient.DefaultClientBuilder
+import com.redhat.devtools.gateway.openshift.apiclient.TokenClientBuilder
+import com.redhat.devtools.gateway.openshift.apiclient.TlsClientBuilder
 import com.redhat.devtools.gateway.auth.tls.SslContextFactory
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import io.kubernetes.client.util.KubeConfig

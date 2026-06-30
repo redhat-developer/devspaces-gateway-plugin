@@ -22,7 +22,7 @@ import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.openshift.DefaultClientBuilder
+import com.redhat.devtools.gateway.openshift.apiclient.DefaultClientBuilder
 import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isUnauthorized
 import com.redhat.devtools.gateway.util.ProgressCountdown

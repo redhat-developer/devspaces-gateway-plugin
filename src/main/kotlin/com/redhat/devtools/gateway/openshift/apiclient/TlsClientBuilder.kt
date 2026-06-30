@@ -9,16 +9,12 @@
  * Contributors:
  *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.openshift.apiclient
 
-import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.auth.tls.PemUtils
 import com.redhat.devtools.gateway.auth.tls.TlsContext
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import io.kubernetes.client.openapi.ApiClient
-import io.kubernetes.client.util.ClientBuilder
-import io.kubernetes.client.util.Config
 import io.kubernetes.client.util.credentials.AccessTokenAuthentication
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -32,84 +28,9 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.io.path.readText
 
-/**
- * Interface for building OpenShift API clients.
- */
-interface OpenShiftClientBuilder {
-    fun build(): ApiClient
-    fun readTimeout(timeout: Long, unit: TimeUnit): OpenShiftClientBuilder
-}
+const val DEFAULT_HTTP_TIMEOUT_SECONDS = 30L
 
-/**
- * Base class for building OpenShift API clients.
- * Provides shared read timeout handling via the [applyReadTimeout] helper.
- */
-abstract class BaseClientBuilder : OpenShiftClientBuilder {
-    private var readTimeoutSeconds: Long = 0
-
-    override fun readTimeout(timeout: Long, unit: TimeUnit): OpenShiftClientBuilder {
-        this.readTimeoutSeconds = unit.toSeconds(timeout)
-        return this
-    }
-
-    protected fun applyReadTimeout(client: ApiClient): ApiClient {
-        if (readTimeoutSeconds > 0) {
-            client.httpClient = client.httpClient.newBuilder()
-                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
-                .build()
-        }
-        return client
-    }
-}
-
-/**
- * Builder for default API clients (no server/token specified).
- * Reads kubeconfig files and creates an ApiClient from them.
- */
-class DefaultClientBuilder(
-    private val configUtils: KubeConfigUtils
-) : BaseClientBuilder() {
-    override fun build(): ApiClient {
-        val paths = configUtils.getAllConfigFiles()
-        if (paths.isEmpty()) {
-            thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
-            return ClientBuilder.defaultClient()
-        }
-
-        return try {
-            val allConfigs = configUtils.getAllConfigs(paths)
-            if (allConfigs.isEmpty()) {
-                thisLogger().debug("No valid kubeconfig content found. Falling back to default ApiClient.")
-                return ClientBuilder.defaultClient()
-            }
-
-            val kubeConfig = configUtils.mergeConfigs(allConfigs)
-            val client = ClientBuilder.kubeconfig(kubeConfig).build()
-            applyReadTimeout(client)
-        } catch (e: Exception) {
-            thisLogger().debug(
-                "Failed to build effective Kube config from discovered files due to error: ${e.message}. " +
-                    "Falling back to the default ApiClient."
-            )
-            ClientBuilder.defaultClient()
-        }
-    }
-}
-
-/**
- * Builder for token-authenticated API clients.
- * Creates a kubeconfig from the provided server and token, then builds an ApiClient.
- */
-class TokenClientBuilder(
-    private val server: String,
-    private val token: String
-) : BaseClientBuilder() {
-    override fun build(): ApiClient {
-        val kubeConfig = createKubeConfig(server, null, token.toCharArray(), null, null)
-        val client = Config.fromConfig(kubeConfig)
-        return applyReadTimeout(client)
-    }
-}
+private fun normalizeBasePath(server: String): String = server.trim().removeSuffix("/")
 
 /**
  * Builder for TLS-authenticated API clients.
@@ -245,9 +166,3 @@ class TlsClientBuilder(
         return applyReadTimeout(client)
     }
 }
-
-private const val DEFAULT_HTTP_TIMEOUT_SECONDS = 30L
-
-private fun normalizeBasePath(server: String): String = server.trim().removeSuffix("/")
-
-

@@ -14,7 +14,7 @@ package com.redhat.devtools.gateway.auth.sandbox
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.code.TokenModel
-import com.redhat.devtools.gateway.openshift.TokenClientBuilder
+import com.redhat.devtools.gateway.openshift.apiclient.TokenClientBuilder
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Secret
