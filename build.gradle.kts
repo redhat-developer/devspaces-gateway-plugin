@@ -12,7 +12,7 @@ plugins {
     alias(libs.plugins.changelog) // Gradle Changelog Plugin
     alias(libs.plugins.qodana) // Gradle Qodana Plugin
     alias(libs.plugins.kover) // Gradle Kover Plugin
-    kotlin("plugin.serialization") version "1.9.22" // Serialization needed for RedHat Auth
+    kotlin("plugin.serialization") version "2.3.21" // Serialization needed for RedHat Auth
 }
 
 group = providers.gradleProperty("pluginGroup").get()
@@ -74,15 +74,15 @@ dependencies {
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
 
     // RedHat Auth dependencies
-    implementation("io.ktor:ktor-server-core-jvm:2.3.7")
-    implementation("io.ktor:ktor-server-netty-jvm:2.3.7")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:2.3.7")
+    implementation("io.ktor:ktor-server-core-jvm:3.4.3")
+    implementation("io.ktor:ktor-server-netty-jvm:3.4.3")
+    implementation("io.ktor:ktor-server-content-negotiation-jvm:3.4.3")
 
     implementation("com.nimbusds:oauth2-oidc-sdk:11.15")  // Core OIDC/OAuth2
-    implementation("com.nimbusds:nimbus-jose-jwt:9.37")   // JWT processing
+    implementation("com.nimbusds:nimbus-jose-jwt:10.9")   // JWT processing
 
     // JSON serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html

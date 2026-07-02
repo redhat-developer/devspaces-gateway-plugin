@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.kubeconfig
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.text.UniqueNameGenerator
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
+import com.redhat.devtools.gateway.auth.tls.PemUtils
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.persister.ConfigPersister
@@ -30,6 +31,12 @@ abstract class KubeConfigUpdate private constructor(
 ) {
 
     companion object {
+        private val USER = arrayOf("user")
+        private val USER_TOKEN = USER + "token"
+        private val USER_CLIENT_CERT = USER + "client-certificate"
+        private val USER_CLIENT_KEY = USER + "client-key"
+        private val USER_CLIENT_CERT_DATA = USER + "client-certificate-data"
+        private val USER_CLIENT_KEY_DATA = USER + "client-key-data"
         fun create(clusterName: String, clusterUrl: String, token: String): KubeConfigUpdate {
             val allConfigs = KubeConfigUtils.getAllConfigs(KubeConfigUtils.getAllConfigFiles())
             val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs)
@@ -112,6 +119,29 @@ abstract class KubeConfigUpdate private constructor(
             preferences,
             currentContext
         )
+    }
+
+    protected fun setTokenAuthentication(
+        namedUser: Any,
+        token: String
+    ) {
+        Utils.setValue(namedUser, token, USER_TOKEN)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT_DATA)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY_DATA)
+    }
+
+    protected fun setClientCertificateAuthentication(
+        namedUser: Any,
+        clientCertPem: String,
+        clientKeyPem: String
+    ) {
+        Utils.setValue(namedUser, PemUtils.toBase64(clientCertPem), USER_CLIENT_CERT_DATA)
+        Utils.setValue(namedUser, PemUtils.toBase64(clientKeyPem), USER_CLIENT_KEY_DATA)
+        Utils.removeValue(namedUser, USER_CLIENT_CERT)
+        Utils.removeValue(namedUser, USER_CLIENT_KEY)
+        Utils.removeValue(namedUser, USER_TOKEN)
     }
 
     protected data class ContextEntries(
@@ -210,15 +240,8 @@ abstract class KubeConfigUpdate private constructor(
             config.users?.find { user ->
                 username == Utils.getValue(user, arrayOf("name"))
             }?.apply {
-                Utils.setValue(this, token, arrayOf("user", "token"))
-
-                removeClientCerts(this)
+                setTokenAuthentication(this, token)
             }
-        }
-
-        private fun removeClientCerts(namedUser: Any) {
-            Utils.removeValue(namedUser, arrayOf("user", "client-certificate-data"))
-            Utils.removeValue(namedUser, arrayOf("user", "client-key-data"))
         }
 
     }
@@ -234,7 +257,7 @@ abstract class KubeConfigUpdate private constructor(
         override fun apply() {
             val config = allConfigs.firstOrNull() ?: return
             val user = KubeConfigNamedUser(
-                KubeConfigUser(authToken),
+                KubeConfigUser.tokenOnly(authToken),
                 uniqueUserName(allConfigs)
             )
             val entries = createContext(user, config.users, config.clusters, config.contexts)
@@ -268,15 +291,8 @@ abstract class KubeConfigUpdate private constructor(
             config.users?.find { user ->
                 username == Utils.getValue(user, arrayOf("name"))
             }?.apply {
-                Utils.setValue(this, clientCertPem, arrayOf("user", "client-certificate-data"))
-                Utils.setValue(this, clientKeyPem, arrayOf("user", "client-key-data"))
-
-                removeToken(this)
+                setClientCertificateAuthentication(this,clientCertPem,clientKeyPem)
             }
-        }
-
-        private fun removeToken(namedUser: Any) {
-            Utils.removeValue(namedUser, arrayOf("user", "token"))
         }
     }
 
@@ -292,10 +308,9 @@ abstract class KubeConfigUpdate private constructor(
         override fun apply() {
             val config = allConfigs.firstOrNull() ?: return
             val user = KubeConfigNamedUser(
-                KubeConfigUser(
-                    token = null,
-                    clientCertificate = CertificateSource.fromData(clientCertPem),
-                    clientKey = CertificateSource.fromData(clientKeyPem)
+                KubeConfigUser.clientCertOnly(
+                    CertificateSource.fromData(clientCertPem),
+                    CertificateSource.fromData(clientKeyPem)
                 ),
                 uniqueUserName(allConfigs)
             )

@@ -505,6 +505,55 @@ class KubeConfigUpdateTest {
     }
 
     @Test
+    fun `#apply UpdateClientCert removes client-certificate and client-key file-path fields when setting client cert`() {
+        // given
+        val data = UpdateClientCertWithTokenTestData()
+        val existingUserMap = KubeConfigTestHelpers.createUserMapWithClientCert(
+            data.userName,
+            data.oldToken,
+            data.oldClientCertPem,
+            data.oldClientKeyPem
+        )
+        val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, data.clusterUrl)
+        val existingContextMap = KubeConfigTestHelpers.createContextMap(data.contextName, data.clusterName, data.userName)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.newClientCertPem,
+            data.newClientKeyPem,
+            mockContext,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then - file-path cert fields should be removed, only data-path fields should remain
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(
+                        users[0] as Map<*, *>,
+                        data.userName,
+                        data.newClientCertPem,
+                        data.newClientKeyPem
+                    )
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
     fun `#apply UpdateToken sets current context on primary config when no config has current context`() {
         // given
         val data = UpdateTokenTestData()
@@ -568,6 +617,42 @@ class KubeConfigUpdateTest {
                 match { users ->
                     assertThat(users).hasSize(1)
                     verifyUser(users[0] as Map<*, *>, data.userName, data.newToken)
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply UpdateToken removes client-certificate and client-key file-path fields when setting a new token`() {
+        // given
+        val data = UpdateTokenWithClientCertTestData()
+        val existingUserMap = KubeConfigTestHelpers.createUserMapWithClientCert(
+            data.userName,
+            data.oldToken,
+            data.clientCertPem,
+            data.clientKeyPem
+        )
+        val existingClusterMap = KubeConfigTestHelpers.createClusterMap(data.clusterName, data.clusterUrl)
+        val existingContextMap = KubeConfigTestHelpers.createContextMap(data.contextName, data.clusterName, data.userName)
+        val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
+        val allConfigs = listOf(config)
+        val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
+
+        val update = KubeConfigUpdate.UpdateToken(data.clusterName, data.clusterUrl, data.newToken, mockContext, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then - both file-path and data-path cert fields should be removed, only token remains
+        verify {
+            persisterFor(kubeConfigPath).save(
+                any(),
+                any(),
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithTokenOnly(users[0] as Map<*, *>, data.userName, data.newToken)
                 },
                 any(),
                 any(),
@@ -1076,6 +1161,24 @@ class KubeConfigUpdateTest {
         assertThat(cert).isEqualTo(PemUtils.toBase64(expectedCertPem))
         assertThat(key).isEqualTo(PemUtils.toBase64(expectedKeyPem))
         assertThat(Utils.getValue(user, arrayOf("user", "token"))).isNull()
+        assertThat(Utils.getValue(user, arrayOf("user", "client-certificate"))).isNull()
+        assertThat(Utils.getValue(user, arrayOf("user", "client-key"))).isNull()
+        return true
+    }
+
+    private fun verifyUserWithTokenOnly(
+        user: Map<*, *>,
+        expectedName: String,
+        expectedToken: String
+    ): Boolean {
+        val name = Utils.getValue(user, arrayOf("name")) as String
+        val token = Utils.getValue(user, arrayOf("user", "token")) as String
+        assertThat(name).isEqualTo(expectedName)
+        assertThat(token).isEqualTo(expectedToken)
+        assertThat(Utils.getValue(user, arrayOf("user", "client-certificate"))).isNull()
+        assertThat(Utils.getValue(user, arrayOf("user", "client-key"))).isNull()
+        assertThat(Utils.getValue(user, arrayOf("user", "client-certificate-data"))).isNull()
+        assertThat(Utils.getValue(user, arrayOf("user", "client-key-data"))).isNull()
         return true
     }
 
