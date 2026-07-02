@@ -13,28 +13,45 @@ package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.util.isTimeoutException
+import com.redhat.devtools.gateway.util.podLogIdentity
 import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.*
 import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.*
+import java.time.OffsetDateTime
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration.Companion.seconds
+
+/**
+ * Result of resolving the workspace pod for port-forwarding.
+ *
+ * @param pod the pod to forward to, or null while waiting
+ * @param retryDelaySeconds delay before the next resolve attempt when [pod] is null
+ */
+data class PodForwardResolution(
+    val pod: V1Pod?,
+    val retryDelaySeconds: Long = DevWorkspacePods.DEFAULT_RECONNECT_DELAY_SECONDS,
+)
 
 class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
         const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
-        private const val CONNECT_ATTEMPTS = 5
-        private const val RECONNECT_DELAY: Long = 1000
+        const val DEFAULT_RECONNECT_DELAY_SECONDS: Long = 3
+        private const val FORWARD_READY_RETRY_COUNT: Int = 30
+        private const val FORWARD_READY_RETRY_DELAY: Long = 100L // milliseconds
+        private val POD_DELETION_WAIT_DELAY: kotlin.time.Duration = 4.seconds
     }
 
     private val logger = logger<DevWorkspacePods>()
@@ -135,13 +152,26 @@ class DevWorkspacePods(private val client: ApiClient) {
         ApiClientUtils.cloneForExec(base)
 
     @Throws(IOException::class)
-    fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
+    fun forward(
+        resolvePod: suspend () -> PodForwardResolution,
+        localPort: Int,
+        remotePort: Int,
+        reconnectTimeoutSeconds: Long,
+        reconnectDelaySeconds: Long = DEFAULT_RECONNECT_DELAY_SECONDS,
+    ): Closeable {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
         val scope = CoroutineScope(
             // dont cancel if child coroutine fails + use blocking I/O scope
             SupervisorJob() + Dispatchers.IO
         )
-        scope.acceptConnections(serverSocket, pod, localPort, remotePort)
+        scope.acceptConnections(
+            serverSocket,
+            resolvePod,
+            localPort,
+            remotePort,
+            reconnectTimeoutSeconds,
+            reconnectDelaySeconds,
+        )
         return Closeable {
             runCatching { serverSocket.close() }
             scope.cancel()
@@ -150,9 +180,11 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     private fun CoroutineScope.acceptConnections(
         serverSocket: ServerSocket,
-        pod: V1Pod,
+        resolvePod: suspend () -> PodForwardResolution,
         localPort: Int,
-        remotePort: Int
+        remotePort: Int,
+        reconnectTimeout: Long,
+        reconnectDelaySeconds: Long,
     ) {
         launch {
             logger.info("Starting port forward on local port $localPort...")
@@ -163,9 +195,11 @@ class DevWorkspacePods(private val client: ApiClient) {
                 launch {
                     handleConnection(
                         clientSocket,
-                        pod,
+                        resolvePod,
                         localPort,
-                        remotePort
+                        remotePort,
+                        reconnectTimeout,
+                        reconnectDelaySeconds,
                     )
                 }
             }
@@ -186,39 +220,73 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     private suspend fun CoroutineScope.handleConnection(
         clientSocket: Socket,
-        pod: V1Pod,
+        resolvePod: suspend () -> PodForwardResolution,
         localPort: Int,
-        remotePort: Int
+        remotePort: Int,
+        reconnectTimeout: Long,
+        reconnectDelaySeconds: Long,
     ) {
+        var lastPod: V1Pod? = null
+        var lastForwardError: String? = null
         try {
-            repeat(CONNECT_ATTEMPTS) { attempt ->
-                if (!isActive) return@repeat
-
-                var forwardResult: PortForward.PortForwardResult? = null
-                try {
-                    logger.info("Attempt #${attempt + 1}: Connecting $localPort -> $remotePort...")
-                    val portForward = PortForward(client)
-                    forwardResult = portForward.forward(pod, listOf(remotePort))
-                    logger.info("forward successful: $localPort -> $remotePort...")
-                    copyStreams(clientSocket, forwardResult, remotePort)
-                    return
-                } catch (e: Exception) {
-                    if (e.isCancellationException()) throw e
-                    logger.info(
-                        "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
-                    )
-                    if (isActive) {
-                        delay(RECONNECT_DELAY)
+            withTimeout(reconnectTimeout.seconds) {
+                while (isActive) {
+                    if (!clientSocket.isConnected
+                        || clientSocket.isClosed) {
+                        return@withTimeout
                     }
-                } finally {
-                  closeStreams(remotePort, forwardResult)
+
+                    val resolution = resolvePod()
+                    val pod = resolution.pod
+                    if (pod == null) {
+                        val delaySeconds = resolution.retryDelaySeconds
+                        logger.warn(
+                            "Port forward $localPort -> $remotePort: no workspace pod yet, " +
+                                "retrying in ${delaySeconds}s"
+                        )
+                        delay(delaySeconds.seconds)
+                        continue
+                    }
+                    lastPod = pod
+
+                    var forwardResult: PortForward.PortForwardResult? = null
+                    try {
+                        logger.info(
+                            "Port forward $localPort -> $remotePort: connecting to ${podLogIdentity(pod)}"
+                        )
+                        val portForward = PortForward(client)
+                        forwardResult = portForward.forward(pod, listOf(remotePort))
+                        logger.info("Port forward $localPort -> $remotePort: established to ${podLogIdentity(pod)}")
+                        copyStreams(clientSocket, forwardResult, remotePort)
+                        return@withTimeout
+                    } catch (e: Exception) {
+                        if (e.isCancellationException()
+                            || e.isTimeoutException()) {
+                            throw e
+                        }
+                        lastForwardError = "${e.javaClass.simpleName}: ${e.message}"
+                        logger.info(
+                            "Port forward $localPort -> $remotePort: connecting to ${podLogIdentity(pod)}"
+                        )
+                        delay(reconnectDelaySeconds.seconds)
+                    } finally {
+                        closeStreams(remotePort, forwardResult)
+                    }
                 }
             }
-        } catch(e: Exception) {
+        } catch (_: TimeoutCancellationException) {
+            val podInfo = lastPod?.let { podLogIdentity(it) } ?: "no pod resolved"
+            val errorInfo = lastForwardError?.let { ", last error: $it" } ?: ""
+            logger.warn(
+                "Port forward $localPort -> $remotePort timed out after ${reconnectTimeout}s " +
+                    "(last pod: $podInfo$errorInfo)"
+            )
+        } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             logger.warn(
-                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
-                e)
+                "Could not port forward using port $localPort -> $remotePort",
+                e
+            )
         } finally {
             runCatching { clientSocket.close() }
         }
@@ -268,34 +336,43 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     @Throws(IOException::class)
     fun waitForForwardReady(port: Int) {
-        val maxRetries = 30
-        val retryDelay = 100L
-
-        repeat(maxRetries) { attempt ->
+        repeat(FORWARD_READY_RETRY_COUNT) { attempt ->
             try {
                 val testSocket = ServerSocket()
                 testSocket.bind(InetSocketAddress("127.0.0.1", port))
                 testSocket.close()
                 // If we can bind to the port, it means port forwarding is not ready yet
-                Thread.sleep(retryDelay)
+                Thread.sleep(FORWARD_READY_RETRY_DELAY)
             } catch (_: BindException) {
                 // Port is already in use, which means port forwarding is ready
                 return
             } catch (e: Exception) {
-                if (attempt == maxRetries - 1) {
-                    throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms", e)
+                if (attempt == FORWARD_READY_RETRY_COUNT - 1) {
+                    throw IOException("Port forwarding to local port $port is not ready after ${FORWARD_READY_RETRY_COUNT * FORWARD_READY_RETRY_DELAY}ms", e)
                 }
-                Thread.sleep(retryDelay)
+                Thread.sleep(FORWARD_READY_RETRY_DELAY)
             }
         }
 
-        throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms")
+        throw IOException("Port forwarding to local port $port is not ready after ${FORWARD_READY_RETRY_COUNT * FORWARD_READY_RETRY_DELAY}ms")
     }
 
     @Throws(ApiException::class)
-    fun findFirst(namespace: String, labelSelector: String): V1Pod? {
+    fun findFirstRunning(namespace: String, labelSelector: String): V1Pod? {
         val pods = list(namespace, labelSelector)
-        return pods.items[0]
+        return pods.items
+            .filter { isRunningAndReady(it) }
+            .maxByOrNull { it.metadata?.creationTimestamp ?: OffsetDateTime.MIN }
+    }
+
+    private fun isRunningAndReady(pod: V1Pod): Boolean {
+        if (pod.metadata?.deletionTimestamp != null
+            || pod.status?.phase != "Running") {
+            return false
+        }
+        return pod.status?.conditions?.any { condition ->
+            condition.type == "Ready" && condition.status == "True"
+        } == true
     }
 
     @Throws(ApiException::class)
@@ -333,7 +410,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 } catch (e: Exception) {
                     if (e.isCancellationException()) throw e
                     logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
-                    delay(1.seconds)
+                    delay(POD_DELETION_WAIT_DELAY)
                     continue
                 }
 
@@ -344,7 +421,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 }
 
                 logger.debug("Still waiting for ${pods.items.size} pod(s) to be deleted for $namespace/$workspaceName")
-                delay(1.seconds)
+                delay(POD_DELETION_WAIT_DELAY)
             }
 
             @Suppress("UNREACHABLE_CODE")

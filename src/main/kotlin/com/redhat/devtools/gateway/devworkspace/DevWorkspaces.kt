@@ -36,6 +36,12 @@ val DevWorkspace.cheEditor: String
         return Utils.getValue(this.annotations, arrayOf("che.eclipse.org/che-editor")) as? String ?: "unknown"
     }
 
+val DevWorkspace.displayName: String
+    get() {
+        val label = Utils.getValue(this.labels, arrayOf("kubernetes.io/metadata.name")) as String?
+        return label ?: this.name
+    }
+
 class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
@@ -49,6 +55,7 @@ class DevWorkspaces(private val client: ApiClient) {
         const val STOPPING: String = "Stopping"
 
         const val RUNNING_TIMEOUT: Long = 300
+        val PHASE_WAIT_DELAY: kotlin.time.Duration = 1.seconds
     }
 
     @Throws(ApiException::class)
@@ -241,7 +248,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (_: Exception) {
-                    delay(1.seconds)
+                    delay(PHASE_WAIT_DELAY)
                     continue
                 }
 
@@ -253,7 +260,7 @@ class DevWorkspaces(private val client: ApiClient) {
                         -> return@withTimeoutOrNull false
                 }
 
-                delay(1.seconds)
+                delay(PHASE_WAIT_DELAY)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -277,7 +284,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: Exception) {
-                    delay(1.seconds)
+                    delay(PHASE_WAIT_DELAY)
                     continue
                 }
 
@@ -286,7 +293,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     return@withTimeoutOrNull true // phase changed out of the given set
                 }
 
-                delay(1.seconds)
+                delay(PHASE_WAIT_DELAY)
             }
 
             @Suppress("UNREACHABLE_CODE")

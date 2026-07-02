@@ -29,6 +29,7 @@ import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.PasswordFieldWithToggle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.tls.TlsContext
+import com.redhat.devtools.gateway.util.withProgressCancellation
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.util.ClipboardTokenMonitor
 import javax.swing.JComponent
@@ -94,15 +95,17 @@ class TokenAuthenticationStrategy(
 
         val token = String(tfToken.password)
 
-        val client = createValidatedApiClient(
-            server,
-            certAuthority,
-            token,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: invalid server URL or token."
-        )
+        val client = withProgressCancellation(indicator) {
+            createValidatedApiClient(
+                server,
+                certAuthority,
+                token,
+                null,
+                null,
+                tlsContext,
+                "Authentication failed: invalid server URL or token."
+            )
+        }
 
         saveKubeconfig.invoke(selectedCluster, token, indicator)
         devSpacesContext.client = client

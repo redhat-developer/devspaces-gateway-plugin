@@ -312,7 +312,7 @@ class DevSpacesWorkspacesStepView(
                     val remoteIdeServer = RemoteIDEServer(devSpacesContext)
                     status = runBlocking {
                         remoteIdeServer.waitServerReady(checkCancelled)
-                        remoteIdeServer.getStatus()
+                        remoteIdeServer.fetchStatus(checkCancelled)
                     }
                 } catch (e: Exception) {
                     if (e.isCancellationException()) {

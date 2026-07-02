@@ -11,35 +11,63 @@
  */
 package com.redhat.devtools.gateway
 
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
+import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import com.redhat.devtools.gateway.devworkspace.DevWorkspacePatch
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.devworkspace.RestartDevWorkspaceAnnotationWatch
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
+import com.redhat.devtools.gateway.openshift.PodForwardResolution
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
+import com.redhat.devtools.gateway.util.closeAllProjects
+import com.redhat.devtools.gateway.util.findFreePort
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.Closeable
 import java.io.IOException
-import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+/**
+ * Connects Gateway to a workspace IDE via port-forward and thin client.
+ *
+ * ## Session recovery routing
+ *
+ * Two independent paths recover from pod or workspace changes. They must not run at the same time.
+ *
+ * **Unplanned pod roll** (pod UID changes, no restart annotation):
+ * [WorkspacePodTracker] detects the roll and invokes [ThinClientReconnect] ("Reconnecting to workspace").
+ * [PortForwardPodResolver] waits for a running pod when needed, then re-establishes port-forward
+ * in parallel with session reconnect. The existing local port and forwarder are reused.
+ *
+ * **User-initiated restart** (Remote IDE sets [DevWorkspacePatch.RESTART_KEY] on the DevWorkspace):
+ * [RestartDevWorkspaceAnnotationWatch] triggers [DevWorkspaceRestart] ("Restart workspace"), which
+ * stops and starts the DevWorkspace and opens a new connection. While the annotation is present,
+ * [WorkspacePodTracker] skips pod-roll reconnect so the two handlers do not compete.
+ *
+ * Wiring: [setupThinClientReconnect] registers the tracker callback; [watchRestartAnnotation] starts
+ * the annotation watch. [isWorkspaceRestartInProgress] is the guard passed into the tracker.
+ */
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
+
+    companion object {
+        val THIN_CLIENT_TIMEOUT: kotlin.time.Duration = 60.seconds
+        val THIN_CLIENT_POLL_DELAY: kotlin.time.Duration = 200.milliseconds
+    }
+
+    private val thinClientReconnectScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage")
     suspend fun connect(
@@ -53,138 +81,334 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         val workspace = devSpacesContext.devWorkspace
         devSpacesContext.addWorkspace(workspace)
 
-        var remoteIdeServer: RemoteIDEServer? = null
-        var forwarder: Closeable? = null
-        var client: ThinClientHandle? = null
+        var thinClient: ThinClientHandle? = null
+        var sessionCtx: ThinClientSessionContext? = null
 
         return try {
-            var remoteIdeServerStatus: RemoteIDEServerStatus = RemoteIDEServerStatus.empty()
-            while (!remoteIdeServerStatus.isReady) {
-                checkCancelled?.invoke()
-                onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                    message = "Waiting for the workspace to get ready...",
-                    countdownSeconds = DevWorkspaces.RUNNING_TIMEOUT))
+            val (remoteIdeServer, remoteIdeServerStatus) = waitForWorkspaceReady(
+                onProgress = onProgress,
+                checkCancelled = checkCancelled,
+            )
 
-                DevWorkspaces(devSpacesContext.client)
-                    .startAndWait(
-                        devSpacesContext.devWorkspace.namespace,
-                        devSpacesContext.devWorkspace.name,
-                        checkCancelled = checkCancelled)
-
-                checkCancelled?.invoke()
-                onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                    message = "Waiting for the workspace to get ready...",
-                    countdownSeconds = RemoteIDEServer.readyTimeout))
-
-                remoteIdeServer = RemoteIDEServer(devSpacesContext)
-                remoteIdeServerStatus = runCatching {
-                    remoteIdeServer.apply { waitServerReady(checkCancelled) }.getStatus()
-                }.getOrElse { e ->
-                    if (e.isCancellationException()) throw e
-                    RemoteIDEServerStatus.empty()
-                }
-
-                checkCancelled?.invoke()
-                if (!remoteIdeServerStatus.isReady) {
-                    val restartWorkspace = Dialogs.ideNotResponding()
-
-                    if (restartWorkspace) {
-                        // User chose "Restart Pod": stop the Pod and try starting from scratch
-                        DevWorkspaces(devSpacesContext.client).stopAndWait(
-                            devSpacesContext.devWorkspace.namespace,
-                            devSpacesContext.devWorkspace.name,
-                            checkCancelled = checkCancelled
-                        )
-                        continue
-                    } else {
-                        // User chose "Cancel Connection"
-                        throw CancellationException("User cancelled the operation")
-                    }
-                }
-            }
-
-            checkCancelled?.invoke()
             val joinLink = remoteIdeServerStatus.joinLink
                 ?: throw IOException("Could not connect, workspace IDE is not ready. No join link present.")
 
-            check(remoteIdeServer != null)
             checkCancelled?.invoke()
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                message = "Waiting for the workspace IDE client to start..."))
+                message = "Waiting for the workspace IDE client to start...")
+            )
 
-            val pods = DevWorkspacePods(devSpacesContext.client)
             val localPort = findFreePort()
-            forwarder = pods.forward(remoteIdeServer.pod, localPort, 5990)
-            pods.waitForForwardReady(localPort)
 
-            val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
+            sessionCtx = ThinClientSessionContext(
+                localPort = localPort,
+                remoteIdeServer = remoteIdeServer,
+                forwarder = null,
+                onConnected = onConnected,
+                onDisconnected = onDisconnected,
+                onDevWorkspaceStopped = onDevWorkspaceStopped,
+                checkCancelled = checkCancelled,
+            )
 
-            val lifetimeDef = Lifetime.Eternal.createNested()
-            lifetimeDef.lifetime.onTermination { onClientClosed( client, onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder) }
+            val forwardRecoveryProgress = ForwardRecoveryProgress(
+                scope = thinClientReconnectScope,
+                sessionCtx = sessionCtx,
+                isWorkspaceRestartInProgress = ::isWorkspaceRestartInProgress,
+                onCanceled = {
+                    sessionCtx.intentionalDisconnect.set(true)
+                    onClientClosed(thinClient, sessionCtx)
+                },
+            )
 
-            val finished = AtomicBoolean(false)
+            val tracker = WorkspacePodTracker(
+                remoteIdeServer,
+                ::isWorkspaceRestartInProgress,
+            )
+            tracker.seed(remoteIdeServer.getPod())
 
-            checkCancelled?.invoke()
-            client = LinkedClientManager
-                .getInstance()
-                .startNewClient(
-                    Lifetime.Eternal,
-                    URI(effectiveJoinLink),
-                    "",
-                    onConnected, // Triggers enableButtons() via view
-                    false
-                )
+            setupThinClientReconnect(
+                remoteIdeServer = remoteIdeServer,
+                sessionCtx = sessionCtx,
+                forwardRecoveryProgress = forwardRecoveryProgress,
+                getCurrentClient = { thinClient },
+                startThinClient = ::startThinClient,
+                onClientHandleReplaced = { newClient ->
+                    thinClient = newClient
+                    if (registerRestartWatcher == true) {
+                        watchRestartAnnotation(newClient, workspace)
+                    }
+                },
+                onClientClosed = this@DevSpacesConnection::onClientClosed,
+                tracker = tracker,
+            )
 
-            client.onClientPresenceChanged.advise(client.lifetime) { finished.set(true) }
-            client.clientClosed.advise(client.lifetime) {
-                onClientClosed(client, onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
-                finished.set(true)
-            }
-            client.clientFailedToOpenProject.advise(client.lifetime) {
-                onClientClosed(client, onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
-                finished.set(true)
-            }
+            val portForwardResolver = PortForwardPodResolver(
+                tracker = tracker,
+                sessionCtx = sessionCtx,
+                forwardRecovery = forwardRecoveryProgress,
+            )
 
-            val success = withTimeoutOrNull(60.seconds) {
-                while (!finished.get()) {
-                    checkCancelled?.invoke()
-                    delay(200.milliseconds)
-                }
-                true
-            } ?: false
+            sessionCtx.forwarder = startForwarding(
+                podResolver = portForwardResolver::resolve,
+                pods = DevWorkspacePods(devSpacesContext.client),
+                localPort = localPort
+            )
 
-            // Check if the thin client has opened
-            check(success && client.clientPresent) {
-                "Could not connect, workspace IDE is not ready."
-            }
+            thinClient = startThinClient(joinLink, sessionCtx)
 
-            // Watch for restart annotation on the DevWorkspace
             if (registerRestartWatcher == true) {
-                watchRestartAnnotation(
-                    workspace.namespace,
-                    workspace.name,
-                    devSpacesContext.client,
-                    client
-                )
+                watchRestartAnnotation(thinClient, workspace)
             }
 
             onConnected()
-            client
+            thinClient
         } catch (e: Exception) {
-            runCatching { client?.close() }
-            onClientClosed(client, onDisconnected, onDevWorkspaceStopped, remoteIdeServer, forwarder)
+            cleanupOnFailure(
+                client = thinClient,
+                sessionCtx = sessionCtx,
+                forwarder = sessionCtx?.forwarder,
+                workspace = workspace,
+                onDisconnected = onDisconnected,
+            )
             throw e
         }
     }
 
+    @Throws(Exception::class)
+    private suspend fun waitForWorkspaceReady(
+        onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)?,
+        checkCancelled: (() -> Unit)?,
+    ): Pair<RemoteIDEServer, RemoteIDEServerStatus> {
+        var remoteIdeServer: RemoteIDEServer? = null
+        var remoteIdeServerStatus: RemoteIDEServerStatus = RemoteIDEServerStatus.empty()
+
+        while (!remoteIdeServerStatus.isReady) {
+            checkCancelled?.invoke()
+            onProgress?.invoke(ProgressCountdown.ProgressEvent(
+                message = "Waiting for the workspace to get ready...",
+                countdownSeconds = DevWorkspaces.RUNNING_TIMEOUT))
+
+            DevWorkspaces(devSpacesContext.client)
+                .startAndWait(
+                    devSpacesContext.devWorkspace.namespace,
+                    devSpacesContext.devWorkspace.name,
+                    checkCancelled = checkCancelled)
+
+            checkCancelled?.invoke()
+            onProgress?.invoke(ProgressCountdown.ProgressEvent(
+                message = "Waiting for the workspace to get ready...",
+                countdownSeconds = RemoteIDEServer.READY_TIMEOUT))
+
+            remoteIdeServer = RemoteIDEServer(devSpacesContext)
+            remoteIdeServerStatus = fetchServerStatus(remoteIdeServer, checkCancelled)
+
+            checkCancelled?.invoke()
+            if (!remoteIdeServerStatus.isReady) {
+                if (Dialogs.ideNotResponding()) {
+                    // User chose "Restart Pod": stop the Pod and try starting from scratch
+                    DevWorkspaces(devSpacesContext.client).stopAndWait(
+                        devSpacesContext.devWorkspace.namespace,
+                        devSpacesContext.devWorkspace.name,
+                        checkCancelled = checkCancelled
+                    )
+                    continue
+                } else {
+                    // User chose "Cancel Connection"
+                    throw CancellationException("User cancelled the operation")
+                }
+            }
+        }
+
+        return remoteIdeServer!! to remoteIdeServerStatus
+    }
+
+    private suspend fun fetchServerStatus(
+        remoteIdeServer: RemoteIDEServer,
+        checkCancelled: (() -> Unit)?
+    ): RemoteIDEServerStatus = runCatching {
+        remoteIdeServer.waitServerReady(checkCancelled)
+        remoteIdeServer.fetchStatus(checkCancelled)
+    }.getOrElse { e ->
+        if (e.isCancellationException()) throw e
+        RemoteIDEServerStatus.empty()
+    }
+
+    private fun cleanupOnFailure(
+        client: ThinClientHandle?,
+        sessionCtx: ThinClientSessionContext?,
+        forwarder: Closeable?,
+        workspace: DevWorkspace,
+        onDisconnected: () -> Unit,
+    ) {
+        runCatching { client?.close() }
+        if (sessionCtx != null) {
+            onClientClosed(client, sessionCtx)
+        } else {
+            runCatching { forwarder?.close() }
+            devSpacesContext.removeWorkspace(workspace)
+            runCatching { onDisconnected() }
+        }
+    }
+
+    private suspend fun startForwarding(
+        podResolver: suspend () -> PodForwardResolution,
+        pods: DevWorkspacePods,
+        localPort: Int,
+    ): Closeable {
+        val forwarder = pods.forward(
+            podResolver,
+            localPort,
+            5990,
+            RemoteIDEServer.READY_TIMEOUT
+        )
+        pods.waitForForwardReady(localPort)
+        return forwarder
+    }
+
+    private fun createSessionContext(
+        localPort: Int,
+        remoteIdeServer: RemoteIDEServer,
+        onConnected: () -> Unit,
+        onDisconnected: () -> Unit,
+        onDevWorkspaceStopped: () -> Unit,
+        checkCancelled: (() -> Unit)?,
+    ): Pair<ThinClientSessionContext, WorkspacePodTracker> {
+        val ctx = ThinClientSessionContext(
+            localPort = localPort,
+            remoteIdeServer = remoteIdeServer,
+            forwarder = null,
+            onConnected = onConnected,
+            onDisconnected = onDisconnected,
+            onDevWorkspaceStopped = onDevWorkspaceStopped,
+            checkCancelled = checkCancelled,
+        )
+
+        val tracker = WorkspacePodTracker(
+            remoteIdeServer,
+            ::isWorkspaceRestartInProgress,
+        )
+
+        return ctx to tracker
+    }
+
+    /**
+     * Wires [WorkspacePodTracker.onPodRoll] to [ThinClientReconnect.execute].
+     *
+     * Pod-roll routing (annotation absent) is decided in the tracker; this method only connects
+     * the callback after [ThinClientReconnect] is constructed for the session.
+     */
+    private fun setupThinClientReconnect(
+        remoteIdeServer: RemoteIDEServer,
+        sessionCtx: ThinClientSessionContext,
+        forwardRecoveryProgress: ForwardRecoveryProgress,
+        getCurrentClient: () -> ThinClientHandle?,
+        startThinClient: suspend (String, ThinClientSessionContext) -> ThinClientHandle,
+        onClientHandleReplaced: (ThinClientHandle) -> Unit,
+        onClientClosed: (ThinClientHandle?, ThinClientSessionContext) -> Unit,
+        tracker: WorkspacePodTracker
+    ) {
+        val thinClientReconnect = ThinClientReconnect(
+            remoteIdeServer = remoteIdeServer,
+            sessionCtx = sessionCtx,
+            getCurrentClient = getCurrentClient,
+            startThinClient = startThinClient,
+            onClientHandleReplaced = onClientHandleReplaced,
+            onClientClosed = onClientClosed,
+        )
+        tracker.onPodRoll = { pod ->
+            forwardRecoveryProgress.dismiss()
+            thinClientReconnect.execute(pod)
+        }
+    }
+
+    /**
+     * Returns true when the DevWorkspace carries [DevWorkspacePatch.RESTART_KEY].
+     *
+     * Used by [WorkspacePodTracker] to suppress pod-roll reconnect while
+     * [DevWorkspaceRestart] owns the session recovery.
+     */
+    private fun isWorkspaceRestartInProgress(): Boolean =
+        runCatching {
+            val workspace = devSpacesContext.devWorkspace
+            DevWorkspaces(devSpacesContext.client).isRestarting(
+                workspace.namespace,
+                workspace.name,
+            )
+        }.getOrDefault(false)
+
     @Suppress("UnstableApiUsage")
-    private fun watchRestartAnnotation(namespace: String, workspaceName: String, kubeClient: ApiClient, thinClient: ThinClientHandle) {
+    private suspend fun startThinClient(joinLink: String, ctx: ThinClientSessionContext): ThinClientHandle {
+        val effectiveJoinLink = joinLink.replace(":5990", ":${ctx.localPort}")
+        val client = LinkedClientManager
+            .getInstance()
+            .startNewClient(
+                Lifetime.Eternal,
+                URI(effectiveJoinLink),
+                "",
+                ctx.onConnected,
+                false
+            )
+
+        val finished = AtomicBoolean(false)
+
+        ctx.checkCancelled?.invoke()
+        attachClientListeners(client, finished, ctx) {
+            onClientClosed(client, ctx)
+        }
+
+        client.onClientPresenceChanged.advise(client.lifetime) { finished.set(true) }
+
+        thisLogger().warn(
+            "Thin client: waiting for connection on local port ${ctx.localPort} (join link host redirected from :5990)"
+        )
+        val success = withTimeoutOrNull(THIN_CLIENT_TIMEOUT) {
+            while (!finished.get()) {
+                ctx.checkCancelled?.invoke()
+                delay(THIN_CLIENT_POLL_DELAY)
+            }
+            true
+        } ?: false
+
+        check(success && client.clientPresent) {
+            "Could not connect, workspace IDE is not ready (local port ${ctx.localPort}, clientPresent=${client.clientPresent})."
+        }
+
+        return client
+    }
+
+    @Suppress("UnstableApiUsage")
+    private fun attachClientListeners(
+        client: ThinClientHandle,
+        finished: AtomicBoolean,
+        session: ThinClientSessionContext,
+        onClosed: () -> Unit,
+    ) {
+        client.clientClosed.advise(client.lifetime) {
+            if (!session.reconnecting.get()) {
+                onClosed()
+            }
+            finished.set(true)
+        }
+        client.clientFailedToOpenProject.advise(client.lifetime) {
+            if (!session.reconnecting.get()) {
+                onClosed()
+            }
+            finished.set(true)
+        }
+    }
+
+    /**
+     * Starts the **user-initiated restart** watch ([RestartDevWorkspaceAnnotationWatch] → [DevWorkspaceRestart]).
+     * Complements pod-roll detection in [WorkspacePodTracker] / [ThinClientReconnect].
+     */
+    @Suppress("UnstableApiUsage")
+    private fun watchRestartAnnotation(thinClient: ThinClientHandle, workspace: DevWorkspace) {
         val restartWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         RestartDevWorkspaceAnnotationWatch(
             onRestartAnnotated(thinClient),
-            kubeClient,
-            namespace,
-            workspaceName
+            devSpacesContext.client,
+            workspace.namespace,
+            workspace.name
         ).start(restartWatchScope)
 
         thinClient.lifetime.onTermination {
@@ -193,9 +417,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Suppress("UnstableApiUsage")
-    private fun onRestartAnnotated(
-        thinClient: ThinClientHandle
-    ): () -> Job {
+    private fun onRestartAnnotated(thinClient: ThinClientHandle): () -> Job {
         return {
             CoroutineScope(Dispatchers.IO).launch {
                 DevWorkspaceRestart(devSpacesContext).execute(thinClient)
@@ -204,14 +426,13 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Suppress("UnstableApiUsage")
-    private fun onClientClosed(
-        client: ThinClientHandle? = null,
-        onDisconnected: () -> Unit,
-        onDevWorkspaceStopped: () -> Unit,
-        remoteIdeServer: RemoteIDEServer?,
-        forwarder: Closeable?
-    ) {
+    internal fun onClientClosed(client: ThinClientHandle?, session: ThinClientSessionContext) {
         CoroutineScope(Dispatchers.IO).launch {
+            if (session.reconnecting.get()) {
+                thisLogger().debug("Skipping disconnect cleanup during pod-roll reconnect")
+                return@launch
+            }
+            thinClientReconnectScope.cancel()
             runCatching { client?.close() }
             val workspace = devSpacesContext.devWorkspace
             val workspacePatch = DevWorkspacePatch(
@@ -224,50 +445,26 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             )
             try {
                 if (workspacePatch.hasRestartAnnotation()) {
-                    /**
-                     * user triggered restart
-                     * logic to restart workspace is in [onRestartAnnotated]
-                     * The annotation will be cleaned up by DevWorkspaceRestart
-                     */
                     closeAllProjects()
-                } else if (true == remoteIdeServer?.waitServerTerminated()) {
-                    /**
-                     * user closed IDE and clicked "Close and Stop"
-                     */
+                } else if (
+                    session.intentionalDisconnect.get()
+                    || session.remoteIdeServer.waitServerTerminated()
+                ) {
                     DevWorkspaces(devSpacesContext.client)
                         .stop(workspace.namespace, workspace.name)
-                        .also { onDevWorkspaceStopped() }
+                        .also { session.onDevWorkspaceStopped() }
                 }
             } finally {
-                runCatching {
-                    forwarder?.close()
-                }.onFailure { e ->
-                    thisLogger().debug("Failed to close port forwarder", e)
-                }
+                closeForwarder(session.forwarder)
                 devSpacesContext.removeWorkspace(workspace)
-                runCatching { onDisconnected() }
+                runCatching { session.onDisconnected() }
             }
         }
     }
 
-    private fun closeAllProjects() {
-        ApplicationManager.getApplication().invokeLater(
-            {
-                val pm = ProjectManagerEx.getInstanceEx()
-                for (project in pm.openProjects.toList()) {
-                    if (!project.isDisposed) {
-                        pm.closeAndDispose(project)
-                    }
-                }
-            },
-            ModalityState.nonModal()
-        )
+    private fun closeForwarder(forwarder: Closeable?) {
+        runCatching { forwarder?.close() }
+            .onFailure { e -> thisLogger().debug("Failed to close port forwarder", e) }
     }
 
-    private fun findFreePort(): Int {
-        ServerSocket(0).use { socket ->
-            socket.reuseAddress = true
-            return socket.localPort
-        }
-    }
 }

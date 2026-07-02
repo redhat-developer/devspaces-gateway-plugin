@@ -22,7 +22,12 @@ import com.redhat.devtools.gateway.auth.session.AbstractAuthSessionManager
 import com.redhat.devtools.gateway.auth.session.OpenShiftAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.TlsContext
 import com.redhat.devtools.gateway.openshift.Cluster
-import kotlinx.coroutines.*
+import com.redhat.devtools.gateway.util.withProgressCancellation
+import com.redhat.devtools.gateway.util.withProgressCancelWatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import javax.swing.JPanel
 
 /**
@@ -70,9 +75,10 @@ class OpenShiftOAuthAuthenticationStrategy(
         indicator.text = "Waiting for you to complete login in your browser..."
         currentCoroutineContext().ensureActive()
 
-        coroutineScope {
-            launchCancelWatcher(indicator) { login.cancel() }
-
+        withProgressCancelWatcher(
+            indicator,
+            cancelAction = { login.cancel() },
+        ) {
             indicator.text = "Obtaining OpenShift access..."
             val osToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
 
@@ -85,15 +91,17 @@ class OpenShiftOAuthAuthenticationStrategy(
             )
 
             indicator.text = "Validating cluster access..."
-            val client = createValidatedApiClient(
-                server,
-                certAuthority,
-                finalToken.accessToken,
-                null,
-                null,
-                tlsContext,
-                "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
-            )
+            val client = withProgressCancellation(indicator) {
+                createValidatedApiClient(
+                    server,
+                    certAuthority,
+                    finalToken.accessToken,
+                    null,
+                    null,
+                    tlsContext,
+                    "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
+                )
+            }
 
             setTokenDisplay(finalToken.accessToken)
             saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)

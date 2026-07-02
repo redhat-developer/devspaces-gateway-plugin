@@ -28,25 +28,61 @@ import kotlin.time.Duration.Companion.seconds
  * Represent an IDE server running in a CDE.
  */
 class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
-    var pod: V1Pod
-    private var container: V1Container
+
+    private var cachedPod: V1Pod? = null
 
     companion object {
-        var readyTimeout: Long = 60 // seconds
-    }
-
-    init {
-        pod = findPod()
-        container = findContainer()
+        const val READY_TIMEOUT: Long = 120 // seconds
+        /** Per-probe exec budget while polling; must be well below [READY_TIMEOUT]. */
+        const val STATUS_EXEC_TIMEOUT: Long = 15 // seconds
+        val DRAIN_DELAY: kotlin.time.Duration = 500.milliseconds
     }
 
     /**
-     * Asks the CDE for the remote IDE server status.
+     * Returns the cached workspace pod, or fetches it from the cluster if not yet cached.
      */
-    @Throws(CancellationException::class)
-    suspend fun getStatus(checkCancelled: (() -> Unit)? = null): RemoteIDEServerStatus =
+    @Throws(IOException::class)
+    fun getPod(): V1Pod {
+        cachedPod?.let { return it }
+        return refreshPod()
+    }
+
+    /**
+     * Sets the given pod.
+     *
+     * @see [getPod]
+     * @see [refreshPod]
+     */
+    fun setPod(pod: V1Pod) {
+        cachedPod = pod
+    }
+
+    /**
+     * Re-queries the cluster for the workspace pod and updates the cache.
+     */
+    @Throws(IOException::class)
+    fun refreshPod(): V1Pod = fetchPod().also { cachedPod = it }
+
+    /**
+     * Returns the IDE container from the workspace pod.
+     */
+    @Throws(IOException::class)
+    fun getContainer(): V1Container = findContainer(getPod())
+
+    /**
+     * Fetches the workspace pod and IDE container, then asks the CDE for the remote IDE server status.
+     *
+     * @param execTimeoutSeconds max seconds to wait for a single status exec probe
+     */
+    @Throws(CancellationException::class, IOException::class)
+    suspend fun fetchStatus(
+        checkCancelled: (() -> Unit)? = null,
+        execTimeoutSeconds: Long = STATUS_EXEC_TIMEOUT,
+    ): RemoteIDEServerStatus =
         withContext(Dispatchers.IO) {
             checkCancelled?.invoke()
+            val pod = getPod()
+            val container = findContainer(pod)
             val output = DevWorkspacePods(devSpacesContext.client).exec(
                 pod = pod,
                 container = container.name,
@@ -61,7 +97,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
                 ),
-                timeout = readyTimeout
+                timeout = execTimeoutSeconds,
             ).trim()
 
             checkCancelled?.invoke()
@@ -78,22 +114,52 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
      * @return True if the server is ready within the timeout, False otherwise.
      */
     @Throws(IOException::class)
-    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = readyTimeout): Boolean {
+    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = READY_TIMEOUT): Boolean {
         return doWaitServerState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
-                    "Workspace IDE is not ready after $readyTimeout seconds.",
+                    "Workspace IDE is not ready after $timeout seconds.",
                 )
             }
+    }
+
+    /**
+     * Waits for the IDE server to become ready and returns its join link.
+     *
+     * Shared by pod-roll reconnect ([com.redhat.devtools.gateway.ThinClientReconnect]) and
+     * annotated restart ([com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart]).
+     *
+     * @param pod when non-null, seeds the pod cache before waiting (pod-roll path passes the rolled pod)
+     * @param checkCancelled optional progress cancellation check
+     * @param timeout maximum wait for IDE readiness in seconds
+     */
+    @Throws(IOException::class, CancellationException::class)
+    suspend fun awaitJoinLink(
+        pod: V1Pod? = null,
+        checkCancelled: (() -> Unit)? = null,
+        timeout: Long = READY_TIMEOUT,
+    ): String {
+        pod?.let { setPod(it) }
+        waitServerReady(checkCancelled = checkCancelled, timeout = timeout)
+        return fetchStatus(checkCancelled = checkCancelled).joinLink
+            ?: throw IOException("no join link")
     }
 
     @Throws(CancellationException::class)
     private suspend fun isServerState(
         isReadyState: Boolean,
-        checkCancelled: (() -> Unit)? = null
+        checkCancelled: (() -> Unit)? = null,
+        refreshPodBeforeCheck: Boolean = false,
     ): Boolean {
         return try {
-            getStatus(checkCancelled).isReady == isReadyState
+            if (refreshPodBeforeCheck) {
+                runCatching { refreshPod() }.onFailure { e ->
+                    if (e.isCancellationException()) throw e
+                    thisLogger().debug("Failed to refresh workspace pod during IDE state check", e)
+                    return false
+                }
+            }
+            fetchStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             thisLogger().debug("Failed to check workspace IDE state.", e)
@@ -116,39 +182,44 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     @Throws(IOException::class, CancellationException::class)
     private suspend fun doWaitServerState(
         isReadyState: Boolean,
-        timeout: Long = readyTimeout,
+        timeout: Long = READY_TIMEOUT,
         checkCancelled: (() -> Unit)? = null
     ): Boolean =
-        withTimeoutOrNull(timeout.seconds) { // seconds → ms
+        withTimeoutOrNull(timeout.seconds) {
             while (true) {
                 checkCancelled?.invoke()
-                if (isServerState(isReadyState, checkCancelled)) {
+                if (isServerState(
+                        isReadyState,
+                        checkCancelled,
+                        refreshPodBeforeCheck = isReadyState,
+                    )) {
                     return@withTimeoutOrNull true
                 }
 
                 yield()
-                delay(500.milliseconds)
+                delay(DRAIN_DELAY)
             }
 
             @Suppress("UNREACHABLE_CODE")
             false
         } ?: false
 
-    @Throws(IOException::class)
-    private fun findPod(): V1Pod {
-        val selector = "controller.devfile.io/devworkspace_name=${devSpacesContext.devWorkspace.name}"
+    private fun labelSelector(): String =
+        "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=${devSpacesContext.devWorkspace.name}"
 
+    @Throws(IOException::class)
+    private fun fetchPod(): V1Pod {
         return DevWorkspacePods(devSpacesContext.client)
-            .findFirst(
+            .findFirstRunning(
                 devSpacesContext.devWorkspace.namespace,
-                selector
+                labelSelector()
             ) ?: throw IOException(
             "DevWorkspace '${devSpacesContext.devWorkspace.name}' is not running.",
         )
     }
 
     @Throws(IOException::class)
-    private fun findContainer(): V1Container {
+    private fun findContainer(pod: V1Pod): V1Container {
         return pod.spec!!.containers.find { container ->
             container.ports?.any { port -> port.name == "idea-server" } != null
         }

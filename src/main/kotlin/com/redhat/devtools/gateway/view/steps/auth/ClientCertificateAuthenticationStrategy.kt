@@ -21,6 +21,7 @@ import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.auth.tls.browseCertificate
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.tls.TlsContext
+import com.redhat.devtools.gateway.util.withProgressCancellation
 import com.redhat.devtools.gateway.openshift.Cluster
 import javax.swing.JPanel
 
@@ -86,15 +87,17 @@ class ClientCertificateAuthenticationStrategy(
         val clientCert = tfClientCert.text
         val clientKey = tfClientKey.text
 
-        val client = createValidatedApiClient(
-            server,
-            certAuthority,
-            null,
-            clientCert,
-            clientKey,
-            tlsContext,
-            "Authentication failed: invalid client certificate or key."
-        )
+        val client = withProgressCancellation(indicator) {
+            createValidatedApiClient(
+                server,
+                certAuthority,
+                null,
+                clientCert,
+                clientKey,
+                tlsContext,
+                "Authentication failed: invalid client certificate or key."
+            )
+        }
 
         saveKubeconfigWithCert(selectedCluster, clientCert, clientKey, indicator)
         devSpacesContext.client = client

@@ -25,8 +25,16 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Watches the DevWorkspace CR for [DevWorkspacePatch.RESTART_KEY] (set from the remote IDE).
- * When the annotation appears, deletes workspace pod(s) and closes the thin client so the user can reconnect.
+ * Watches the DevWorkspace CR for [DevWorkspacePatch.RESTART_KEY] (set from the Remote IDE).
+ *
+ * ## Session recovery routing
+ *
+ * When the annotation appears, invokes the registered callback (typically
+ * [DevWorkspaceRestart.execute]). This starts the **user-initiated restart** path.
+ *
+ * Unplanned pod rolls without this annotation are handled separately by
+ * [com.redhat.devtools.gateway.WorkspacePodTracker] and
+ * [com.redhat.devtools.gateway.ThinClientReconnect].
  */
 class RestartDevWorkspaceAnnotationWatch(
     private val onIsAnnotated: () -> Job,
@@ -35,6 +43,12 @@ class RestartDevWorkspaceAnnotationWatch(
     private val workspaceName: String,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
+
+    companion object {
+        val WATCHER_RECONNECT_DELAY: kotlin.time.Duration = 100.milliseconds
+        val WATCHER_CREATE_FAIL_DELAY: kotlin.time.Duration = 1000.milliseconds
+    }
+
     private val devWorkspaces = DevWorkspaces(client)
     private val restartAnnotationPending = AtomicBoolean(false)
 
@@ -43,7 +57,7 @@ class RestartDevWorkspaceAnnotationWatch(
         return scope.launch(dispatcher) {
             while (isActive) {
                 val watcher = createWatcher(namespace, fieldSelector) ?: run {
-                    delay(1000.milliseconds)
+                    delay(WATCHER_CREATE_FAIL_DELAY)
                     continue
                 }
                 try {
@@ -78,7 +92,7 @@ class RestartDevWorkspaceAnnotationWatch(
                 } finally {
                     runCatching { watcher.close() }
                 }
-                delay(100.milliseconds)
+                delay(WATCHER_RECONNECT_DELAY)
             }
         }
     }
