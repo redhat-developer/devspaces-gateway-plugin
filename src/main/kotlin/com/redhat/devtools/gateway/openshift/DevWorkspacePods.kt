@@ -27,7 +27,6 @@ import java.io.OutputStream
 import java.net.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.time.Duration.Companion.seconds
 
 class DevWorkspacePods(private val client: ApiClient) {
 
@@ -208,6 +207,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                         "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
                     )
                     if (isActive) {
+                        @Suppress("ConvertLongToDuration")
                         delay(RECONNECT_DELAY)
                     }
                 } finally {
@@ -324,7 +324,8 @@ class DevWorkspacePods(private val client: ApiClient) {
         isCancelled: (() -> Unit)? = null
     ): Boolean {
         val labelSelector = "$WORKSPACE_LABEL_KEY=$workspaceName"
-        return withTimeoutOrNull(timeout.seconds) {
+        @Suppress("ConvertLongToDuration")
+        return withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 isCancelled?.invoke()
 
@@ -333,7 +334,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 } catch (e: Exception) {
                     if (e.isCancellationException()) throw e
                     logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
-                    delay(1.seconds)
+                    delay(1000L)
                     continue
                 }
 
@@ -344,7 +345,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 }
 
                 logger.debug("Still waiting for ${pods.items.size} pod(s) to be deleted for $namespace/$workspaceName")
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")

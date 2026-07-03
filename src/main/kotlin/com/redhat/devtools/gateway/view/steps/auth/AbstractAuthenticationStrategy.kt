@@ -27,7 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.milliseconds
+
 
 /**
  * Abstract base class for authentication strategies.
@@ -60,7 +60,8 @@ abstract class AbstractAuthenticationStrategy(
                 cancelAction()
                 return@launch
             }
-            delay(500.milliseconds)
+            @Suppress("ConvertLongToDuration")
+            delay(500L)
         }
     }
 

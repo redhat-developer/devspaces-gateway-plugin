@@ -29,7 +29,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.net.URI
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Abstract base class for authentication session managers.
@@ -83,7 +82,8 @@ abstract class AbstractAuthSessionManager(
         check(activeLogin === login) { "Login is no longer active" }
         thisLogger().debug("Awaiting browser login result with timeout ${timeoutMs}ms")
         return try {
-            val token = withTimeout(timeoutMs.milliseconds) {
+            @Suppress("ConvertLongToDuration")
+            val token = withTimeout(timeoutMs) {
                 login.result.await()
             }
             thisLogger().info("Login result received successfully")

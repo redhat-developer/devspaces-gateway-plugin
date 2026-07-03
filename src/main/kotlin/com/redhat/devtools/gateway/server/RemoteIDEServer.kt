@@ -21,8 +21,6 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Represent an IDE server running in a CDE.
@@ -119,7 +117,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         timeout: Long = readyTimeout,
         checkCancelled: (() -> Unit)? = null
     ): Boolean =
-        withTimeoutOrNull(timeout.seconds) { // seconds → ms
+        @Suppress("ConvertLongToDuration")
+        withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
                 if (isServerState(isReadyState, checkCancelled)) {
@@ -127,7 +126,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                 }
 
                 yield()
-                delay(500.milliseconds)
+                delay(500L)
             }
 
             @Suppress("UNREACHABLE_CODE")

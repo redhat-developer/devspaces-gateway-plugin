@@ -22,7 +22,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Watches the DevWorkspace CR for [DevWorkspacePatch.RESTART_KEY] (set from the remote IDE).
@@ -42,8 +41,10 @@ class RestartDevWorkspaceAnnotationWatch(
         val fieldSelector = "metadata.name=$workspaceName"
         return scope.launch(dispatcher) {
             while (isActive) {
-                val watcher = createWatcher(namespace, fieldSelector) ?: run {
-                    delay(1000.milliseconds)
+                val watcher = createWatcher(namespace, fieldSelector)
+                if (watcher == null) {
+                    @Suppress("ConvertLongToDuration")
+                    delay(1000L)
                     continue
                 }
                 try {
@@ -78,7 +79,8 @@ class RestartDevWorkspaceAnnotationWatch(
                 } finally {
                     runCatching { watcher.close() }
                 }
-                delay(100.milliseconds)
+                @Suppress("ConvertLongToDuration")
+                delay(100L)
             }
         }
     }

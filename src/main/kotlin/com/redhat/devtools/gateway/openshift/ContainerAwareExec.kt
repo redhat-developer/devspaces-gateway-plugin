@@ -65,6 +65,7 @@ class ContainerAwareExec(
 
                 onOpen?.accept(io)
 
+                @Suppress("ConvertLongToDuration")
                 val exitCode = withTimeoutOrNull(timeoutMs ?: Long.MAX_VALUE) {
                     while (isActive) {
                         if (!process.isAlive) {

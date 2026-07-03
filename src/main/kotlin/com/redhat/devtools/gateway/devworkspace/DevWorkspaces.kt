@@ -23,7 +23,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import kotlin.time.Duration.Companion.seconds
 
 data class DevWorkspaceListResult(
     val items: List<DevWorkspace>,
@@ -237,6 +236,7 @@ class DevWorkspaces(private val client: ApiClient) {
         }
     }
 
+    @Suppress("ConvertLongToDuration")
     @Throws(ApiException::class, IOException::class, CancellationException::class)
     suspend fun waitPhase(
         namespace: String,
@@ -245,7 +245,7 @@ class DevWorkspaces(private val client: ApiClient) {
         timeout: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        return withTimeoutOrNull(timeout.seconds) {
+        return withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {
@@ -266,7 +266,7 @@ class DevWorkspaces(private val client: ApiClient) {
                         -> return@withTimeoutOrNull false
                 }
 
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -283,14 +283,15 @@ class DevWorkspaces(private val client: ApiClient) {
         timeout: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        return withTimeoutOrNull(timeout.seconds) {
+        @Suppress("ConvertLongToDuration")
+        return withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
 
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: Exception) {
-                    delay(1.seconds)
+                    delay(1000L)
                     continue
                 }
 
@@ -299,7 +300,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     return@withTimeoutOrNull true // phase changed out of the given set
                 }
 
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")

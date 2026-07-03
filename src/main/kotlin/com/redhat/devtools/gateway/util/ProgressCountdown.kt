@@ -14,7 +14,6 @@ package com.redhat.devtools.gateway.util
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.progress.ProgressIndicator
 import kotlinx.coroutines.*
-import kotlin.time.Duration.Companion.seconds
 
 class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndicator by delegate, Disposable {
     private var job: Job? = null
@@ -46,7 +45,8 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
         job = scope.launch {
             while (remaining > 0 && isActive && !delegate.isCanceled) {
                 delegate.text2 = buildText2WithSuffix(remaining)
-                delay(1.seconds)
+                @Suppress("ConvertLongToDuration")
+                delay(1000L)
                 remaining--
             }
             delegate.text2 = baseText2
