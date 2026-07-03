@@ -30,7 +30,6 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlin.time.Duration.Companion.seconds
 
 private const val TIMEOUT_SECONDS_DELETE_PODS = 120
 
@@ -154,7 +153,8 @@ class DevWorkspaceRestart(
     private suspend fun close(thinClient: ThinClientHandle) {
         thisLogger().debug("Closing thin client for $namespace/$workspaceName")
         thinClient.close()
-        delay(1.seconds) // Give time for port forwarder cleanup
+        @Suppress("ConvertLongToDuration")
+        delay(1000L) // Give time for port forwarder cleanup
     }
 
     private fun stopWorkspaceAndWait() {
@@ -182,12 +182,13 @@ class DevWorkspaceRestart(
         val labelSelector = "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=$workspaceName"
 
         try {
-            withTimeout(TIMEOUT_SECONDS_DELETE_PODS.seconds) {
+            @Suppress("ConvertLongToDuration")
+            withTimeout(TIMEOUT_SECONDS_DELETE_PODS * 1000L) {
                 while (true) {
                     indicator?.checkCanceled()
                     val pods = fetchPodsWithRetry(labelSelector)
                     if (pods.isEmpty()) break
-                    delay(2.seconds)
+                    delay(2000L)
                 }
             }
         } catch (e: TimeoutCancellationException) {
@@ -201,7 +202,8 @@ class DevWorkspaceRestart(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             thisLogger().warn("Failed to list pods, retrying...", e)
-            delay(1.seconds)
+            @Suppress("ConvertLongToDuration")
+            delay(1000L)
             fetchPodsWithRetry(labelSelector)
         }
     }

@@ -73,6 +73,7 @@ class DevWorkspaceWatcher(
                 watcher.close()
             }
 
+            @Suppress("ConvertLongToDuration")
             delay(100)
         }
     }

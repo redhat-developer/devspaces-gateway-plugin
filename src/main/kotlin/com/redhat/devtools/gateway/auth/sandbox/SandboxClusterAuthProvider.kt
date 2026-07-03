@@ -23,7 +23,6 @@ import io.kubernetes.client.openapi.models.V1Secret
 import io.kubernetes.client.openapi.models.V1ServiceAccount
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
-import kotlin.time.Duration.Companion.milliseconds
 
 class SandboxClusterAuthProvider(
     private val sandboxApi: SandboxApi = SandboxApi(
@@ -106,7 +105,8 @@ class SandboxClusterAuthProvider(
             if (secret.data?.containsKey("token") == true) {
                 return secret
             }
-            delay(1000.milliseconds)
+            @Suppress("ConvertLongToDuration")
+            delay(1000L)
         }
         return null
     }

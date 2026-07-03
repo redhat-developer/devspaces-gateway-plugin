@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.util
 
 import kotlinx.coroutines.*
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Monitors the system clipboard for OpenShift tokens and notifies listeners when detected.
@@ -115,7 +114,8 @@ class ClipboardTokenMonitor(
                     }
                 }
 
-                delay(pollingIntervalMs.milliseconds)
+                @Suppress("ConvertLongToDuration")
+                delay(pollingIntervalMs)
             }
         }
     }

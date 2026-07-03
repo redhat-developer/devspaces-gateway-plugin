@@ -33,6 +33,7 @@ class FileWatcher(
                 while (isActive) {
                     val key = watchService.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
                     if (key == null) {
+                        @Suppress("ConvertLongToDuration")
                         delay(100)
                         continue
                     }

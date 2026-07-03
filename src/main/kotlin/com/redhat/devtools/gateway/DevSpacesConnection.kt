@@ -36,8 +36,6 @@ import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     @Throws(Exception::class)
@@ -145,10 +143,11 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 finished.set(true)
             }
 
-            val success = withTimeoutOrNull(60.seconds) {
+            @Suppress("ConvertLongToDuration")
+            val success = withTimeoutOrNull(60_000L) {
                 while (!finished.get()) {
                     checkCancelled?.invoke()
-                    delay(200.milliseconds)
+                    delay(200L)
                 }
                 true
             } ?: false
