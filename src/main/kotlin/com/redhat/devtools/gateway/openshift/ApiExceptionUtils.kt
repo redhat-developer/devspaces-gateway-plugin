@@ -102,7 +102,7 @@ fun ApiException.isRetryable(): Boolean =
     code in setOf(429, 500, 502, 503, 504)
 
 fun ApiException.getStatus(): V1Status? {
-    return responseBody.takeIf { it.isNotEmpty() }
+    return responseBody?.takeIf { it.isNotEmpty() }
         ?.let {
             runCatching { Gson().fromJson(it, V1Status::class.java) }
         }

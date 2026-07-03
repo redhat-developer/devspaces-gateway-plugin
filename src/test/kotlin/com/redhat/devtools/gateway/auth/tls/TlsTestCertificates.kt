@@ -5,26 +5,18 @@
  * which is available at https://www.eclipse.org/legal/epl-2.0/
  *
  * SPDX-License-Identifier: EPL-2.0
+ *
+ * Contributors:
+ *   Red Hat, Inc. - initial API and implementation
  */
-package com.redhat.devtools.gateway.openshift
+package com.redhat.devtools.gateway.auth.tls
 
-import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
-import io.kubernetes.client.openapi.ApiClient
-import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.Test
-import java.io.ByteArrayInputStream
-import java.nio.charset.StandardCharsets
+import java.security.cert.X509Certificate
 
-/**
- * [ApiClientUtils.cloneForExec] must not re-read [ApiClient.sslCaCert]: the Kubernetes client keeps a
- * single-use stream; [ApiClient.setSslCaCert] triggers [applySslSettings] which consumes it.
- * Exec cloning forks OkHttp from the parent and must not call those setters again.
- */
-class ApiClientUtilsTest {
+object TlsTestCertificates {
 
-    /** Self-signed RSA fixture for this test only (*.invalid); not from any cluster or public CA. */
-    // notsecret
-    private val testCaPem = """
+    // notsecret — synthetic self-signed fixture (see PemUtilsTest)
+    val CA_PEM: String = """
         -----BEGIN CERTIFICATE-----
         MIIDlTCCAn2gAwIBAgIUJ/MyNwdZC5vGYJMyYa5m4letZrYwDQYJKoZIhvcNAQEL
         BQAwWjEnMCUGA1UEAwweZmFrZS11bml0LXRlc3QuZXhhbXBsZS5pbnZhbGlkMSIw
@@ -49,23 +41,8 @@ class ApiClientUtilsTest {
         -----END CERTIFICATE-----
     """.trimIndent()
 
-    @Test
-    fun `cloneForExec succeeds when sslCaCert stream is already consumed`() {
-        // given
-        val caStream = ByteArrayInputStream(testCaPem.toByteArray(StandardCharsets.UTF_8))
-        val client = ApiClient()
-        client.basePath = "https://127.0.0.1:6443"
-        client.setVerifyingSsl(true)
-        client.setSslCaCert(caStream)
+    fun caCertificate(): X509Certificate = PemUtils.parseCertificate(CA_PEM)
 
-        assertThat(caStream.read())
-            .describedAs("CA stream must be exhausted after first setSslCaCert / applySslSettings")
-            .isEqualTo(-1)
-        // when
-        val execClient = ApiClientUtils.cloneForExec(client)
-        // then
-        assertThat(execClient).isNotNull
-        assertThat(execClient.httpClient.sslSocketFactory)
-            .isSameAs(client.httpClient.sslSocketFactory)
-    }
+    fun caSourceFromData(): CertificateSource =
+        CertificateSource.fromData(PemUtils.toBase64(CA_PEM))
 }

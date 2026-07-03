@@ -76,7 +76,6 @@ class ClientCertificateAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
@@ -88,12 +87,10 @@ class ClientCertificateAuthenticationStrategy(
 
         val client = createValidatedApiClient(
             server,
-            certAuthority,
-            null,
-            clientCert,
-            clientKey,
-            tlsContext,
-            "Authentication failed: invalid client certificate or key."
+            clientCert = clientCert,
+            clientKey = clientKey,
+            tlsContext = tlsContext,
+            errorMessage = "Authentication failed: invalid client certificate or key."
         )
 
         saveKubeconfigWithCert(selectedCluster, clientCert, clientKey, indicator)

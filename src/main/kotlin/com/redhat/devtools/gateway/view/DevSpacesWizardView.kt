@@ -43,10 +43,13 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
                 triggerNextAction = { nextStep() },
             )
         )
-        steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNavigationButtons() }.also {
-            Disposer.register(this, it)
-        })
-
+        steps.add(
+            DevSpacesWorkspacesStepView(devSpacesContext)
+            { enableNavigationButtons() }
+                .also {
+                    Disposer.register(this, it)
+                }
+        )
         addToBottom(createButtons())
         applyStep(0)
     }

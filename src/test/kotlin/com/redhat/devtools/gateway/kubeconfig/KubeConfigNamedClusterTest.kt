@@ -71,6 +71,16 @@ class KubeConfigNamedClusterTest {
     }
 
     @Test
+    fun `#isSkipTlsVerify delegates to cluster isSkipTlsVerify`() {
+        val namedCluster = KubeConfigNamedCluster(
+            name = "Death-Star-Cluster",
+            cluster = KubeConfigCluster(server = "https://alderaan.starwars.galaxy", insecureSkipTlsVerify = true)
+        )
+
+        assertThat(namedCluster.isSkipTlsVerify()).isTrue()
+    }
+
+    @Test
     fun `#toMap returns map representation`() {
         // given
         val namedCluster = KubeConfigNamedCluster(

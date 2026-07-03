@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.view.steps.auth
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.ui.dsl.builder.panel
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -51,7 +52,6 @@ class RedHatSSOAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
@@ -59,41 +59,48 @@ class RedHatSSOAuthenticationStrategy(
         indicator.text = "Authenticating with Red Hat..."
 
         val login = sessionManager.startBrowserLogin(sslContext = tlsContext.sslContext)
-        withContext(Dispatchers.Main) {
+
+        ApplicationManager.getApplication().invokeLater {
             BrowserUtil.browse(login.authorizationUri)
         }
 
         indicator.text = "Waiting for you to complete login in your browser..."
         currentCoroutineContext().ensureActive()
 
-        coroutineScope {
-            launchCancelWatcher(indicator) { login.cancel() }
-
-            val ssoToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
-            indicator.text = "Obtaining OpenShift access..."
-
-            val sandboxAuth = SandboxClusterAuthProvider()
-            val finalToken = sandboxAuth.authenticate(ssoToken)
-
-            indicator.text = "Validating cluster access..."
-
+        supervisorScope {
+            val cancelJob = launchCancelWatcher(indicator) { login.cancel() }
             try {
-                val client = createValidatedApiClient(
-                    server, certAuthority,
-                    finalToken.accessToken,
-                    null,
-                    null,
-                    tlsContext,
-                    "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
-                )
+                val ssoToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
+                indicator.text = "Obtaining OpenShift access..."
 
-                // Do not save SSO tokens
-                if (finalToken.kind == AuthTokenKind.PIPELINE) {
-                    saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+                val sandboxAuth = SandboxClusterAuthProvider(tlsContext)
+                val finalToken = sandboxAuth.authenticate(ssoToken)
+
+                indicator.text = "Validating cluster access..."
+
+                try {
+                    val client = createValidatedApiClient(
+                        server,
+                        finalToken.accessToken,
+                        tlsContext = tlsContext,
+                        errorMessage = "Authentication failed: Red Hat SSO token is invalid or unauthorized for this cluster."
+                    )
+
+                    devSpacesContext.client = client
+
+                    // Only persist the long-lived pipeline service-account token.
+                    // Never save the Red Hat SSO/OIDC token — it is short-lived and not a cluster API credential.
+                    if (finalToken.kind == AuthTokenKind.PIPELINE) {
+                        saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
+                    }
+                } catch (e: AuthenticationException) {
+                    throw AuthenticationException(
+                        "${e.message}\n\nVerify that the cluster has Red Hat SSO enabled.",
+                        e
+                    )
                 }
-                devSpacesContext.client = client
-            } catch (e: AuthenticationException) {
-                throw AuthenticationException("${e.message}\n\nVerify that the cluster has Red Hat SSO enabled.", e)
+            } finally {
+                cancelJob.cancel()
             }
         }
     }

@@ -52,7 +52,6 @@ class OpenShiftOAuthAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
@@ -86,13 +85,10 @@ class OpenShiftOAuthAuthenticationStrategy(
 
             indicator.text = "Validating cluster access..."
             val client = createValidatedApiClient(
-                server,
-                certAuthority,
-                finalToken.accessToken,
-                null,
-                null,
-                tlsContext,
-                "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
+                server = server,
+                token = finalToken.accessToken,
+                tlsContext = tlsContext,
+                errorMessage = "Authentication failed: token received from OpenShift Authenticator is invalid or expired."
             )
 
             setTokenDisplay(finalToken.accessToken)
@@ -100,7 +96,7 @@ class OpenShiftOAuthAuthenticationStrategy(
             devSpacesContext.client = client
         } finally {
             cancelWatcher.cancel()
-        }
+       }
     }
 
     override fun isNextEnabled(): Boolean =
