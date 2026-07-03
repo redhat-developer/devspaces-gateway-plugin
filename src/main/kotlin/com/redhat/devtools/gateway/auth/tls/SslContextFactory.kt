@@ -36,7 +36,23 @@ object SslContextFactory {
             init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
         }
 
-        return TlsContext(sslContext, trustAll)
+        return TlsContext(sslContext, trustAll, isInsecure = true)
+    }
+
+    /** TLS context that trusts the JVM default certificate authorities. */
+    fun fromSystemTrust(): TlsContext {
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(null as java.security.KeyStore?)
+
+        val trustManager = tmf.trustManagers
+            .filterIsInstance<X509TrustManager>()
+            .first()
+
+        val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
+            init(null, tmf.trustManagers, SecureRandom())
+        }
+
+        return TlsContext(sslContext, trustManager, usesSystemTrust = true)
     }
 
     fun fromTrustedCerts(certs: List<X509Certificate>): TlsContext {
@@ -77,7 +93,7 @@ object SslContextFactory {
             )
         }
 
-        return TlsContext(sslContext, capturingTrustManager)
+        return TlsContext(sslContext, capturingTrustManager, isCapturingProbe = true)
     }
 
 }

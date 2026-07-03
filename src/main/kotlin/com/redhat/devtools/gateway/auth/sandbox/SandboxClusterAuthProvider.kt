@@ -14,35 +14,33 @@ package com.redhat.devtools.gateway.auth.sandbox
 import com.redhat.devtools.gateway.auth.code.AuthTokenKind
 import com.redhat.devtools.gateway.auth.code.SSOToken
 import com.redhat.devtools.gateway.auth.code.TokenModel
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import io.kubernetes.client.openapi.ApiClient
+import com.redhat.devtools.gateway.auth.tls.TlsContext
+import com.redhat.devtools.gateway.openshift.apiclient.TokenClientBuilder
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Secret
 import io.kubernetes.client.openapi.models.V1ServiceAccount
 import kotlinx.coroutines.*
-import java.util.concurrent.TimeUnit
+
 
 class SandboxClusterAuthProvider(
-    private val sandboxApi: SandboxApi = SandboxApi(
+    private val tlsContext: TlsContext
+) {
+    private val sandboxApi = SandboxApi(
         SandboxDefaults.SANDBOX_API_BASE_URL,
         SandboxDefaults.SANDBOX_API_TIMEOUT_MS
-    ),
-    private val clientFactory: OpenShiftClientFactory = OpenShiftClientFactory(KubeConfigUtils)
-) {
+    )
+
     suspend fun authenticate(ssoToken: SSOToken): TokenModel {
         val signup = sandboxApi.getSignUpStatus(ssoToken.idToken)
             ?: error("Sandbox not available")
-
-        if (!signup.status.ready) error("Sandbox not ready")
-
+        if (!signup.status.ready)
+            error("Sandbox not ready")
+        val proxyUrl = signup.proxyUrl
+            ?: error("Sandbox proxy URL not available")
         val username = signup.compliantUsername ?: signup.username
         val namespace = "$username-dev"
-
-        val client = clientFactory
-            .builder(signup.proxyUrl!!, ssoToken.idToken)
-            .readTimeout(30, TimeUnit.SECONDS)
+        val client = TokenClientBuilder(proxyUrl, ssoToken.idToken, tlsContext)
             .build()
 
         val coreV1Api = CoreV1Api(client)
@@ -69,7 +67,8 @@ class SandboxClusterAuthProvider(
             ?: api.createNamespacedServiceAccount(
                 namespace,
                 V1ServiceAccount().metadata(V1ObjectMeta().name("pipeline"))
-            ).execute() ?: error("Failed to create pipeline ServiceAccount")
+            ).execute()
+            ?: error("Failed to create pipeline ServiceAccount")
     }
 
     private suspend fun ensurePipelineTokenSecret(api: CoreV1Api, namespace: String, sa: V1ServiceAccount): V1Secret = withContext(Dispatchers.IO) {

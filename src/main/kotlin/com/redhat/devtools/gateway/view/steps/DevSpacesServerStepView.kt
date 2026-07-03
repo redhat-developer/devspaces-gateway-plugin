@@ -32,7 +32,7 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.*
-import com.redhat.devtools.gateway.auth.tls.ui.UiTlsDecisionAdapter
+import com.redhat.devtools.gateway.auth.tls.ui.UITlsDecisionAdapter
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
@@ -63,9 +63,6 @@ class DevSpacesServerStepView(
     private val triggerNextAction: (() -> Unit)? = null,
 ) : DevSpacesWizardStep {
 
-    private var connectInProgress = false
-    private var saveConfigForConnect = false
-
     private lateinit var allClusters: List<Cluster>
 
     /**
@@ -75,6 +72,13 @@ class DevSpacesServerStepView(
     private var currentContextClusterName: String? = null
 
     private val settings: ServerSettings = ServerSettings()
+
+    @Volatile
+    private var connectInProgress = false
+
+    /** Snapshot of [saveConfig] captured on the EDT when connect starts. */
+    @Volatile
+    private var saveConfigForConnect = false
 
     private lateinit var kubeconfigScope: CoroutineScope
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
@@ -243,6 +247,32 @@ class DevSpacesServerStepView(
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
+    private val sessionTrustStore = SessionTlsTrustStore()
+    private val persistentKeyStore = PersistentKeyStore(
+        path = Paths.get(
+            PathManager.getConfigPath(),
+            "devspaces",
+            "tls-truststore.p12"
+        ),
+        password = CharArray(0)
+    )
+
+    private val tlsTrustManager: TlsTrustManager = DefaultTlsTrustManager(
+        kubeConfigProvider = {
+            withContext(Dispatchers.IO) {
+                KubeConfigUtils.getAllConfigs(
+                    KubeConfigUtils.getAllConfigFiles()
+                )
+            }
+        },
+        kubeConfigWriter = { namedCluster, certs ->
+            withContext(Dispatchers.IO) {
+                KubeConfigTlsWriter.write(namedCluster, certs)
+            }
+        },
+        sessionTrustStore = sessionTrustStore,
+        persistentKeyStore = persistentKeyStore
+    )
 
     override fun onInit() {
         startKubeconfigMonitor()
@@ -410,27 +440,45 @@ class DevSpacesServerStepView(
         ) { indicator, onFinished ->
             try {
                 indicator.isIndeterminate = true
-                indicator.text = "Connecting to cluster..."
 
+                val certificateAuthority = resolveCertificateAuthority(certAuthorityData)
+                if (certificateAuthority != null) {
+                    thisLogger().info(
+                        "TLS trust: wizard Certificate Authority provided " +
+                            "(file=${certificateAuthority.isFilePath})"
+                    )
+                    devSpacesContext.cluster = selectedCluster
+                }
+
+                indicator.text = "Establishing secure connection..."
+                val tlsContext = runBlockingCancellable {
+                    resolveTlsContext(
+                        server,
+                        strategy.getAuthMethod(),
+                        certificateAuthority
+                    )
+                }
+
+                indicator.text = "Connecting to cluster..."
                 runBlockingCancellable {
-                    val tlsContext = resolveSslContext(server)
                     strategy.authenticate(
                         selectedCluster,
                         server,
-                        certAuthorityData,
                         tlsContext,
                         devSpacesContext,
                         indicator
                     )
-                    devSpacesContext.cluster = selectedCluster
                 }
 
                 settings.save(selectedCluster)
                 onFinished(true)
             } catch (e: ProcessCanceledException) {
+                startTokenMonitor()
+                startKubeconfigMonitor()
                 throw e
             } catch (e: Exception) {
                 handleConnectionFailure(server, e)
+                startTokenMonitor()
                 startKubeconfigMonitor()
                 onFinished(false)
             } finally {
@@ -492,38 +540,37 @@ class DevSpacesServerStepView(
     override fun isNextEnabled(): Boolean =
         currentStrategy?.isNextEnabled() ?: false
 
-    private val sessionTrustStore = SessionTlsTrustStore()
-    private val persistentKeyStore = PersistentKeyStore(
-        path = Paths.get(
-            PathManager.getConfigPath(),
-            "devspaces",
-            "tls-truststore.p12"
-        ),
-        password = CharArray(0)
-    )
-
-    private val tlsTrustManager = DefaultTlsTrustManager(
-        kubeConfigProvider = {
-            withContext(Dispatchers.IO) {
-                KubeConfigUtils.getAllConfigs(
-                    KubeConfigUtils.getAllConfigFiles()
+    private suspend fun resolveTlsContext(
+        serverUrl: String,
+        authMethod: AuthMethod,
+        certificateAuthority: CertificateSource?,
+    ): TlsContext {
+        val decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision = { info ->
+            UITlsDecisionAdapter.decide(info, component)
+        }
+        return when (authMethod) {
+            AuthMethod.OPENSHIFT,
+            AuthMethod.OPENSHIFT_CREDENTIALS,
+            AuthMethod.REDHAT_SSO ->
+                tlsTrustManager.createOpenShiftTlsContext(
+                    serverUrl,
+                    decisionHandler,
+                    certificateAuthority
                 )
-            }
-        },
-        kubeConfigWriter = { namedCluster, certs ->
-            withContext(Dispatchers.IO) {
-                KubeConfigTlsWriter.write(namedCluster, certs)
-            }
-        },
-        sessionTrustStore = sessionTrustStore,
-        persistentKeyStore = persistentKeyStore
-    )
+            else ->
+                tlsTrustManager.createTlsContext(
+                    serverUrl,
+                    decisionHandler,
+                    certificateAuthority,
+                    TlsEndpointKind.UNKNOWN
+                )
+        }
+    }
 
-    private suspend fun resolveSslContext(serverUrl: String): TlsContext {
-        return tlsTrustManager.ensureTrusted(
-            serverUrl = serverUrl,
-            decisionHandler = UiTlsDecisionAdapter::decide
-        )
+    private fun resolveCertificateAuthority(input: String?): CertificateSource? {
+        val source = CertificateSource.fromPathOrPem(input) ?: return null
+        source.validate()
+        return source
     }
 
     private suspend fun createTokenKubeConfigUpdate(cluster: Cluster, token: String, indicator: ProgressIndicator) {
@@ -643,6 +690,10 @@ class DevSpacesServerStepView(
         kubeconfigMonitor.stop()
         kubeconfigScope.cancel()
         kubeconfigMonitoringActive = false
+    }
+
+    private fun startTokenMonitor() {
+        findStrategy<TokenAuthenticationStrategy>()?.startMonitoring(component)
     }
 
     private class ServerSettings {

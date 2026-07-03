@@ -22,19 +22,11 @@ import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.AuthenticationRequest
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
-import kotlinx.coroutines.future.await
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
-import java.util.*
-import javax.net.ssl.SSLContext
+import java.util.Base64
 
 /**
  * RedHat SSO OAuth Flow.
@@ -83,7 +75,6 @@ class RedHatAuthCodeFlow(
 
     override suspend fun handleCallback(parameters: Parameters): SSOToken {
         val code = parameters["code"] ?: error("Missing 'code' parameter in callback")
-
         val form = encodeForm(
             "grant_type" to "authorization_code",
             "client_id" to clientId,
@@ -91,44 +82,23 @@ class RedHatAuthCodeFlow(
             "redirect_uri" to redirectUri.toString(),
             "code_verifier" to codeVerifier.value
         )
-
         val basicAuth = "Basic " + Base64.getEncoder()
             .encodeToString("$clientId:".toByteArray(StandardCharsets.UTF_8))
-
-        val request = HttpRequest.newBuilder()
-            .uri(providerMetadata.tokenEndpointURI)
-            .header("Authorization", basicAuth)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Accept", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(form))
-            .build()
-
-        val response = httpClient.sendAsync(
-            request,
-            HttpResponse.BodyHandlers.ofString()
-        ).await()
-
-        if (response.statusCode() !in 200..299) {
-            error("Token request failed: ${response.statusCode()}\n${response.body()}")
-        }
-
-        return createSSOToken(response.body())
+        val token = httpClient.sendPostRequest(
+            providerMetadata.tokenEndpointURI.toString(),
+            basicAuth,
+            form,
+            errorPrefix = "Token request failed"
+        )
+        return createSSOToken(token)
     }
 
-    private fun createSSOToken(response: String): SSOToken {
-        val json = Json { ignoreUnknownKeys = true }
-        val body = json.parseToJsonElement(response).jsonObject
-
-        val accessToken = body["access_token"]?.jsonPrimitive?.content
-            ?: error("Missing access_token in token response")
-
-        val idToken = body["id_token"]?.jsonPrimitive?.content.orEmpty()
-        val expiresInSeconds = body["expires_in"]?.jsonPrimitive?.longOrNull ?: 3600
-        val accountLabel = createAccountLabel(idToken)
-
+    private fun createSSOToken(token: AccessTokenResponseJson): SSOToken {
+        val expiresInSeconds = if (token.expiresIn > 0) token.expiresIn else 3600L
+        val accountLabel = createAccountLabel(token.idToken)
         return SSOToken(
-            accessToken = accessToken,
-            idToken = idToken,
+            accessToken = token.accessToken,
+            idToken = token.idToken,
             expiresAt = System.currentTimeMillis() + expiresInSeconds * 1000,
             accountLabel = accountLabel
         )

@@ -25,12 +25,7 @@ import com.redhat.devtools.gateway.openshift.toWorkspaceException
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.view.SelectClusterDialog
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
