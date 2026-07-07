@@ -252,7 +252,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: ApiException) {
                     if (e.isRetryable()) {
-                        delay(10001)
+                        delay(1000L)
                         continue
                     }
                     throw e
