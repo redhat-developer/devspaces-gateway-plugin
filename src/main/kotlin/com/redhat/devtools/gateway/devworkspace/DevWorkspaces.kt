@@ -137,6 +137,9 @@ class DevWorkspaces(private val client: ApiClient) {
         return DevWorkspace.from(dwObj)
     }
 
+    fun ApiException.isHttpForbidden(): Boolean = code == 403
+    fun ApiException.isRetryable(): Boolean = code in setOf(429, 500, 502, 503, 504)
+
     // Returns a map of DW Owner UID tp list of DW Templates
     private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
         try {
@@ -160,12 +163,10 @@ class DevWorkspaces(private val client: ApiClient) {
                     valueTransform = { it.second } // DevWorkspaceTemplate
                 )
         } catch (e: ApiException) {
-            thisLogger().info(e.message)
-
-            if (e.code == 403) {
+            if (e.isHttpForbidden()) {
                 return emptyMap()
             }
-
+            thisLogger().info(e.message)
             throw e
         }
     }
@@ -250,8 +251,8 @@ class DevWorkspaces(private val client: ApiClient) {
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: ApiException) {
-                    if (e.code in setOf(429, 500, 502, 503, 504)) {
-                        delay(1.seconds)
+                    if (e.isRetryable()) {
+                        delay(10001)
                         continue
                     }
                     throw e
