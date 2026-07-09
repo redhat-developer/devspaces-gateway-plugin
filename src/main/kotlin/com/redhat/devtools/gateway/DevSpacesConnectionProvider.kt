@@ -20,9 +20,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
 import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isUnauthorized
 import com.redhat.devtools.gateway.util.ProgressCountdown
@@ -76,7 +74,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         indicator.isIndeterminate = true
                         indicator.text = "Connecting to DevSpace..."
 
-                        val handle = doConnect(parameters, indicator)
+                        val handle = doConnect(parameters, ctx, indicator)
                         val thinClient = handle.clientHandle
                             ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
@@ -185,28 +183,19 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     @Throws(IllegalArgumentException::class)
     private fun doConnect(
         parameters: Map<String, String>,
+        ctx: DevSpacesContext,
         indicator: ProgressCountdown
     ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
         indicator.update(message = "Preparing connection environment…")
 
-        val dwNamespace = parameters[DW_NAMESPACE]
-        if (dwNamespace.isNullOrBlank()) {
-            thisLogger().error("Query parameter \"$DW_NAMESPACE\" is missing")
-            throw IllegalArgumentException("Query parameter \"$DW_NAMESPACE\" is missing")
-        }
+        val dwNamespace = validateDevWorkspaceNamespace(parameters[DW_NAMESPACE])
+        val dwName = validateDevWorkspaceName(parameters[DW_NAME])
 
-        val dwName = parameters[DW_NAME]
-        if (dwName.isNullOrBlank()) {
-            thisLogger().error("Query parameter \"$DW_NAME\" is missing")
-            throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
+        if (!ctx.hasClient()) {
+            throw IllegalStateException("Cluster dialog completed without authenticating")
         }
-        val ctx = DevSpacesContext()
-
-        indicator.update(message = "Initializing Kubernetes connection…")
-        val factory = OpenShiftClientFactory(KubeConfigUtils)
-        ctx.client = factory.create()
 
         indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
         ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
@@ -230,6 +219,22 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             thinClient,
             { createComponent(dwName) },
             dwName)
+    }
+
+    private fun validateDevWorkspaceName(dwName: String?): String {
+        if (dwName.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAME\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
+        }
+        return dwName
+    }
+
+    private fun validateDevWorkspaceNamespace(dwNamespace: String?): String {
+        if (dwNamespace.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAMESPACE\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAMESPACE\" is missing")
+        }
+        return dwNamespace
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {

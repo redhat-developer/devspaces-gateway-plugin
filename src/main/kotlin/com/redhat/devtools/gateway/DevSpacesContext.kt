@@ -19,6 +19,16 @@ class DevSpacesContext {
     lateinit var devWorkspace: DevWorkspace
     var activeWorkspaces = mutableSetOf<DevWorkspace>()
 
+    /**
+     * Returns `true` if this context has client
+     *
+     * @return true if this context has a client. False otherwise
+     */
+    fun hasClient(): Boolean {
+        return ::client.isInitialized
+                && client.basePath.isNotBlank()
+    }
+
     fun addWorkspace(workspace: DevWorkspace) {
         synchronized(activeWorkspaces) {
             if (activeWorkspaces.contains(workspace)) {
