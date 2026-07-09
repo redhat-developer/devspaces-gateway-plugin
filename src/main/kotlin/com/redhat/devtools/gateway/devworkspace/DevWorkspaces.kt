@@ -14,6 +14,8 @@ package com.redhat.devtools.gateway.devworkspace
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.openshift.Utils
+import com.redhat.devtools.gateway.openshift.isRetryable
+import com.redhat.devtools.gateway.openshift.shouldBeIgnored
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
@@ -135,9 +137,6 @@ class DevWorkspaces(private val client: ApiClient) {
         ).execute()
         return DevWorkspace.from(dwObj)
     }
-
-    fun ApiException.shouldBeIgnored(): Boolean = code == 403 || code == 404
-    fun ApiException.isRetryable(): Boolean = code in setOf(429, 500, 502, 503, 504)
 
     // Returns a map of DW Owner UID tp list of DW Templates
     private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
