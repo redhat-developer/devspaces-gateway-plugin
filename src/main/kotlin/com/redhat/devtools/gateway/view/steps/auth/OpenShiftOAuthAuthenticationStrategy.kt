@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.view.steps.auth
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.ui.dsl.builder.panel
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -63,16 +64,15 @@ class OpenShiftOAuthAuthenticationStrategy(
             selectedCluster.url,
             tlsContext.sslContext
         )
-        withContext(Dispatchers.Main) {
+        ApplicationManager.getApplication().invokeLater {
             BrowserUtil.browse(login.authorizationUri)
         }
 
         indicator.text = "Waiting for you to complete login in your browser..."
         currentCoroutineContext().ensureActive()
 
-        coroutineScope {
-            launchCancelWatcher(indicator) { login.cancel() }
-
+        val cancelWatcher = launchCancelWatcherOnDefault(indicator) { login.cancel() }
+        try {
             indicator.text = "Obtaining OpenShift access..."
             val osToken = login.awaitResult(AbstractAuthSessionManager.LOGIN_TIMEOUT_MS)
 
@@ -98,6 +98,8 @@ class OpenShiftOAuthAuthenticationStrategy(
             setTokenDisplay(finalToken.accessToken)
             saveKubeconfig(selectedCluster, finalToken.accessToken, indicator)
             devSpacesContext.client = client
+        } finally {
+            cancelWatcher.cancel()
         }
     }
 

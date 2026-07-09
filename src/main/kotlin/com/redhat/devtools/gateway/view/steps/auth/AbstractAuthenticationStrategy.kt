@@ -24,9 +24,11 @@ import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 /**
@@ -48,6 +50,24 @@ abstract class AbstractAuthenticationStrategy(
     override fun isDirty(saved: Cluster): Boolean = false
 
     /**
+     * Starts a cancellation watcher outside the caller's [CoroutineScope] so it does not
+     * block structured-concurrency completion during modal auth progress.
+     */
+    protected fun launchCancelWatcherOnDefault(
+        indicator: ProgressIndicator,
+        cancelAction: suspend () -> Unit
+    ): Job = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+        while (isActive) {
+            if (indicator.isCanceled) {
+                cancelAction()
+                return@launch
+            }
+            @Suppress("ConvertLongToDuration")
+            delay(500L)
+        }
+    }
+
+    /**
      * Starts a cancellation watcher that polls the progress indicator
      * and cancels the given action when the user cancels the operation.
      */
@@ -66,10 +86,11 @@ abstract class AbstractAuthenticationStrategy(
     }
 
     /**
-     * Creates a validated API client.
+     * Creates a validated API client on a worker thread.
+     * Must not block the [runBlocking] event-loop thread used during modal progress.
      */
     @Throws(AuthenticationException::class)
-    protected fun createValidatedApiClient(
+    protected suspend fun createValidatedApiClient(
         server: String,
         certAuthority: String? = null,
         token: String? = null,
@@ -77,29 +98,31 @@ abstract class AbstractAuthenticationStrategy(
         clientKey: String? = null,
         tlsContext: TlsContext,
         errorMessage: String? = null
-    ): ApiClient = try {
-        val caSource = CertificateSource.fromPathOrPem(certAuthority)
-        caSource?.validate()
-        val certSource = CertificateSource.fromPathOrPem(clientCert)
-        certSource?.validate()
-        val keySource = CertificateSource.fromPathOrPem(clientKey)
-        keySource?.validate()
+    ): ApiClient = withContext(Dispatchers.IO) {
+        try {
+            val caSource = CertificateSource.fromPathOrPem(certAuthority)
+            caSource?.validate()
+            val certSource = CertificateSource.fromPathOrPem(clientCert)
+            certSource?.validate()
+            val keySource = CertificateSource.fromPathOrPem(clientKey)
+            keySource?.validate()
 
-        OpenShiftClientFactory(KubeConfigUtils)
-            .create(
-                server,
-                caSource,
-                token?.toCharArray(),
-                certSource,
-                keySource,
-                tlsContext
-            )
-            .also { client ->
-                require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
-            }
-    } catch (e: ApiException) {
-        throw AuthenticationException(e.codeToReasonPhrase(), e)
-    } catch (e: Exception) {
-        throw AuthenticationException(e.message ?: "Authentication failed", e)
+            OpenShiftClientFactory(KubeConfigUtils)
+                .create(
+                    server,
+                    caSource,
+                    token?.toCharArray(),
+                    certSource,
+                    keySource,
+                    tlsContext
+                )
+                .also { client ->
+                    require(Projects(client).isAuthenticated()) { errorMessage ?: "Not authenticated" }
+                }
+        } catch (e: ApiException) {
+            throw AuthenticationException(e.codeToReasonPhrase(), e)
+        } catch (e: Exception) {
+            throw AuthenticationException(e.message ?: "Authentication failed", e)
+        }
     }
 }
