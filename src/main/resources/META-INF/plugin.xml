@@ -2,6 +2,7 @@
 <idea-plugin>
     <id>com.redhat.devtools.gateway</id>
     <name>OpenShift Dev Spaces</name>
+    <version>${pluginVersion}</version>
     <vendor email="developers@redhat.com" url="https://www.redhat.com">Red-Hat</vendor>
 
     <depends>com.intellij.modules.platform</depends>
