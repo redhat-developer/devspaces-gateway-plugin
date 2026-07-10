@@ -29,7 +29,6 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.*
 import com.redhat.devtools.gateway.auth.tls.ui.UiTlsDecisionAdapter
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
@@ -85,10 +84,6 @@ class DevSpacesServerStepView(
     private val saveConfig: Boolean
         get() = saveConfigCheckbox.isEnabled && saveConfigCheckbox.isSelected
 
-    private val sessionManager =
-        ApplicationManager.getApplication()
-            .getService(RedHatAuthSessionManager::class.java)
-
     private var tfCertAuthority = JBTextField()
         .apply {
             document.addDocumentListener(onFieldChanged())
@@ -141,11 +136,6 @@ class DevSpacesServerStepView(
                 ::onFieldChanged,
                 ::createEnterKeyListener,
                 setTokenDisplay
-            ),
-            RedHatSSOAuthenticationStrategy(
-                tfServer,
-                ::saveKubeconfig,
-                sessionManager
             )
         )
     }
@@ -514,21 +504,22 @@ class DevSpacesServerStepView(
     private suspend fun saveKubeconfig(cluster: Cluster, token: String, indicator: ProgressIndicator) {
         if (!saveConfig || token.isBlank()) return
 
-        try {
-            indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+        indicator.text = "Updating Kube config..."
+        val clusterName = cluster.name.trim()
+        val clusterUrl = cluster.url.trim()
+        val authToken = token.trim()
+
+        // Kubeconfig persistence is optional; do not block the connection flow on local file I/O.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
                 KubeConfigUpdate
                     .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        token.trim())
+                        clusterName,
+                        clusterUrl,
+                        authToken)
                     .apply()
-            }
-
-        } catch (e: Exception) {
-            thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
-                Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
+            } catch (e: Exception) {
+                thisLogger().warn(e.message ?: "Could not save configuration file", e)
             }
         }
     }
@@ -539,21 +530,24 @@ class DevSpacesServerStepView(
             || clientKeyPem.isBlank())
             return
 
-        try {
-            indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
+        indicator.text = "Updating Kube config..."
+        val clusterName = cluster.name.trim()
+        val clusterUrl = cluster.url.trim()
+        val clientCert = clientCertPem.trim()
+        val clientKey = clientKeyPem.trim()
+
+        // Kubeconfig persistence is optional; do not block the connection flow on local file I/O.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
                 KubeConfigUpdate
                     .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        clientCertPem.trim(),
-                        clientKeyPem.trim())
+                        clusterName,
+                        clusterUrl,
+                        clientCert,
+                        clientKey)
                     .apply()
-            }
-        } catch (e: Exception) {
-            thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
-                Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
+            } catch (e: Exception) {
+                thisLogger().warn(e.message ?: "Could not save configuration file", e)
             }
         }
     }
