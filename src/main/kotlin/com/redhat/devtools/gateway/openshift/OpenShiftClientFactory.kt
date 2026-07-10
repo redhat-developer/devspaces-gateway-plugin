@@ -122,6 +122,7 @@ class OpenShiftClientFactory(private val configUtils: KubeConfigUtils) {
         val sslContext = createSSLContext(trustManager, usingClientCert, clientCert, clientKey)
         client.httpClient = client.httpClient.newBuilder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .connectTimeout(15, TimeUnit.SECONDS)
             .build()
 
         return client
