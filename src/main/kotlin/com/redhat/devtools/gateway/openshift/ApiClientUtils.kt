@@ -11,14 +11,11 @@
  */
 package com.redhat.devtools.gateway.openshift
 
-import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import io.kubernetes.client.openapi.ApiClient
-import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.auth.ApiKeyAuth
 import io.kubernetes.client.openapi.auth.HttpBasicAuth
 import io.kubernetes.client.openapi.auth.HttpBearerAuth
-import io.kubernetes.client.openapi.models.V1Status
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -127,9 +124,3 @@ object ApiClientUtils {
     }
 
 }
-
-fun ApiException.shouldBeIgnored(): Boolean =
-    code == 403 || code == 404
-fun ApiException.isRetryable(): Boolean =
-    code in setOf(429, 500, 502, 503, 504)
-

@@ -420,6 +420,7 @@ class DevSpacesServerStepView(
                         devSpacesContext,
                         indicator
                     )
+                    devSpacesContext.cluster = selectedCluster
                 }
 
                 settings.save(selectedCluster)

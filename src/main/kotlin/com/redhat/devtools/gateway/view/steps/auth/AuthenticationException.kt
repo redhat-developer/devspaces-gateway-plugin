@@ -14,4 +14,4 @@ package com.redhat.devtools.gateway.view.steps.auth
 /**
  * Exception thrown when authentication fails.
  */
-class AuthenticationException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class AuthenticationException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

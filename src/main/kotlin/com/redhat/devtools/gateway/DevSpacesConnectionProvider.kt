@@ -21,13 +21,9 @@ import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.isNotFound
-import com.redhat.devtools.gateway.openshift.isUnauthorized
+import com.redhat.devtools.gateway.openshift.toWorkspaceException
 import com.redhat.devtools.gateway.util.ProgressCountdown
-import com.redhat.devtools.gateway.util.isCancellationException
-import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.SelectClusterDialog
-import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -98,29 +94,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                                 cont.resumeWith(Result.failure(error))
                             }
                         }
-                    } catch (e: ApiException) {
-                        indicator.text = "Connection failed"
-                        runDelayed(2000, { if (indicator.isRunning) indicator.stop() })
-                        if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
-                            Dialogs.error(
-                                e.messageWithoutPrefix() ?: "Could not connect to workspace.",
-                                "Connection Error"
-                            )
-                        }
-
-                        if (cont.isActive) cont.resume(null)
                     } catch (e: Exception) {
-                        if (e.isCancellationException() || indicator.isCanceled) {
-                            indicator.text2 = "Error: ${e.message}"
-                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
-                        } else {
-                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
-                            Dialogs.error(
-                                e.message ?: "Could not connect to workspace.",
-                                "Connection Error"
-                            )
-                        }
-                        cont.resume(null)
+                        DevSpacesConnectionProviderErrors.showDialog(e, ctx, indicator)
+                        runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
+                        if (cont.isActive) cont.resume(null)
                     } finally {
                         indicator.dispose()
                     }
@@ -198,20 +175,10 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
 
         indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
-        ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
+        ctx.devWorkspace = fetchDevWorkspace(ctx, dwNamespace, dwName)
 
         indicator.update(message = "Connecting to workspace IDE…")
-        val thinClient = runBlocking(Dispatchers.IO) {
-            DevSpacesConnection(ctx)
-                .connect({}, {}, {},
-                    onProgress = { value ->
-                        indicator.update(value.title, value.message, value.countdownSeconds)
-                    },
-                    checkCancelled = {
-                        if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
-                    }
-                )
-        }
+        val thinClient = connectToWorkspace(ctx, indicator)
 
         indicator.update(message = "Connection established successfully.")
         return DevSpacesConnectionHandle(
@@ -259,31 +226,36 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
     }
 
-    private fun handleUnauthorizedError(err: ApiException): Boolean {
-        if (!err.isUnauthorized()) return false
-
-        Dialogs.error(
-            "Your session has expired.\n" +
-                    "Please authenticate again to continue.\n\n" +
-                    "If you are using token-based authentication, update your token in the kubeconfig file.",
-            "Authentication Required"
-        )
-        return true
+    private fun fetchDevWorkspace(
+        ctx: DevSpacesContext,
+        namespace: String,
+        name: String,
+    ) = try {
+        DevWorkspaces(ctx.client).get(namespace, name)
+    } catch (e: ApiException) {
+        throw e.toWorkspaceException(namespace, name, ctx.client.basePath) ?: e
     }
 
-    private fun handleNotFoundError(err: ApiException): Boolean {
-        if (!err.isNotFound()) return false
-
-        val message = """
-            Workspace support not found.
-            You're likely connected to a cluster that doesn't have the DevWorkspace Operator installed, or the specified workspace doesn't exist.
-        
-            Please verify your Kubernetes context, namespace, and that the DevWorkspace Operator is installed and running.
-        """.trimIndent()
-
-        Dialogs.error(message, "Resource Not Found")
-        return true
-    }
+    private fun connectToWorkspace(ctx: DevSpacesContext, indicator: ProgressCountdown) =
+        runBlocking(Dispatchers.IO) {
+            try {
+                DevSpacesConnection(ctx).connect(
+                    {}, {}, {},
+                    onProgress = { value ->
+                        indicator.update(value.title, value.message, value.countdownSeconds)
+                    },
+                    checkCancelled = {
+                        if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
+                    }
+                )
+            } catch (e: ApiException) {
+                throw e.toWorkspaceException(
+                    namespace = ctx.devWorkspace.namespace,
+                    name = ctx.devWorkspace.name,
+                    clusterUrl = ctx.client.basePath,
+                ) ?: e
+            }
+        }
 
     private fun runDelayed(delay: Int, runnable: () -> Unit) {
         Timer(delay) {
