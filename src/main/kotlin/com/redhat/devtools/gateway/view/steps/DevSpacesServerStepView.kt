@@ -186,6 +186,7 @@ class DevSpacesServerStepView(
             currentStrategy = authStrategies.getOrNull(selectedIndex)
             enableNextButton?.invoke()
             enableSaveConfigCheckbox()
+            settings.saveAuthTab(selectedIndex)
         }
     }
 
@@ -375,6 +376,7 @@ class DevSpacesServerStepView(
                         (previouslySelected)?.name ?: kubeConfigCurrentCluster,
                         updatedClusters
                     )
+                    setSelectedAuthTab()
                     enableSaveConfigCheckbox()
                 },
                 ModalityState.stateForComponent(component)
@@ -611,6 +613,13 @@ class DevSpacesServerStepView(
         findStrategy<OpenShiftCredentialsAuthenticationStrategy>()?.applyFromCluster(toSelect)
     }
 
+    private fun setSelectedAuthTab() {
+        val savedTabIndex = settings.loadAuthTab()
+        if (savedTabIndex in 0 until authTabs.tabCount) {
+            authTabs.selectedIndex = savedTabIndex
+        }
+    }
+
     private fun startKubeconfigMonitor() {
         if (kubeconfigMonitoringActive) return
 
@@ -647,6 +656,14 @@ class DevSpacesServerStepView(
         fun save(toSave: Cluster?) {
             val cluster = toSave ?: return
             service.state.server = cluster.url
+        }
+
+        fun loadAuthTab(): Int {
+            return service.state.authTabIndex
+        }
+
+        fun saveAuthTab(tabIndex: Int) {
+            service.state.authTabIndex = tabIndex
         }
     }
 }
