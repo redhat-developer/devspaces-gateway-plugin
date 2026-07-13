@@ -17,6 +17,7 @@ import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.OAUTH_UR
 import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.createManager
 import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.kubeConfigWithCa
 import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.kubeConfigWithInsecureSkip
+import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.fixtureCertSerials
 import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.simulatingTlsProbe
 import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.successTlsProbe
 import kotlinx.coroutines.runBlocking
@@ -214,6 +215,23 @@ class DefaultTlsTrustManagerTrustTest {
     }
 
     @Test
+    fun `#mergeTrustedContext preserves JVM trust roots alongside custom certificates`() {
+        runBlocking {
+            val manager = createManager()
+
+            val tlsContext = manager.mergeTrustedContext(
+                listOf(API_SERVER_URL),
+                TlsTestCertificates.caSourceFromData(),
+            )
+
+            val trustManager = tlsContext.trustManager as X509TrustManager
+            assertThat(trustManager.acceptedIssuers.size).isGreaterThan(1)
+            assertThat(fixtureCertSerials(trustManager, serverCert))
+                .containsExactly(serverCert.serialNumber)
+        }
+    }
+
+    @Test
     fun `#mergeTrustedContext uses session trust when certificates already accepted`() {
         runBlocking {
             val sessionStore = SessionTlsTrustStore().apply {
@@ -226,11 +244,8 @@ class DefaultTlsTrustManagerTrustTest {
                 TlsTestCertificates.caSourceFromData(),
             )
 
-            val trustedSerials = (tlsContext.trustManager as X509TrustManager)
-                .acceptedIssuers
-                .map { it.serialNumber }
-
-            assertThat(trustedSerials).containsExactly(serverCert.serialNumber)
+            assertThat(fixtureCertSerials(tlsContext.trustManager as X509TrustManager, serverCert))
+                .containsExactly(serverCert.serialNumber)
         }
     }
 
@@ -248,11 +263,8 @@ class DefaultTlsTrustManagerTrustTest {
                 certificateAuthority = null,
             )
 
-            val trustedSerials = (tlsContext.trustManager as X509TrustManager)
-                .acceptedIssuers
-                .map { it.serialNumber }
-
-            assertThat(trustedSerials).containsExactly(serverCert.serialNumber)
+            assertThat(fixtureCertSerials(tlsContext.trustManager as X509TrustManager, serverCert))
+                .containsExactly(serverCert.serialNumber)
         }
     }
 
@@ -273,11 +285,8 @@ class DefaultTlsTrustManagerTrustTest {
                 TlsTestCertificates.caSourceFromData(),
             )
 
-            val trustedSerials = (tlsContext.trustManager as X509TrustManager)
-                .acceptedIssuers
-                .map { it.serialNumber }
-
-            assertThat(trustedSerials).containsExactly(kubeCa.serialNumber)
+            assertThat(fixtureCertSerials(tlsContext.trustManager as X509TrustManager, kubeCa))
+                .containsExactly(kubeCa.serialNumber)
         }
     }
 }

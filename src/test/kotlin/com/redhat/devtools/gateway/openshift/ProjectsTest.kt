@@ -13,12 +13,14 @@ package com.redhat.devtools.gateway.openshift
 
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
-import io.kubernetes.client.openapi.apis.CoreV1Api
+import io.kubernetes.client.openapi.apis.AuthorizationV1Api
+import io.kubernetes.client.openapi.models.V1SelfSubjectAccessReview
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.unmockkConstructor
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -32,76 +34,60 @@ class ProjectsTest {
     fun beforeEach() {
         client = mockk(relaxed = true)
         projects = Projects(client)
-        mockkConstructor(CoreV1Api::class)
+        mockkConstructor(AuthorizationV1Api::class)
     }
 
     @AfterEach
     fun afterEach() {
-        unmockkConstructor(CoreV1Api::class)
+        unmockkConstructor(AuthorizationV1Api::class)
     }
 
     @Test
     fun `#isAuthenticated returns true when API call succeeds`() {
-        // given
-        every {
-            anyConstructed<CoreV1Api>().listNamespace()
-        } returns mockk {
-            every { execute() } returns mockk()
+        stubSelfSubjectAccessReview {
+            mockk<V1SelfSubjectAccessReview>(relaxed = true)
         }
 
-        // when
-        val result = projects.isAuthenticated()
-
-        // then
-        assertThat(result).isTrue()
+        assertThat(projects.isAuthenticated()).isTrue()
     }
 
     @Test
     fun `#isAuthenticated returns false when API returns 401`() {
-        // given
-        every {
-            anyConstructed<CoreV1Api>().listNamespace()
-        } returns mockk {
-            every { execute() } throws ApiException(401, "Unauthorized")
-        }
+        stubSelfSubjectAccessReviewFailure(ApiException(401, "Unauthorized"))
 
-        // when
-        val result = projects.isAuthenticated()
-
-        // then
-        assertThat(result).isFalse()
+        assertThat(projects.isAuthenticated()).isFalse()
     }
 
     @Test
     fun `#isAuthenticated returns true when API returns 403`() {
-        // given
-        every {
-            anyConstructed<CoreV1Api>().listNamespace()
-        } returns mockk {
-            every { execute() } throws ApiException(403, "Forbidden")
-        }
+        stubSelfSubjectAccessReviewFailure(ApiException(403, "Forbidden"))
 
-        // when
-        val result = projects.isAuthenticated()
-
-        // then
-        assertThat(result).isTrue()
+        assertThat(projects.isAuthenticated()).isTrue()
     }
 
     @Test
     fun `#isAuthenticated rethrows ApiException for other error codes`() {
-        // given
-        every {
-            anyConstructed<CoreV1Api>().listNamespace()
-        } returns mockk {
-            every { execute() } throws ApiException(500, "Internal Server Error")
-        }
+        stubSelfSubjectAccessReviewFailure(ApiException(500, "Internal Server Error"))
 
-        // when/then
-        org.assertj.core.api.Assertions.assertThatThrownBy {
-            projects.isAuthenticated()
-        }.isInstanceOf(ApiException::class.java)
+        assertThatThrownBy { projects.isAuthenticated() }
+            .isInstanceOf(ApiException::class.java)
             .extracting("code")
             .isEqualTo(500)
+    }
+
+    private fun stubSelfSubjectAccessReview(onExecute: () -> V1SelfSubjectAccessReview) {
+        every {
+            anyConstructed<AuthorizationV1Api>().createSelfSubjectAccessReview(any())
+        } returns mockk {
+            every { execute() } answers { onExecute() }
+        }
+    }
+
+    private fun stubSelfSubjectAccessReviewFailure(exception: ApiException) {
+        every {
+            anyConstructed<AuthorizationV1Api>().createSelfSubjectAccessReview(any())
+        } returns mockk {
+            every { execute() } throws exception
+        }
     }
 }
