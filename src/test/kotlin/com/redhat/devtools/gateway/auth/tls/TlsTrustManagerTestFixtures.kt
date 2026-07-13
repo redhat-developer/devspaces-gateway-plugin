@@ -13,11 +13,13 @@ package com.redhat.devtools.gateway.auth.tls
 
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigTestHelpers
 import io.kubernetes.client.util.KubeConfig
+import java.math.BigInteger
 import java.net.URI
 import java.nio.file.Files
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.X509TrustManager
 
 object TlsTrustManagerTestFixtures {
 
@@ -73,6 +75,16 @@ object TlsTrustManagerTestFixtures {
             tlsProbe = tlsProbe,
             oauthDiscovery = oauthDiscovery,
         )
+
+    fun fixtureCertSerials(
+        trustManager: X509TrustManager,
+        vararg fixtureCerts: X509Certificate,
+    ): List<BigInteger> {
+        val fixtureSerials = fixtureCerts.map { it.serialNumber }.toSet()
+        return trustManager.acceptedIssuers
+            .map { it.serialNumber }
+            .filter { it in fixtureSerials }
+    }
 
     fun successTlsProbe(): (URI, TlsContext) -> Unit = { _, _ -> }
 
