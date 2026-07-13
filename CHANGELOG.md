@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-07-13
+
+### ✨ New Features and Enhancements
+
+- feature: replaced password checkbox by inline icon (#23847) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/306
+- feature: dont confirm connecting to ws without proj (#23867) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/312
+
+### 🐛 Bug Fixes
+
+- Update CODEOWNERS by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/308
+- fix: enable/disable 'Save Config' whenever auth means are changed (#23780) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/305
+- fix: dont loose selection when opening&closing cluster list (#23869) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/313
+- Add download link on PRs for easier testing by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/315
+- fix: allow OAuth and RHSSO auth to be cancelled (#23844) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/311
+- fix: removed duplicate code in KubeConfigUpdate. Added tests by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/310
+- Skip the `PR comment` job for fork PRs by @azatsarynnyy in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/321
+- refactor: centralize kubeconfig authentication handling by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/322
+- Watcher exception resolved by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/318
+- fix: avoid NoSuchMethodError on older stdlib: dont use Duration, fix okhttp to 4.12 (crw-11673) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/328
+
+### ⬆️ Dependency Updates
+
+- build(deps): Bump actions/checkout from 6 to 7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/319
+- build(deps): Bump actions/cache from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/320
+- build(deps): Bump codecov/codecov-action from 6 to 7 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/316
+- build(deps): Bump org.jetbrains.kotlinx:kotlinx-serialization-json from 1.6.3 to 1.11.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/300
+- build(deps): Bump io.ktor:ktor-server-content-negotiation-jvm from 2.3.7 to 3.4.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/301
+- build(deps): Bump com.nimbusds:nimbus-jose-jwt from 9.37 to 10.9 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/299
+- build(deps): Bump plugin.serialization from 1.9.22 to 2.3.21 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/302
+
 ## [0.0.16] - 2026-05-18
 
 ### ✨ New Features and Enhancements
@@ -265,7 +295,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...HEAD
+[0.0.17]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...0.0.17
 [0.0.16]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.15...0.0.16
 [0.0.15]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.14...0.0.15
 [0.0.14]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.13...0.0.14
