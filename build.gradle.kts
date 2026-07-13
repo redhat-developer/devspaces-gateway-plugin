@@ -75,7 +75,7 @@ dependencies {
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
 
     // RedHat Auth dependencies
-    implementation("com.nimbusds:oauth2-oidc-sdk:11.15")  // Core OIDC/OAuth2
+    implementation("com.nimbusds:oauth2-oidc-sdk:11.38")  // Core OIDC/OAuth2
     implementation("com.nimbusds:nimbus-jose-jwt:10.9")   // JWT processing
 
     // JSON serialization
