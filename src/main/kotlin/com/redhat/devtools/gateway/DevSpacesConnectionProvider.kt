@@ -69,6 +69,14 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         val thinClient = handle.clientHandle
                             ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
+                        if (thinClient.clientPresent) {
+                            indicator.text = "Workspace IDE has started successfully"
+                            indicator.text2 = "Opening project window…"
+                            runDelayed(1000) { if (indicator.isRunning) indicator.stop() }
+                            cont.resume(handle)
+                            return@runProcessWithProgressSynchronously
+                        }
+
                         indicator.text = "Waiting for workspace IDE to start..."
 
                         val ready = CompletableDeferred<GatewayConnectionHandle?>()
@@ -87,6 +95,17 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                                 cont.resume(ready.getCompleted())
                             } else {
                                 cont.resumeWith(Result.failure(error))
+                            }
+                        }
+
+                        runBlocking {
+                            withTimeoutOrNull(60_000L) { ready.await() } ?: run {
+                                if (ready.isActive) {
+                                    indicator.text = "Workspace IDE did not report readiness in time."
+                                    ready.completeExceptionally(
+                                        RuntimeException("Workspace IDE did not report readiness in time.")
+                                    )
+                                }
                             }
                         }
                     } catch (e: Exception) {
