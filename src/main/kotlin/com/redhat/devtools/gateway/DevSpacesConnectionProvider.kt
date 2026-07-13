@@ -246,7 +246,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                     },
                     checkCancelled = {
                         if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
-                    }
+                    },
+                    modalityState = indicator.modalityState
                 )
             } catch (e: ApiException) {
                 throw e.toWorkspaceException(

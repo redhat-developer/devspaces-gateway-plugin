@@ -38,6 +38,18 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     private val logger = logger<DevWorkspacePods>()
 
+    // Bounded by OkHttp's default 10s connect/read/write timeouts on the shared client
+    fun isPodRunning(pod: V1Pod): Boolean {
+        val name = pod.metadata?.name ?: return false
+        val namespace = pod.metadata?.namespace ?: return false
+        return try {
+            val current = CoreV1Api(client).readNamespacedPod(name, namespace).execute()
+            current.status?.phase == "Running"
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
     suspend fun exec(
@@ -79,16 +91,34 @@ class DevWorkspacePods(private val client: ApiClient) {
                     stdoutJob = scope.launch { readStream(io.stdout, stdout, checkCancelled) }
                     stderrJob = scope.launch { readStream(io.stderr, stderr, checkCancelled) }
 
+                    if (checkCancelled != null) {
+                        scope.launch {
+                            try {
+                                while (isActive) {
+                                    checkCancelled.invoke()
+                                    delay(200)
+                                }
+                            } catch (_: Throwable) {
+                                runCatching { io.stdout.close() }
+                                runCatching { io.stderr.close() }
+                            }
+                        }
+                    }
+
                     scope.launch {
                         try {
                             listOfNotNull(stdoutJob, stderrJob).joinAll()
+                            checkCancelled?.invoke()
                             closed.await()
 
                             checkCancelled?.invoke()
-                            cont.resume(stdout.toString())
+                            if (cont.isActive) cont.resume(stdout.toString())
                         } catch (e: Throwable) {
                             if (e.isCancellationException()) cont.cancel(e)
                             else if (cont.isActive) cont.resumeWithException(e)
+                        } finally {
+                            scope.cancel()
+                            shutdownExecClient(execClientApi)
                         }
                     }
                 },
@@ -97,6 +127,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 },
                 onError = { err, _ ->
                     closed.complete(Unit)
+                    shutdownExecClient(execClientApi)
                     cont.resumeWithException(err)
                 },
                 timeoutMs = timeout * 1000,
@@ -111,10 +142,17 @@ class DevWorkspacePods(private val client: ApiClient) {
                     execHandle.future.cancel(true)
                 } catch (_: Throwable) {}
                 scope.cancel()
+                shutdownExecClient(execClientApi)
             }
         } catch (e: Exception) {
+            shutdownExecClient(execClientApi)
             if (cont.isActive) cont.resumeWithException(e)
         }
+    }
+
+    private fun shutdownExecClient(client: ApiClient) {
+        runCatching { client.httpClient.dispatcher.executorService.shutdownNow() }
+        runCatching { client.httpClient.connectionPool.evictAll() }
     }
 
     private fun readStream(
@@ -122,11 +160,15 @@ class DevWorkspacePods(private val client: ApiClient) {
         output: StringBuilder,
         checkCancelled: (() -> Unit)?
     ) {
-        while (true) {
-            checkCancelled?.invoke()
-            val b = input.read()
-            if (b == -1) break
-            output.append(b.toChar())
+        try {
+            while (true) {
+                checkCancelled?.invoke()
+                val b = input.read()
+                if (b == -1) break
+                output.append(b.toChar())
+            }
+        } catch (_: IOException) {
+            // Stream was closed (possibly due to cancellation)
         }
     }
 

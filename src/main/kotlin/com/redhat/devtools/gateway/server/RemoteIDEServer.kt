@@ -45,6 +45,10 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     suspend fun getStatus(checkCancelled: (() -> Unit)? = null): RemoteIDEServerStatus =
         withContext(Dispatchers.IO) {
             checkCancelled?.invoke()
+            if (!DevWorkspacePods(devSpacesContext.client).isPodRunning(pod)) {
+                return@withContext RemoteIDEServerStatus.empty()
+            }
+            checkCancelled?.invoke()
             val output = DevWorkspacePods(devSpacesContext.client).exec(
                 pod = pod,
                 container = container.name,
