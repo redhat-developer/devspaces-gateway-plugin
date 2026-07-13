@@ -71,7 +71,7 @@ dependencies {
 
     // 24.x aligns with OkHttp 4.12 (Java CacheControl); 25+ pulls OkHttp 5.x which needs stdlib 2.2+.
     implementation("io.kubernetes:client-java:24.0.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.21.3")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
 
     // RedHat Auth dependencies
