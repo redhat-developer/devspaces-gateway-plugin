@@ -11,7 +11,9 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import io.kubernetes.client.PortForward
+import io.kubernetes.client.custom.IOTrio
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
@@ -27,14 +29,11 @@ import io.mockk.mockkObject
 import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.unmockkConstructor
-import io.mockk.unmockkObject
 import io.mockk.verify
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
@@ -47,7 +46,6 @@ import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
 class DevWorkspacePodsTest {
@@ -574,8 +572,9 @@ class DevWorkspacePodsTest {
                 any(), any(), any(), any(), any(), any(), any(), any(), any()
             )
         } answers {
-            val onOpen = it.invocation.args[4] as java.util.function.Consumer<io.kubernetes.client.custom.IOTrio>
-            val io = io.kubernetes.client.custom.IOTrio()
+            @Suppress("UNCHECKED_CAST")
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
             io.stdout = fakeProcess.inputStream
             io.stderr = fakeProcess.errorStream
             io.stdin = fakeProcess.outputStream
@@ -605,6 +604,7 @@ class DevWorkspacePodsTest {
                 checkCancelled = { throw CancellationException("user cancelled") }
             )
         }
+        @Suppress("ConvertLongToDuration")
         delay(100) // let exec start
         job.cancel()
         job.join()
@@ -671,8 +671,9 @@ class DevWorkspacePodsTest {
                 any(), any(), any(), any(), any(), any(), any(), any(), any()
             )
         } answers {
-            val onOpen = it.invocation.args[4] as java.util.function.Consumer<io.kubernetes.client.custom.IOTrio>
-            val io = io.kubernetes.client.custom.IOTrio()
+            @Suppress("UNCHECKED_CAST")
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
             io.stdout = fakeProcess.inputStream
             io.stderr = fakeProcess.errorStream
             io.stdin = fakeProcess.outputStream
@@ -701,6 +702,7 @@ class DevWorkspacePodsTest {
                 timeout = 60
             )
         }
+        @Suppress("ConvertLongToDuration")
         delay(100)
         job.cancel()
         job.join()
