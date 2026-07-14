@@ -18,6 +18,7 @@ import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodSpec
 import io.mockk.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -195,6 +196,48 @@ class RemoteIDEServerTest {
             "",
             projects
         )
+    }
+
+    @Test
+    fun `#getStatus skips exec when pod phase is not Running`() {
+        // given — isPodRunning returns false for non-Running phases (Pending, Failed, etc.)
+        coEvery {
+            anyConstructed<DevWorkspacePods>().isPodRunning(any())
+        } returns false
+
+        // when
+        val result = runBlocking {
+            remoteIDEServer.getStatus()
+        }
+
+        // then — exec should never be called, preventing 60s hang on stuck pod
+        assertThat(result).isEqualTo(RemoteIDEServerStatus.empty())
+        coVerify(exactly = 0) {
+            anyConstructed<DevWorkspacePods>().exec(any(), any(), any(), any(), any())
+        }
+    }
+
+    @Test
+    fun `#getStatus throws CancellationException before checking pod running`() {
+        // given — checkCancelled throws immediately
+        coEvery {
+            anyConstructed<DevWorkspacePods>().isPodRunning(any())
+        } returns true
+
+        // when / then
+        assertThrows<CancellationException> {
+            runBlocking {
+                remoteIDEServer.getStatus { throw CancellationException("User cancelled") }
+            }
+        }
+
+        // then — neither isPodRunning nor exec should have been called
+        coVerify(exactly = 0) {
+            anyConstructed<DevWorkspacePods>().isPodRunning(any())
+        }
+        coVerify(exactly = 0) {
+            anyConstructed<DevWorkspacePods>().exec(any(), any(), any(), any(), any())
+        }
     }
 
     private fun projectInfo(name: String): ProjectInfo {

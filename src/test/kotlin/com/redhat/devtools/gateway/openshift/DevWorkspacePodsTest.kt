@@ -19,15 +19,22 @@ import io.kubernetes.client.openapi.models.V1ListMeta
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
+import io.kubernetes.client.openapi.models.V1PodStatus
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkConstructor
+import io.mockk.mockkObject
 import io.mockk.slot
+import io.mockk.unmockkAll
 import io.mockk.unmockkConstructor
+import io.mockk.unmockkObject
 import io.mockk.verify
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
@@ -36,8 +43,11 @@ import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
 class DevWorkspacePodsTest {
@@ -69,7 +79,7 @@ class DevWorkspacePodsTest {
 
     @AfterEach
     fun afterEach() {
-        unmockkConstructor(PortForward::class)
+        unmockkAll()
     }
     
     @Test
@@ -341,6 +351,173 @@ class DevWorkspacePodsTest {
     }
 
     @Test
+    fun `#isPodRunning returns true when pod phase is Running`() {
+        // given
+        val runningPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "running-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        mockkConstructor(CoreV1Api::class)
+        val response = mockk<V1Pod>(relaxed = true)
+        every {
+            anyConstructed<CoreV1Api>().readNamespacedPod("running-pod", "test-ns")
+        } returns mockk { every { execute() } returns response }
+        every { response.status } returns V1PodStatus().apply { phase = "Running" }
+
+        // when
+        val result = pods.isPodRunning(runningPod)
+
+        // then
+        assertThat(result).isTrue()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod phase is Pending`() {
+        // given
+        val pendingPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "pending-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        mockkConstructor(CoreV1Api::class)
+        val response = mockk<V1Pod>(relaxed = true)
+        every {
+            anyConstructed<CoreV1Api>().readNamespacedPod("pending-pod", "test-ns")
+        } returns mockk { every { execute() } returns response }
+        every { response.status } returns V1PodStatus().apply { phase = "Pending" }
+
+        // when
+        val result = pods.isPodRunning(pendingPod)
+
+        // then
+        assertThat(result).isFalse()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod phase is Failed`() {
+        // given
+        val failedPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "failed-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        mockkConstructor(CoreV1Api::class)
+        val response = mockk<V1Pod>(relaxed = true)
+        every {
+            anyConstructed<CoreV1Api>().readNamespacedPod("failed-pod", "test-ns")
+        } returns mockk { every { execute() } returns response }
+        every { response.status } returns V1PodStatus().apply { phase = "Failed" }
+
+        // when
+        val result = pods.isPodRunning(failedPod)
+
+        // then
+        assertThat(result).isFalse()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod phase is Succeeded`() {
+        // given
+        val succeededPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "succeeded-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        mockkConstructor(CoreV1Api::class)
+        val response = mockk<V1Pod>(relaxed = true)
+        every {
+            anyConstructed<CoreV1Api>().readNamespacedPod("succeeded-pod", "test-ns")
+        } returns mockk { every { execute() } returns response }
+        every { response.status } returns V1PodStatus().apply { phase = "Succeeded" }
+
+        // when
+        val result = pods.isPodRunning(succeededPod)
+
+        // then
+        assertThat(result).isFalse()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod has no name`() {
+        // given — pod with null name
+        val noNamePod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                namespace = "test-ns"
+            }
+        }
+
+        // when
+        val result = pods.isPodRunning(noNamePod)
+
+        // then — no API call needed
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod has no namespace`() {
+        // given — pod with null namespace
+        val noNsPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "my-pod"
+            }
+        }
+
+        // when
+        val result = pods.isPodRunning(noNsPod)
+
+        // then — no API call needed
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `#isPodRunning returns false when pod has no metadata`() {
+        // given
+        val noMetaPod = V1Pod()
+
+        // when
+        val result = pods.isPodRunning(noMetaPod)
+
+        // then
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `#isPodRunning returns false when API call throws exception`() {
+        // given
+        val pod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "error-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        mockkConstructor(CoreV1Api::class)
+        every {
+            anyConstructed<CoreV1Api>().readNamespacedPod("error-pod", "test-ns")
+        } returns mockk { every { execute() } throws ApiException("connection refused") }
+
+        // when
+        val result = pods.isPodRunning(pod)
+
+        // then
+        assertThat(result).isFalse()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
     fun `#waitForPodsDeleted continues polling after API errors`() = runBlocking {
         // given
         val namespace = "test-namespace"
@@ -374,5 +551,164 @@ class DevWorkspacePodsTest {
         assertThat(result).isTrue()
         assertThat(callCount).isGreaterThanOrEqualTo(3) // Had pods, error, then success
         unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#exec cancels cleanly when checkCancelled throws`() = runBlocking {
+        // given — ContainerAwareExec returns a fake process that produces data
+        val stdout = PipedOutputStream()
+        val stdin = PipedInputStream(stdout)
+        val fakeProcess = mockk<Process>(relaxed = true)
+        every { fakeProcess.inputStream } returns stdin
+        every { fakeProcess.errorStream } returns ByteArrayInputStream(ByteArray(0))
+        every { fakeProcess.outputStream } returns mockk(relaxed = true)
+        every { fakeProcess.isAlive } returns true
+
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<io.kubernetes.client.custom.IOTrio>
+            val io = io.kubernetes.client.custom.IOTrio()
+            io.stdout = fakeProcess.inputStream
+            io.stderr = fakeProcess.errorStream
+            io.stdin = fakeProcess.outputStream
+            onOpen.accept(io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when — launch exec, then cancel it
+        val job = scope.launch {
+            pods.exec(
+                pod = testPod,
+                command = arrayOf("echo"),
+                container = "test-container",
+                timeout = 60,
+                checkCancelled = { throw CancellationException("user cancelled") }
+            )
+        }
+        delay(100) // let exec start
+        job.cancel()
+        job.join()
+
+        // then — should complete without hanging
+        assertThat(job.isCancelled).isTrue()
+    }
+
+    @Test
+    fun `#exec propagates error from process`() = runBlocking {
+        // given — ContainerAwareExec throws on exec
+        mockkConstructor(ContainerAwareExec::class)
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } throws IOException("connection refused")
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container"
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+
+        // then — exec client should be shut down
+        verify {
+            execClient.httpClient.dispatcher.executorService.shutdownNow()
+            execClient.httpClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `#exec shuts down exec client on cancellation`() = runBlocking {
+        // given — ContainerAwareExec returns a blocking fake process
+        val fakeProcess = mockk<Process>(relaxed = true)
+        every { fakeProcess.inputStream } returns PipedInputStream()
+        every { fakeProcess.errorStream } returns ByteArrayInputStream(ByteArray(0))
+        every { fakeProcess.outputStream } returns mockk(relaxed = true)
+        every { fakeProcess.isAlive } returns true
+
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<io.kubernetes.client.custom.IOTrio>
+            val io = io.kubernetes.client.custom.IOTrio()
+            io.stdout = fakeProcess.inputStream
+            io.stderr = fakeProcess.errorStream
+            io.stdin = fakeProcess.outputStream
+            onOpen.accept(io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when — launch and cancel
+        val job = scope.launch {
+            pods.exec(
+                pod = testPod,
+                command = arrayOf("echo"),
+                container = "test-container",
+                timeout = 60
+            )
+        }
+        delay(100)
+        job.cancel()
+        job.join()
+
+        // then — exec client dispatcher and connection pool should be shut down
+        verify {
+            execClient.httpClient.dispatcher.executorService.shutdownNow()
+            execClient.httpClient.connectionPool.evictAll()
+        }
     }
 }
