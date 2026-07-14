@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.openshift
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.PortForward
+import io.kubernetes.client.custom.IOTrio
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
@@ -85,42 +86,11 @@ class DevWorkspacePods(private val client: ApiClient) {
                 container = container,
                 command = command,
                 onOpen = { io ->
-                    stdoutStream = io.stdout
-                    stderrStream = io.stderr
+                    launchCheckCancelled(checkCancelled, scope, io)
 
                     stdoutJob = scope.launch { readStream(io.stdout, stdout, checkCancelled) }
                     stderrJob = scope.launch { readStream(io.stderr, stderr, checkCancelled) }
-
-                    if (checkCancelled != null) {
-                        scope.launch {
-                            try {
-                                while (isActive) {
-                                    checkCancelled.invoke()
-                                    delay(200)
-                                }
-                            } catch (_: Throwable) {
-                                runCatching { io.stdout.close() }
-                                runCatching { io.stderr.close() }
-                            }
-                        }
-                    }
-
-                    scope.launch {
-                        try {
-                            listOfNotNull(stdoutJob, stderrJob).joinAll()
-                            checkCancelled?.invoke()
-                            closed.await()
-
-                            checkCancelled?.invoke()
-                            if (cont.isActive) cont.resume(stdout.toString())
-                        } catch (e: Throwable) {
-                            if (e.isCancellationException()) cont.cancel(e)
-                            else if (cont.isActive) cont.resumeWithException(e)
-                        } finally {
-                            scope.cancel()
-                            shutdownExecClient(execClientApi)
-                        }
-                    }
+                    launchJoinStdOutStdErr(scope, stdoutJob, stderrJob, checkCancelled, closed, cont, stdout, execClientApi)
                 },
                 onClosed = { _, _ ->
                     closed.complete(Unit)
@@ -147,6 +117,55 @@ class DevWorkspacePods(private val client: ApiClient) {
         } catch (e: Exception) {
             shutdownExecClient(execClientApi)
             if (cont.isActive) cont.resumeWithException(e)
+        }
+    }
+
+    private fun launchJoinStdOutStdErr(
+        scope: CoroutineScope,
+        stdoutJob: Job,
+        stderrJob: Job,
+        checkCancelled: (() -> Unit)?,
+        closed: CompletableDeferred<Unit>,
+        cont: CancellableContinuation<String>,
+        stdout: StringBuilder,
+        execClientApi: ApiClient
+    ) {
+        scope.launch {
+            try {
+                listOfNotNull(stdoutJob, stderrJob).joinAll()
+                checkCancelled?.invoke()
+                closed.await()
+
+                checkCancelled?.invoke()
+                if (cont.isActive) cont.resume(stdout.toString())
+            } catch (e: Throwable) {
+                if (e.isCancellationException()) cont.cancel(e)
+                else if (cont.isActive) cont.resumeWithException(e)
+            } finally {
+                scope.cancel()
+                shutdownExecClient(execClientApi)
+            }
+        }
+    }
+
+    private fun launchCheckCancelled(
+        checkCancelled: (() -> Unit)?,
+        scope: CoroutineScope,
+        io: IOTrio
+    ) {
+        if (checkCancelled == null) {
+            return
+        }
+        scope.launch {
+            try {
+                while (isActive) {
+                    checkCancelled.invoke()
+                    delay(200)
+                }
+            } catch (_: Throwable) {
+                runCatching { io.stdout.close() }
+                runCatching { io.stderr.close() }
+            }
         }
     }
 
