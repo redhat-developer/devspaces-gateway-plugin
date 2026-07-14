@@ -46,6 +46,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
         onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
         checkCancelled: (() -> Unit)? = null,
+        modalityState: ModalityState? = null,
         registerRestartWatcher: Boolean? = true
     ): ThinClientHandle {
         val workspace = devSpacesContext.devWorkspace
@@ -60,7 +61,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             while (!remoteIdeServerStatus.isReady) {
                 checkCancelled?.invoke()
                 onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                    message = "Waiting for the workspace to get ready...",
+                    message = "Waiting for the workspace to get started...",
                     countdownSeconds = DevWorkspaces.RUNNING_TIMEOUT))
 
                 DevWorkspaces(devSpacesContext.client)
@@ -76,7 +77,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
                 remoteIdeServer = RemoteIDEServer(devSpacesContext)
                 remoteIdeServerStatus = runCatching {
-                    remoteIdeServer.apply { waitServerReady(checkCancelled) }.getStatus()
+                    remoteIdeServer.apply { waitServerReady(checkCancelled) }.getStatus(checkCancelled)
                 }.getOrElse { e ->
                     if (e.isCancellationException()) throw e
                     RemoteIDEServerStatus.empty()
@@ -84,7 +85,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
                 checkCancelled?.invoke()
                 if (!remoteIdeServerStatus.isReady) {
-                    val restartWorkspace = Dialogs.ideNotResponding()
+                    val restartWorkspace = Dialogs.ideNotResponding(modalityState)
 
                     if (restartWorkspace) {
                         // User chose "Restart Pod": stop the Pod and try starting from scratch

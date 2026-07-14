@@ -67,7 +67,7 @@ class DevWorkspaceRestartTest {
         every { pods.list(any(), any()) } returns V1PodList().items(emptyList())
         // Default: IDE ready and connection succeed (`just Awaits` never completes — hangs runTest)
         coJustRun { remoteIDEServer.waitServerReady() }
-        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
+        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
     }
 
     @Test
@@ -186,7 +186,7 @@ class DevWorkspaceRestartTest {
         // when
         restart.restart(thinClient, indicator)
         // then
-        coVerify { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) }
+        coVerify { devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -196,7 +196,7 @@ class DevWorkspaceRestartTest {
         // then
         coVerifyOrder {
             remoteIDEServer.waitServerReady()
-            devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
+            devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -241,7 +241,7 @@ class DevWorkspaceRestartTest {
         }
         coVerifyOrder {
             remoteIDEServer.waitServerReady()
-            devSpacesConnection.connect(any(), any(), any(), any(), any(), any())
+            devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -297,7 +297,7 @@ class DevWorkspaceRestartTest {
     fun `#doRestart fails when IDE connection fails`() = runTest {
         // given
         val exception = RuntimeException("Connection failed")
-        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any()) } throws exception
+        coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any()) } throws exception
 
         // when/then
         val result = runCatching { restart.restart(thinClient, indicator) }
