@@ -1,5 +1,6 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestResult
@@ -17,6 +18,19 @@ plugins {
 
 group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
+
+// -Pidea switches from Gateway (GW) to IntelliJ IDEA (IU)
+val isIdea = providers.gradleProperty("idea").isPresent
+val resolvedPlatformType = if (isIdea) {
+    "IU"
+} else {
+    providers.gradleProperty("platformType").get()
+}
+val resolvedBundledPlugins = if (isIdea) {
+    "com.jetbrains.gateway"
+} else {
+    providers.gradleProperty("platformBundledPlugins").get()
+}
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -56,10 +70,10 @@ dependencies {
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
-        create(providers.gradleProperty("platformType"), providers.gradleProperty("platformVersion"))
+        create(resolvedPlatformType, providers.gradleProperty("platformVersion"))
 
         // Plugin Dependencies. Uses `platformBundledPlugins` property from the gradle.properties file for bundled IntelliJ Platform plugins.
-        bundledPlugins(providers.gradleProperty("platformBundledPlugins").map { it.split(',') })
+        bundledPlugins(resolvedBundledPlugins.split(',').filter { it.isNotBlank() })
 
         // Plugin Dependencies. Uses `platformPlugins` property from the gradle.properties file for plugin from JetBrains Marketplace.
         plugins(providers.gradleProperty("platformPlugins").map { it.split(',') })
@@ -227,20 +241,13 @@ tasks {
 
 intellijPlatformTesting {
     runIde {
-        register("runIdeForUiTests") {
-            task {
-                jvmArgumentProviders += CommandLineArgumentProvider {
-                    listOf(
-                        "-Drobot-server.port=8082",
-                        "-Dide.mac.message.dialogs.as.sheets=false",
-                        "-Djb.privacy.policy.text=<!--999.999-->",
-                        "-Djb.consents.confirmation.enabled=false",
-                    )
-                }
-            }
+        // Visible next to runIde under "intellij platform" in the Gradle tool window
+        register("runIdeIdea") {
+            type = IntelliJPlatformType.IntellijIdeaUltimate
+            version = providers.gradleProperty("platformVersion")
 
             plugins {
-                robotServerPlugin()
+                bundledPlugin("com.jetbrains.gateway")
             }
         }
     }
