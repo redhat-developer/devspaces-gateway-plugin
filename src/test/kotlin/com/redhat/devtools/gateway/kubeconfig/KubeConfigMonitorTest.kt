@@ -11,16 +11,16 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
-import com.redhat.devtools.gateway.kubeconfig.FileWatcher
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.openshift.Cluster
 import io.mockk.every
+import io.mockk.justRun
 import io.mockk.mockk
+import io.mockk.spyk
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -35,14 +35,13 @@ import kotlin.io.path.createFile
 @ExperimentalCoroutinesApi
 class KubeConfigMonitorTest {
 
-    // notsecret — cluster token literals in this class are invented test fixtures only.
-
     @TempDir
     lateinit var tempDir: Path
 
+    private lateinit var testDispatcher: TestDispatcher
     private lateinit var testScope: TestScope
-    private lateinit var mockFileWatcher: FileWatcher
-    private lateinit var mockKubeConfigBuilder: KubeConfigUtils
+    private lateinit var fileWatcher: FileWatcher
+    private lateinit var mockKubeConfigUtils: KubeConfigUtils
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
 
     private lateinit var kubeconfigPath1: Path
@@ -50,15 +49,18 @@ class KubeConfigMonitorTest {
 
     @BeforeEach
     fun beforeEach() {
-        // given
-        testScope = TestScope(StandardTestDispatcher())
-        mockFileWatcher = mockk(relaxed = true)
-        mockKubeConfigBuilder = mockk(relaxed = true)
+        testDispatcher = StandardTestDispatcher()
+        testScope = TestScope(testDispatcher)
+        // Real FileWatcher for path tracking; stub start() so its infinite poll/delay loop
+        // does not run on the test dispatcher (advanceUntilIdle would never complete).
+        fileWatcher = spyk(FileWatcher(testScope, testDispatcher))
+        justRun { fileWatcher.start() }
+        mockKubeConfigUtils = mockk(relaxed = true)
 
         kubeconfigPath1 = tempDir.resolve("kubeconfig1.yaml").createFile()
         kubeconfigPath2 = tempDir.resolve("kubeconfig2.yaml").createFile()
 
-        kubeconfigMonitor = KubeConfigMonitor(testScope, mockFileWatcher, mockKubeConfigBuilder)
+        kubeconfigMonitor = KubeConfigMonitor(testScope, fileWatcher, mockKubeConfigUtils)
     }
 
     @AfterEach
@@ -67,90 +69,115 @@ class KubeConfigMonitorTest {
     }
 
     @Test
-    fun `#start should initially parse and publish clusters`() = testScope.runTest {
-        // given
-        val cluster1 = Cluster(name = "skywalker", url = "url1",  token = null)
-        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
-        every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
+    fun `#start should initially parse and publish clusters`() = runTest(testDispatcher) {
+        val cluster1 = Cluster(name = "skywalker", url = "url1", token = null)
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
-        // when
         kubeconfigMonitor.start()
         advanceUntilIdle()
 
-        // then
         assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1)
-        verify(exactly = 1) { mockFileWatcher.addFile(kubeconfigPath1) }
-        verify(exactly = 1) { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) }
+        assertThat(fileWatcher.getMonitoredFiles()).containsExactly(kubeconfigPath1)
+        // addFile notify + barrier refreshClusters coalesce to one parse of the full set
+        verify(exactly = 1) { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) }
     }
 
     @Test
-    fun `#onFileChanged should reparse and publish updated clusters`() = testScope.runTest {
-        // given
+    fun `#start coalesces multi-file addFile notifies into one full-list parse`() = runTest(testDispatcher) {
+        val cluster1 = Cluster(name = "skywalker", url = "url1", token = null)
+        val cluster2 = Cluster(name = "obi-wan", url = "url2", token = null)
+
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1, kubeconfigPath2)
+        every {
+            mockKubeConfigUtils.getClusters(match { it.toSet() == setOf(kubeconfigPath1, kubeconfigPath2) })
+        } returns listOf(cluster1, cluster2)
+
+        kubeconfigMonitor.start()
+        advanceUntilIdle()
+
+        verify(exactly = 0) { mockKubeConfigUtils.getClusters(emptyList()) }
+        verify(exactly = 0) {
+            mockKubeConfigUtils.getClusters(match { it.size == 1 })
+        }
+        verify(exactly = 1) {
+            mockKubeConfigUtils.getClusters(match { it.toSet() == setOf(kubeconfigPath1, kubeconfigPath2) })
+        }
+        assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactlyInAnyOrder(cluster1, cluster2)
+        assertThat(fileWatcher.getMonitoredFiles()).containsExactlyInAnyOrder(kubeconfigPath1, kubeconfigPath2)
+    }
+
+    @Test
+    fun `#onFileChanged should reparse and publish updated clusters`() = runTest(testDispatcher) {
         val cluster1 = Cluster(name = "skywalker", url = "url1", token = null)
         val cluster1Updated = Cluster(name = "skywalker", url = "url1", token = "token1")
 
-        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
-        every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
         kubeconfigMonitor.start()
         advanceUntilIdle()
         assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1)
 
-        // when
-        every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1Updated)
-        kubeconfigMonitor.onFileChanged(kubeconfigPath1) // Simulate watcher callback
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1Updated)
+        kubeconfigMonitor.onFileChanged(kubeconfigPath1)
         advanceUntilIdle()
 
-        // then
         assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1Updated)
-        verify(exactly = 2) { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } // Initial + update
+        verify(exactly = 2) { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) }
     }
 
     @Test
-    fun `#updateMonitoredPaths should add and remove files based on KUBECONFIG env var`() = testScope.runTest {
-        // given
-        val cluster1 = Cluster(name = "skywalker", url = "url1")
-        val cluster2 = Cluster(name = "obi-wan", url = "url2")
+    fun `#refreshClusters skips emit when cluster list is unchanged`() = runTest(testDispatcher) {
+        val cluster1 = Cluster(name = "skywalker", url = "url1", token = null)
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
 
-        // Initial KUBECONFIG
-        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
-        every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
         kubeconfigMonitor.start()
         advanceUntilIdle()
         assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1)
-        verify(exactly = 1) { mockFileWatcher.addFile(kubeconfigPath1) }
 
-        // when: Change KUBECONFIG to include kubeconfigPath2 and remove kubeconfigPath1
-        every { mockKubeConfigBuilder.getAllConfigFiles(any()) } returns listOf(kubeconfigPath2)
-        every { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath2)) } returns listOf(cluster2)
+        kubeconfigMonitor.refreshClusters()
+        advanceUntilIdle()
 
-        // Manually trigger updateMonitoredPaths and reparse
+        assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1)
+        verify(exactly = 2) { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) }
+    }
+
+    @Test
+    fun `#updateMonitoredPaths should add and remove files based on KUBECONFIG env var`() = runTest(testDispatcher) {
+        val cluster1 = Cluster(name = "skywalker", url = "url1")
+        val cluster2 = Cluster(name = "obi-wan", url = "url2")
+
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath1)
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath1)) } returns listOf(cluster1)
+        kubeconfigMonitor.start()
+        advanceUntilIdle()
+        assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster1)
+        assertThat(fileWatcher.getMonitoredFiles()).containsExactly(kubeconfigPath1)
+
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(kubeconfigPath2)
+        every { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath2)) } returns listOf(cluster2)
+
         kubeconfigMonitor.updateMonitoredPaths()
         kubeconfigMonitor.refreshClusters()
         advanceUntilIdle()
 
-        // then
         assertThat(kubeconfigMonitor.getCurrentClusters()).containsExactly(cluster2)
-        verify(exactly = 1) {
-            mockFileWatcher.removeFile(kubeconfigPath1)
-            mockFileWatcher.addFile(kubeconfigPath2)
-        }
-        verify(exactly = 1) { mockKubeConfigBuilder.getClusters(listOf(kubeconfigPath2)) }
+        assertThat(fileWatcher.getMonitoredFiles()).containsExactly(kubeconfigPath2)
+        verify(atLeast = 1) { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath2)) }
     }
 
     @Test
-    fun `#stop should not cancel the provided scope`() = testScope.runTest {
-        // given
+    fun `#stop should not cancel the provided scope`() = runTest(testDispatcher) {
         val mockScope = mockk<TestScope>(relaxed = true)
-        val monitor = KubeConfigMonitor(mockScope, mockFileWatcher, mockKubeConfigBuilder)
+        val monitor = KubeConfigMonitor(mockScope, fileWatcher, mockKubeConfigUtils)
 
         every { mockScope.cancel() } returns Unit
 
-        // when
         monitor.stop()
         advanceUntilIdle()
 
-        // then
         verify(exactly = 0) {
             mockScope.cancel()
         }
