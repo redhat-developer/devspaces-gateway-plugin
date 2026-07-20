@@ -419,7 +419,7 @@ class DevSpacesServerStepView(
                     setSelectedAuthTab()
                     enableSaveConfigCheckbox()
                 },
-                ModalityState.any()
+                ModalityState.stateForComponent(component)
             )
         }
     }
