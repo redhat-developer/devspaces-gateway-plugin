@@ -210,7 +210,7 @@ class RemoteIDEServerTest {
             remoteIDEServer.getStatus()
         }
 
-        // then — exec should never be called, preventing 60s hang on stuck pod
+        // then — exec should never be called, preventing a long hang on stuck pod
         assertThat(result).isEqualTo(RemoteIDEServerStatus.empty())
         coVerify(exactly = 0) {
             anyConstructed<DevWorkspacePods>().exec(any(), any(), any(), any(), any())

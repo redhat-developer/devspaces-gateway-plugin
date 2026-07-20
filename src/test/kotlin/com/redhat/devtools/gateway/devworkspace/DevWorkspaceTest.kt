@@ -74,29 +74,28 @@ class DevWorkspaceTest {
     }
 
     @Test
-    fun `equals returns true for workspaces with same name, namespace, annotations and labels`() {
+    fun `equals returns true for workspaces with same name and namespace`() {
         // given
-        val annotations = mapOf("key1" to "value1")
-        val labels = mapOf("label1" to "labelValue1")
         val workspace1 = createDevWorkspace(
             name = "test-workspace",
             namespace = "test-ns",
-            annotations = annotations,
-            labels = labels
+            annotations = mapOf("key1" to "value1"),
+            labels = mapOf("label1" to "labelValue1")
         )
         val workspace2 = createDevWorkspace(
             name = "test-workspace",
             namespace = "test-ns",
-            annotations = annotations,
-            labels = labels
+            annotations = mapOf("key1" to "value2"),
+            labels = mapOf("label1" to "other")
         )
 
         // when/then
         assertThat(workspace1).isEqualTo(workspace2)
+        assertThat(workspace1.hashCode()).isEqualTo(workspace2.hashCode())
     }
 
     @Test
-    fun `equals returns false for workspaces with different annotations`() {
+    fun `equals returns true when annotations differ but name and namespace match`() {
         // given
         val workspace1 = createDevWorkspace(
             name = "test-workspace",
@@ -112,11 +111,12 @@ class DevWorkspaceTest {
         )
 
         // when/then
-        assertThat(workspace1).isNotEqualTo(workspace2)
+        assertThat(workspace1).isEqualTo(workspace2)
+        assertThat(workspace1.hashCode()).isEqualTo(workspace2.hashCode())
     }
 
     @Test
-    fun `equals returns false for workspaces with different labels`() {
+    fun `equals returns true when labels differ but name and namespace match`() {
         // given
         val workspace1 = createDevWorkspace(
             name = "test-workspace",
@@ -132,7 +132,8 @@ class DevWorkspaceTest {
         )
 
         // when/then
-        assertThat(workspace1).isNotEqualTo(workspace2)
+        assertThat(workspace1).isEqualTo(workspace2)
+        assertThat(workspace1.hashCode()).isEqualTo(workspace2.hashCode())
     }
 
     @Test
