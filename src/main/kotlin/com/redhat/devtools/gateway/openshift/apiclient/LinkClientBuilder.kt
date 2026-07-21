@@ -15,6 +15,7 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.openapi.ApiClient
+import java.net.Proxy
 
 /**
  * Builder for API clients used in the deep-link flow (no wizard).
@@ -27,25 +28,32 @@ class LinkClientBuilder(
         val paths = configUtils.getAllConfigFiles()
         if (paths.isEmpty()) {
             thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
-            return ClientBuilder.defaultClient()
+            return bypassProxy(ClientBuilder.defaultClient())
         }
 
         return try {
             val allConfigs = configUtils.getAllConfigs(paths)
             if (allConfigs.isEmpty()) {
                 thisLogger().debug("No valid kubeconfig content found. Falling back to default ApiClient.")
-                return ClientBuilder.defaultClient()
+                return bypassProxy(ClientBuilder.defaultClient())
             }
 
             val kubeConfig = configUtils.mergeConfigs(allConfigs)
-            val client = ClientBuilder.kubeconfig(kubeConfig).build()
+            val client = bypassProxy(ClientBuilder.kubeconfig(kubeConfig).build())
             applyReadTimeout(client)
         } catch (e: Exception) {
             thisLogger().debug(
                 "Failed to build effective Kube config from discovered files due to error: ${e.message}. " +
                     "Falling back to the default ApiClient."
             )
-            ClientBuilder.defaultClient()
+            bypassProxy(ClientBuilder.defaultClient())
         }
+    }
+
+    private fun bypassProxy(client: ApiClient): ApiClient {
+        client.httpClient = client.httpClient.newBuilder()
+            .proxy(Proxy.NO_PROXY)
+            .build()
+        return client
     }
 }

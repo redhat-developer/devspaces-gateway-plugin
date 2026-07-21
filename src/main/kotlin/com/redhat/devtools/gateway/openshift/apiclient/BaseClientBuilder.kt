@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.openshift.apiclient
 import io.kubernetes.client.openapi.ApiClient
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -55,9 +56,11 @@ abstract class BaseClientBuilder : OpenShiftClientBuilder {
     /**
      * Creates an [OkHttpClient] with the given [sslContext] and [trustManager].
      * Uses HTTP/1.1 (not HTTP/2): some OpenShift clusters hang on HTTP/2.
+     * Bypasses JVM proxy settings — the Kubernetes API server is always accessed directly.
      */
     protected fun createHttpClient(sslContext: SSLContext, trustManager: X509TrustManager): OkHttpClient =
         OkHttpClient.Builder()
+            .proxy(Proxy.NO_PROXY)
             .sslSocketFactory(sslContext.socketFactory, trustManager)
             .connectTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
