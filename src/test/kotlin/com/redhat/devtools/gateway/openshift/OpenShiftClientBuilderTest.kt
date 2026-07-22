@@ -19,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.unmockkAll
 import io.mockk.verify
+import okhttp3.Authenticator
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
@@ -96,6 +97,18 @@ class OpenShiftClientBuilderTest {
             .build()
 
         assertThat(client.httpClient.readTimeoutMillis).isEqualTo(45_000)
+    }
+
+    @Test
+    fun `TokenClientBuilder OkHttpClient uses proxy authenticator`() {
+        val client = TokenClientBuilder(
+            server = "https://api.example.com:6443",
+            token = "test-token", // notsecret
+            tlsContext = tlsContext,
+        ).build()
+        assertThat(client.httpClient.proxySelector).isNotNull
+        assertThat(client.httpClient.proxyAuthenticator)
+            .isSameAs(Authenticator.JAVA_NET_AUTHENTICATOR)
     }
 
     @Test

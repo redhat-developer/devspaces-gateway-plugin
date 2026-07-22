@@ -19,6 +19,7 @@ import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import kotlinx.coroutines.future.await
 import java.lang.Void
 import java.net.URI
@@ -48,19 +49,21 @@ class OpenShiftAuthCodeFlow(
     private  lateinit var metadata: OAuthMetadata
 
     private val discoveryClient: HttpClient by lazy {
-        HttpClient.newBuilder()
-            .sslContext(sslContext)
-            .version(HttpClient.Version.HTTP_1_1)
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build()
+        IdeHttpProxy.configure(
+            HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NORMAL)
+        ).build()
     }
 
     private val noRedirectClient: HttpClient by lazy {
-        HttpClient.newBuilder()
-            .sslContext(sslContext)
-            .version(HttpClient.Version.HTTP_1_1)
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build()
+        IdeHttpProxy.configure(
+            HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NEVER)
+        ).build()
     }
 
     override suspend fun startAuthFlow(): AuthCodeRequest {

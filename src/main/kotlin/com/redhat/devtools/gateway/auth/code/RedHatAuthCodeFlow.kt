@@ -19,6 +19,7 @@ import com.nimbusds.oauth2.sdk.id.ClientID
 import com.nimbusds.oauth2.sdk.id.State
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import com.nimbusds.openid.connect.sdk.AuthenticationRequest
 import com.nimbusds.openid.connect.sdk.Nonce
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
@@ -43,10 +44,11 @@ class RedHatAuthCodeFlow(
     private lateinit var state: State
 
     private val httpClient by lazy {
-        HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build()
+        IdeHttpProxy.configure(
+            HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .followRedirects(HttpClient.Redirect.NORMAL)
+        ).build()
     }
 
     override suspend fun startAuthFlow(): AuthCodeRequest {

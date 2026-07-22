@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.openshift.apiclient
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import io.kubernetes.client.util.ClientBuilder
 import io.kubernetes.client.openapi.ApiClient
 
@@ -27,25 +28,33 @@ class LinkClientBuilder(
         val paths = configUtils.getAllConfigFiles()
         if (paths.isEmpty()) {
             thisLogger().debug("No effective kubeconfig found. Falling back to default ApiClient.")
-            return ClientBuilder.defaultClient()
+            return defaultClient()
         }
 
         return try {
             val allConfigs = configUtils.getAllConfigs(paths)
             if (allConfigs.isEmpty()) {
                 thisLogger().debug("No valid kubeconfig content found. Falling back to default ApiClient.")
-                return ClientBuilder.defaultClient()
+                return defaultClient()
             }
 
             val kubeConfig = configUtils.mergeConfigs(allConfigs)
             val client = ClientBuilder.kubeconfig(kubeConfig).build()
+            client.httpClient = IdeHttpProxy.configure(client.httpClient.newBuilder()).build()
             applyReadTimeout(client)
         } catch (e: Exception) {
             thisLogger().debug(
                 "Failed to build effective Kube config from discovered files due to error: ${e.message}. " +
                     "Falling back to the default ApiClient."
             )
-            ClientBuilder.defaultClient()
+            defaultClient()
         }
     }
+
+    private fun defaultClient(): ApiClient {
+        val client = ClientBuilder.defaultClient()
+        client.httpClient = IdeHttpProxy.configure(client.httpClient.newBuilder()).build()
+        return client
+    }
+
 }
