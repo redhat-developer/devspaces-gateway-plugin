@@ -38,7 +38,7 @@ class OpenShiftAuthCodeFlowTest {
 
     @Test
     fun `startAuthFlow returns AuthCodeRequest when discovery succeeds`() = runTest {
-        coEvery { discovery.discoverOAuthMetadata() } returns validMetadata
+        coEvery { discovery.discoverOAuthMetadata() } returns Result.success(validMetadata)
 
         val request = authCodeFlow.startAuthFlow()
 
@@ -51,7 +51,7 @@ class OpenShiftAuthCodeFlowTest {
 
     @Test
     fun `startAuthFlow propagates exception when discovery fails`() = runTest {
-        coEvery { discovery.discoverOAuthMetadata() } throws IllegalStateException("Discovery failed")
+        coEvery { discovery.discoverOAuthMetadata() } returns Result.failure(IllegalStateException("Discovery failed"))
 
         val result = kotlin.runCatching { authCodeFlow.startAuthFlow() }
         assertThat(result.isFailure).isTrue
@@ -87,7 +87,7 @@ class OpenShiftAuthCodeFlowTest {
 
     @Test
     fun `login propagates exception when discovery fails`() = runTest {
-        coEvery { discovery.discoverOAuthMetadata() } throws IllegalStateException("Discovery failed")
+        coEvery { discovery.discoverOAuthMetadata() } returns Result.failure(IllegalStateException("Discovery failed"))
 
         val result = kotlin.runCatching {
             authCodeFlow.login(mapOf("username" to "test", "password" to "pass"))

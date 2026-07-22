@@ -56,7 +56,7 @@ class OAuthDiscoveryTest {
     fun `discoverOAuthMetadata returns metadata when response is valid`() = runTest {
         stubSendAsync(mockHttpResponse(200, metadataJson))
 
-        val metadata = discovery.discoverOAuthMetadata()
+        val metadata = discovery.discoverOAuthMetadata().getOrThrow()
 
         assertThat(metadata.issuer).isEqualTo("https://api.cluster.example.invalid:6443")
         assertThat(metadata.authorizationEndpoint).isEqualTo("https://oauth-openshift.cluster.example.invalid:443/oauth/authorize")
@@ -67,7 +67,7 @@ class OAuthDiscoveryTest {
     fun `discoverOAuthMetadata throws on HTTP error`() = runTest {
         stubSendAsync(mockHttpResponse(404, "Not Found"))
 
-        val result = kotlin.runCatching { discovery.discoverOAuthMetadata() }
+        val result = discovery.discoverOAuthMetadata()
         assertThat(result.isFailure).isTrue
         assertThat(result.exceptionOrNull())
             .isInstanceOf(IllegalStateException::class.java)

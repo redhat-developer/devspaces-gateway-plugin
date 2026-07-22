@@ -64,7 +64,7 @@ class OpenShiftAuthCodeFlow(
     }
 
     override suspend fun startAuthFlow(): AuthCodeRequest {
-        metadata = discovery.discoverOAuthMetadata()
+        metadata = discovery.discoverOAuthMetadata().getOrThrow()
         codeVerifier = CodeVerifier()
         state = State()
 
@@ -153,7 +153,7 @@ class OpenShiftAuthCodeFlow(
         val username = parameters["username"] ?: error("Missing 'username'")
         val password = parameters["password"] ?: error("Missing 'password'")
 
-        metadata = discovery.discoverOAuthMetadata()
+        metadata = discovery.discoverOAuthMetadata().getOrThrow()
         codeVerifier = CodeVerifier()
         state = State()
 

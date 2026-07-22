@@ -16,6 +16,7 @@ import com.redhat.devtools.gateway.util.toServerBaseUrl
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
 import java.net.URI
 import java.net.http.HttpClient
 import javax.net.ssl.SSLContext
@@ -43,19 +44,17 @@ class OAuthDiscovery(
 
     private val discoveryUrl = "$apiServerUrl/.well-known/oauth-authorization-server"
 
-    suspend fun discoverOAuthMetadata(): OAuthMetadata {
+    suspend fun discoverOAuthMetadata(): Result<OAuthMetadata> = runCatching {
         val response = client.sendGetRequest(discoveryUrl)
-        return json.decodeFromString(OAuthMetadata.serializer(), response.body())
+        json.decodeFromString(OAuthMetadata.serializer(), response.body())
+    }.onFailure { e ->
+        if (e is CancellationException) throw e
+        thisLogger().warn("TLS trust: OAuth discovery request to $discoveryUrl failed", e)
     }
 
     suspend fun endpointBaseUrls(): List<String> {
         thisLogger().info("TLS trust: discovering OAuth endpoints from $discoveryUrl")
-        val md = try {
-            discoverOAuthMetadata()
-        } catch (e: Exception) {
-            thisLogger().error("TLS trust: OAuth discovery request to $discoveryUrl failed", e)
-            throw e
-        }
+        val md = discoverOAuthMetadata().getOrThrow()
         val urls = listOf(md.tokenEndpoint, md.authorizationEndpoint)
             .map { URI(it).toServerBaseUrl() }
             .distinct()
