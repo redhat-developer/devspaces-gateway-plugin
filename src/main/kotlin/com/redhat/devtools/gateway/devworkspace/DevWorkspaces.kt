@@ -97,9 +97,8 @@ class DevWorkspaces(private val client: ApiClient) {
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
         // Quick editor ID check
-        val segment = devWorkspace.cheEditor.split("/").getOrNull(1)
-        if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
-             return true
+        if (devWorkspace.cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+            return true
         }
 
         // DevWorkspace Template check
