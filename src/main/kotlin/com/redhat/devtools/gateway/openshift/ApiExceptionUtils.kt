@@ -78,23 +78,56 @@ fun ApiException.toWorkspaceException(
 }
 
 /**
- * Converts HTTP status code to human-readable message.
- */
-fun ApiException.codeToReasonPhrase(): String {
-    val statusMessage = when (code) {
-        400 -> "Bad Request"
-        401 -> "Unauthorized"
-        403 -> "Forbidden"
-        404 -> "Not Found"
-        408 -> "Request Timeout"
-        500 -> "Internal Server Error"
-        502 -> "Bad Gateway"
-        503 -> "Service Unavailable"
-        504 -> "Gateway Timeout"
-        else -> "HTTP Error $code"
-    }
-    return statusMessage
+   * Converts HTTP status code to human-readable message.
+   */
+  private fun statusCodeReasonPhrase(code: Int): String {
+    return when (code) {
+      100 -> "Continue"
+      101 -> "Switching Protocols"
+      200 -> "OK"
+      201 -> "Created"
+      202 -> "Accepted"
+      204 -> "No Content"
+      301 -> "Moved Permanently"
+      302 -> "Found"
+      304 -> "Not Modified"
+      307 -> "Temporary Redirect"
+      308 -> "Permanent Redirect"
+      400 -> "Bad Request"
+      401 -> "Unauthorized"
+      403 -> "Forbidden"
+      404 -> "Not Found"
+      405 -> "Method Not Allowed"
+      406 -> "Not Acceptable"
+      407 -> "Proxy Authentication Required"
+      408 -> "Request Timeout"
+      409 -> "Conflict"
+      410 -> "Gone"
+      413 -> "Payload Too Large"
+      414 -> "URI Too Long"
+      415 -> "Unsupported Media Type"
+      416 -> "Range Not Satisfiable"
+      422 -> "Unprocessable Content"
+      429 -> "Too Many Requests"
+      500 -> "Internal Server Error"
+      501 -> "Not Implemented"
+      502 -> "Bad Gateway"
+      503 -> "Service Unavailable"
+      504 -> "Gateway Timeout"
+      506 -> "Variant Also Negotiates"
+      else -> "HTTP Error $code"
+  }
 }
+
+  /**
+   * Converts HTTP status code to human-readable message.
+   */
+  fun ApiException.codeToReasonPhrase(): String = statusCodeReasonPhrase(code)
+
+  /**
+   * Converts HTTP status code to human-readable message.
+   */
+  fun Int.reasonPhrase(): String = statusCodeReasonPhrase(this)
 
 fun ApiException.shouldBeIgnored(): Boolean =
     code == 403 || code == 404

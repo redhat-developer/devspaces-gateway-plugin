@@ -15,7 +15,6 @@ import com.redhat.devtools.gateway.util.IdeHttpProxy
 import io.kubernetes.client.openapi.ApiClient
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
-import okhttp3.Authenticator
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager

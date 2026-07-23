@@ -491,13 +491,10 @@ class DevSpacesServerStepView(
         thisLogger().warn("Connection to $server failed", e)
         if (!e.isLoginUserCancelled()) {
             val reason = e.message ?: "Unknown error"
-            val tlsHint = if (e.isTlsRelated()) {
-                "\n\nTLS details were written to idea.log (search for \"TLS trust\")."
-            } else {
-                ""
-            }
+            val tlsText = if (e.isTlsRelated()) "TLS details were written to idea.log (search for \"TLS trust\")." else ""
             Dialogs.error(
-                "Could not connect to cluster ${server.stripScheme()}.\n\nReason: $reason$tlsHint",
+                "Could not connect to cluster ${server.stripScheme()}." +
+                        "\n\nReason: $reason${if (e.isTlsRelated()) "\n\n$tlsText" else ""}",
                 "Connection Failed"
             )
         }
