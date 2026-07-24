@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.openshift.apiclient
 
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import io.kubernetes.client.openapi.ApiClient
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -57,12 +58,13 @@ abstract class BaseClientBuilder : OpenShiftClientBuilder {
      * Uses HTTP/1.1 (not HTTP/2): some OpenShift clusters hang on HTTP/2.
      */
     protected fun createHttpClient(sslContext: SSLContext, trustManager: X509TrustManager): OkHttpClient =
-        OkHttpClient.Builder()
-            .sslSocketFactory(sslContext.socketFactory, trustManager)
-            .connectTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .callTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .protocols(listOf(Protocol.HTTP_1_1))
-            .build()
+        IdeHttpProxy.configure(
+            OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustManager)
+                .connectTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .writeTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .callTimeout(DEFAULT_HTTP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .protocols(listOf(Protocol.HTTP_1_1))
+        ).build()
 }

@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.auth.code
 
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import com.redhat.devtools.gateway.util.toServerBaseUrl
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -35,11 +36,12 @@ data class OAuthMetadata(
 class OAuthDiscovery(
     apiServerUrl: String,
     sslContext: SSLContext,
-    private val client: HttpClient = HttpClient.newBuilder()
-        .sslContext(sslContext)
-        .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build()
+    private val client: HttpClient = IdeHttpProxy.configure(
+        HttpClient.newBuilder()
+            .sslContext(sslContext)
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+    ).build()
 ) {
 
     private val discoveryUrl = "$apiServerUrl/.well-known/oauth-authorization-server"

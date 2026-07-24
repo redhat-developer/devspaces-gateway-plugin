@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.sandbox
 
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import java.net.URI
@@ -23,10 +24,11 @@ class SandboxApi(
     private val timeoutMs: Long
 ) {
 
-    private val httpClient = HttpClient.newBuilder()
-        .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build()
+    private val httpClient = IdeHttpProxy.configure(
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+    ).build()
 
     private val json = Json {
         ignoreUnknownKeys = true

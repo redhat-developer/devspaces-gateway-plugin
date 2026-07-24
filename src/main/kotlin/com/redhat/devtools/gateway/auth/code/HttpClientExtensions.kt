@@ -15,6 +15,7 @@ import kotlinx.coroutines.future.await
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.redhat.devtools.gateway.openshift.reasonPhrase
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -39,9 +40,7 @@ suspend fun HttpClient.sendGetRequest(
         .GET()
         .build()
     val response = sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-    if (response.statusCode() !in 200..299) {
-        error("$errorPrefix: ${response.statusCode()}\n${response.body()}")
-    }
+    response.checkError(errorPrefix)
     return response
 }
 
@@ -60,8 +59,16 @@ suspend fun HttpClient.sendPostRequest(
         .POST(HttpRequest.BodyPublishers.ofString(formBody))
         .build()
     val response = sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-    if (response.statusCode() !in 200..299) {
-        error("$errorPrefix: ${response.statusCode()}\n${response.body()}")
-    }
+    response.checkError(errorPrefix)
     return json.decodeFromString(AccessTokenResponseJson.serializer(), response.body())
 }
+
+private fun HttpResponse<String>.checkError(errorPrefix: String) {
+    if (statusCode() !in 200..299) {
+        val body = body().takeIf { it.isNotEmpty() }
+            ?.let { "\n$it" }
+            .orEmpty()
+        error("$errorPrefix: ${statusCode()} ${statusCode().reasonPhrase()}$body")
+    }
+}
+
