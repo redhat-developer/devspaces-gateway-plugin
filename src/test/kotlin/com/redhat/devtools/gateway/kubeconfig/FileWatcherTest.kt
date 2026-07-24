@@ -12,23 +12,27 @@
 package com.redhat.devtools.gateway.kubeconfig
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
-
-
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.io.path.createFile
+import kotlin.io.path.deleteExisting
 import kotlin.io.path.writeText
 
 @ExperimentalCoroutinesApi
@@ -57,136 +61,217 @@ class FileWatcherTest {
 
     @Test
     fun `#addFile() invokes callback when a file is added`() = runTest {
-        // given
-        var onFileChangedCount = 0
-        watcher.onFileChanged { onFileChangedCount++ }
+        var onFileChangedPath: Path? = null
+        watcher.onFileChanged { path -> onFileChangedPath = path }
 
-        // when
         watcher.addFile(testFile)
         advanceUntilIdle()
 
-        // then - Initial notification when file is added
-        assertThat(onFileChangedCount).isEqualTo(1)
+        assertThat(onFileChangedPath).isEqualTo(testFile)
+        assertThat(watcher.getMonitoredFiles()).containsExactly(testFile)
     }
 
     @Test
-    fun `#addFile() does not invoke callback for non-existent files`() = runTest {
-        // given
+    fun `#addFile() invokes callback for non-existent files that are tracked`() = runTest {
         var onFileChangedCount = 0
         watcher.onFileChanged { onFileChangedCount++ }
         val nonExistentFile = tempDir.resolve("non-existent.yaml")
 
-        // when
         watcher.addFile(nonExistentFile)
         advanceUntilIdle()
 
-        // then - No callback should be invoked for non-existent files
-        assertThat(onFileChangedCount).isEqualTo(0)
+        assertThat(onFileChangedCount).isEqualTo(1)
+        assertThat(watcher.getMonitoredFiles()).containsExactly(nonExistentFile)
     }
 
     @Test
-    fun `#addFile() invokes callback when multiple files are added`() = runTest {
-        // given
+    fun `#addFile() invokes callback for each file when multiple are added`() = runTest {
         var onFileChangedCount = 0
         watcher.onFileChanged { onFileChangedCount++ }
-        val secondFile = createFile("second-file.yaml","second content")
+        val secondFile = createFile("second-file.yaml", "second content")
 
-        // when
         watcher
             .addFile(testFile)
             .addFile(secondFile)
         advanceUntilIdle()
 
-        // then - Callback should be invoked for both files
         assertThat(onFileChangedCount).isEqualTo(2)
+        assertThat(watcher.getMonitoredFiles()).containsExactlyInAnyOrder(testFile, secondFile)
     }
 
     @Test
-    fun `#removeFile() removes file from monitoring`() = runTest {
-        // given
+    fun `#addFile() notifies again when re-adding after remove`() = runTest {
         var onFileChangedCount = 0
         watcher.onFileChanged { onFileChangedCount++ }
 
-        // when - add file and verify it triggers callback
         watcher.addFile(testFile)
         advanceUntilIdle()
         assertThat(onFileChangedCount).isEqualTo(1)
 
-        // when - remove file from monitoring
         watcher.removeFile(testFile)
         advanceUntilIdle()
+        assertThat(watcher.getMonitoredFiles()).isEmpty()
 
-        val initialOnFileChangedCount = onFileChangedCount
-        
-        // Re-adding the same file should trigger callback again since it was removed
         watcher.addFile(testFile)
         advanceUntilIdle()
-        
-        assertThat(onFileChangedCount).isEqualTo(initialOnFileChangedCount + 1)
+        assertThat(onFileChangedCount).isEqualTo(2)
+        assertThat(watcher.getMonitoredFiles()).containsExactly(testFile)
+    }
+
+    @Test
+    fun `#addFile() does not invoke callback when file is already monitored`() = runTest {
+        var onFileChangedPath: Path? = null
+        watcher.onFileChanged { path -> onFileChangedPath = path }
+
+        watcher.addFile(testFile)
+        advanceUntilIdle()
+
+        onFileChangedPath = null
+        watcher.addFile(testFile)
+        advanceUntilIdle()
+
+        assertThat(onFileChangedPath).isNull()
+        assertThat(watcher.getMonitoredFiles()).containsExactly(testFile)
     }
 
     @Test
     fun `#removeFile() handles non-existent files gracefully`() = runTest {
-        // given
         val nonExistentFile = tempDir.resolve("never-added.yaml")
 
-        // when - removing a file that was never added
         val result = watcher.removeFile(nonExistentFile)
 
-        // then - should return the watcher instance and not throw any exceptions
         assertThat(result).isSameAs(watcher)
     }
 
     @Test
+    fun `#removeFile() unregisters directory when last file is removed`() = runTest {
+        watcher.addFile(testFile)
+        advanceUntilIdle()
+        assertThat(watcher.getWatchedDirectories()).containsExactly(testFile.parent)
+
+        watcher.removeFile(testFile)
+        advanceUntilIdle()
+
+        assertThat(watcher.getMonitoredFiles()).isEmpty()
+        assertThat(watcher.getWatchedDirectories()).isEmpty()
+    }
+
+    @Test
+    fun `#removeFile() keeps directory watch while sibling files remain`() = runTest {
+        val secondFile = createFile("second-file.yaml", "second content")
+
+        watcher.addFile(testFile).addFile(secondFile)
+        advanceUntilIdle()
+        assertThat(watcher.getWatchedDirectories()).containsExactly(testFile.parent)
+
+        watcher.removeFile(testFile)
+        advanceUntilIdle()
+
+        assertThat(watcher.getMonitoredFiles()).containsExactly(secondFile)
+        assertThat(watcher.getWatchedDirectories()).containsExactly(testFile.parent)
+    }
+
+    @Test
+    fun `#addFile() registers a directory watch only once for siblings`() = runTest {
+        val secondFile = createFile("second-file.yaml", "second content")
+
+        watcher.addFile(testFile).addFile(secondFile)
+        advanceUntilIdle()
+
+        assertThat(watcher.getWatchedDirectories()).containsExactly(testFile.parent)
+    }
+
+    @Test
     fun `#removeFile() keeps other files monitored`() = runTest {
-        // given
         val secondFile = createFile("second-file.yaml", "second content")
         val thirdFile = createFile("third-file.yaml", "third content")
-        var onFileChangedCount = 0
-        watcher.onFileChanged { onFileChangedCount++ }
 
-        // when - add multiple files
         watcher
             .addFile(testFile)
             .addFile(secondFile)
             .addFile(thirdFile)
         advanceUntilIdle()
-        
-        // then - all files should trigger callbacks
-        assertThat(onFileChangedCount).isEqualTo(3)
 
-        // when - remove one file
+        assertThat(watcher.getMonitoredFiles()).containsExactlyInAnyOrder(testFile, secondFile, thirdFile)
+
         watcher.removeFile(secondFile)
         advanceUntilIdle()
 
-        // then - other files should still be monitored
-        val initialOnFileChangedCount = onFileChangedCount
-        watcher.addFile(testFile) // Re-adding should not trigger (already added)
-        watcher.addFile(thirdFile) // Re-adding should not trigger (already added)
-        watcher.addFile(secondFile) // Adding should trigger (was removed)
-        advanceUntilIdle()
+        assertThat(watcher.getMonitoredFiles()).containsExactlyInAnyOrder(testFile, thirdFile)
 
-        assertThat(onFileChangedCount).isEqualTo(initialOnFileChangedCount + 1)
+        watcher.addFile(secondFile)
+        advanceUntilIdle()
+        assertThat(watcher.getMonitoredFiles()).containsExactlyInAnyOrder(testFile, secondFile, thirdFile)
     }
 
     @Test
-    fun `#onFileChanged() is invoked when a watched file is modified`() = runTest {
-        // given
-        val callbackReceived = CompletableDeferred<Unit>()
-        watcher.onFileChanged {
-            callbackReceived.complete(Unit)
-        }
+    fun `#getMonitoredFiles() includes non-existent files`() = runTest {
+        val existingFile = createFile("existing.yaml", "content")
+        val nonExistentFile = tempDir.resolve("never-exists.yaml")
 
-        watcher.start()
-        watcher.addFile(testFile)
+        watcher.addFile(existingFile)
+        watcher.addFile(nonExistentFile)
         advanceUntilIdle()
 
-        // when
-        testFile.writeText("updated content")
+        assertThat(watcher.getMonitoredFiles()).containsExactlyInAnyOrder(existingFile, nonExistentFile)
+    }
 
-        // then
-        withTimeout(1000) {
-            callbackReceived.await()
+    @Test
+    fun `#onFileChanged() is invoked when a watched file is modified`() = runBlocking {
+        val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val ioWatcher = FileWatcher(ioScope, Dispatchers.IO)
+        try {
+            val callbackReceived = CompletableDeferred<Unit>()
+            var notifyCount = 0
+            ioWatcher.onFileChanged {
+                notifyCount++
+                // First notify is from addFile; complete on a subsequent FS event.
+                if (notifyCount > 1) {
+                    callbackReceived.complete(Unit)
+                }
+            }
+            ioWatcher.start()
+            ioWatcher.addFile(testFile)
+            delay(200)
+
+            testFile.writeText("updated content")
+
+            @Suppress("ConvertLongToDuration")
+            withTimeout(5_000) {
+                callbackReceived.await()
+            }
+        } finally {
+            ioWatcher.stop()
+            ioScope.cancel()
+        }
+    }
+
+    @Test
+    fun `#onFileChanged() is invoked when a watched file is deleted`() = runBlocking {
+        val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val ioWatcher = FileWatcher(ioScope, Dispatchers.IO)
+        try {
+            val callbackReceived = CompletableDeferred<Path>()
+            var notifyCount = 0
+            ioWatcher.onFileChanged { path ->
+                notifyCount++
+                if (notifyCount > 1) {
+                    callbackReceived.complete(path)
+                }
+            }
+            ioWatcher.start()
+            ioWatcher.addFile(testFile)
+            delay(200)
+
+            testFile.deleteExisting()
+
+            @Suppress("ConvertLongToDuration")
+            withTimeout(5_000) {
+                assertThat(callbackReceived.await()).isEqualTo(testFile)
+            }
+        } finally {
+            ioWatcher.stop()
+            ioScope.cancel()
         }
     }
 
@@ -196,5 +281,4 @@ class FileWatcherTest {
         file.writeText(content)
         return file
     }
-
 }

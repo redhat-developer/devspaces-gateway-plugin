@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -30,7 +30,17 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     private var container: V1Container
 
     companion object {
-        var readyTimeout: Long = 60 // seconds
+        /** Overall wait for remote IDE readiness (wizard "Checking workspace IDE Status..."). */
+        var readyTimeout: Long = 120 // seconds
+
+        /**
+         * Per-probe exec budget while polling. Must stay well below [readyTimeout] so a slow/hung
+         * status exec cannot burn the entire wait (CRW-11119).
+         */
+        const val STATUS_EXEC_TIMEOUT: Long = 15 // seconds
+
+        /** Number of consecutive pod-refresh failures before emitting a warning. */
+        const val REFRESH_FAILURE_WARNING_THRESHOLD: Int = 10
     }
 
     init {
@@ -63,7 +73,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
                 ),
-                timeout = readyTimeout
+                timeout = STATUS_EXEC_TIMEOUT
             ).trim()
 
             checkCancelled?.invoke()
@@ -84,7 +94,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         return doWaitServerState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
-                    "Workspace IDE is not ready after $readyTimeout seconds.",
+                    "Workspace IDE is not ready after $timeout seconds.",
                 )
             }
     }
@@ -92,9 +102,28 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     @Throws(CancellationException::class)
     private suspend fun isServerState(
         isReadyState: Boolean,
-        checkCancelled: (() -> Unit)? = null
+        checkCancelled: (() -> Unit)? = null,
+        refreshPodBeforeCheck: Boolean = false,
+        refreshFailures: IntArray = intArrayOf(0),
     ): Boolean {
         return try {
+            if (refreshPodBeforeCheck) {
+                runCatching {
+                    pod = findPod()
+                    container = findContainer()
+                }.onFailure { e ->
+                    if (e.isCancellationException()) throw e
+                    refreshFailures[0]++
+                    thisLogger().debug("Failed to refresh workspace pod during IDE state check", e)
+                    if (refreshFailures[0] == REFRESH_FAILURE_WARNING_THRESHOLD) {
+                        thisLogger().warn(
+                            "Pod/container refresh has failed ${refreshFailures[0]} consecutive times; " +
+                            "stale pod references may cause incorrect status checks"
+                        )
+                    }
+                    return false
+                }.onSuccess { refreshFailures[0] = 0 }
+            }
             getStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
@@ -110,7 +139,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     /**
      * Waits for the server to have or not have projects according to the given parameter.
-     * Times out the wait if the expected state is not reached within specified timeout (default is 60 seconds).
+     * Times out the wait if the expected state is not reached within specified timeout.
      *
      * @param isReadyState True if server up and running with the projects all set are expected, False otherwise,
      * @return True if the expected state is achieved within the timeout, False otherwise.
@@ -123,9 +152,17 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     ): Boolean =
         @Suppress("ConvertLongToDuration")
         withTimeoutOrNull(timeout * 1000L) {
+            val refreshFailures = intArrayOf(0)
             while (true) {
                 checkCancelled?.invoke()
-                if (isServerState(isReadyState, checkCancelled)) {
+                if (isServerState(
+                        isReadyState,
+                        checkCancelled,
+                        // Re-resolve pod while waiting for ready so a recycled pod is not missed.
+                        refreshPodBeforeCheck = isReadyState,
+                        refreshFailures,
+                    )
+                ) {
                     return@withTimeoutOrNull true
                 }
 

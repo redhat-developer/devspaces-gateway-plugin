@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
@@ -61,7 +62,7 @@ class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
     private val enableNextButton: (() -> Unit)?,
     private val triggerNextAction: (() -> Unit)? = null,
-) : DevSpacesWizardStep {
+) : DevSpacesWizardStep, Disposable {
 
     private lateinit var allClusters: List<Cluster>
 
@@ -83,6 +84,8 @@ class DevSpacesServerStepView(
     private lateinit var kubeconfigScope: CoroutineScope
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
     private var kubeconfigMonitoringActive = false
+    @Volatile
+    private var disposed = false
 
     private val saveConfigCheckbox = JBCheckBox(
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration")
@@ -281,6 +284,11 @@ class DevSpacesServerStepView(
         findStrategy<TokenAuthenticationStrategy>()?.startMonitoring(component)
     }
 
+    override fun dispose() {
+        disposed = true
+        onDispose()
+    }
+
     override fun onDispose() {
         findStrategy<TokenAuthenticationStrategy>()?.stopMonitoring()
 
@@ -391,7 +399,8 @@ class DevSpacesServerStepView(
         }
     }
 
-    private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = { updatedClusters ->
+    private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = action@{ updatedClusters ->
+        if (disposed) return@action
         this.allClusters = updatedClusters
         if (updatedClusters.isNotEmpty()) {
             val kubeConfigCurrentCluster = withContext(Dispatchers.IO) {
@@ -399,6 +408,7 @@ class DevSpacesServerStepView(
             }
             ApplicationManager.getApplication().invokeLater(
                 {
+                    if (disposed) return@invokeLater
                     currentContextClusterName = kubeConfigCurrentCluster
                     val previouslySelected = tfServer.selectedItem as? Cluster?
                     setClusters(updatedClusters)
@@ -409,7 +419,7 @@ class DevSpacesServerStepView(
                     setSelectedAuthTab()
                     enableSaveConfigCheckbox()
                 },
-                ModalityState.stateForComponent(component)
+                ModalityState.any()
             )
         }
     }

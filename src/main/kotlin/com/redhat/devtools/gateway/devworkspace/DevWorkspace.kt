@@ -80,15 +80,12 @@ data class DevWorkspace(
         other as DevWorkspace
 
         return metadata.name == other.metadata.name &&
-                metadata.namespace == other.metadata.namespace &&
-                metadata.annotations == other.metadata.annotations &&
-                labels == other.labels
+                metadata.namespace == other.metadata.namespace
     }
 
     override fun hashCode(): Int {
-        var result = metadata.hashCode()
-        result = 31 * result + spec.hashCode()
-        result = 31 * result + status.hashCode()
+        var result = metadata.name.hashCode()
+        result = 31 * result + metadata.namespace.hashCode()
         return result
     }
 }
