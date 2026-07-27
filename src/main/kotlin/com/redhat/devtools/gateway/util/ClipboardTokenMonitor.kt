@@ -11,6 +11,9 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.intellij.openapi.application.EDT
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.asContextElement
 import kotlinx.coroutines.*
 
 /**
@@ -104,7 +107,9 @@ class ClipboardTokenMonitor(
 
         this.pollingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
-                val value = readClipboardText()
+                val value = withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
+                    readClipboardText()
+                }
 
                 if (value != null && value != lastClipboardValue) {
                     lastClipboardValue = value
