@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025-2026 Red Hat, Inc.
+ * Copyright (c) 2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -11,38 +11,42 @@
  */
 package com.redhat.devtools.gateway.auth.oidc
 
-import com.nimbusds.oauth2.sdk.id.Issuer
-import com.nimbusds.openid.connect.sdk.op.OIDCProviderConfigurationRequest
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata
 import com.redhat.devtools.gateway.DevSpacesBundle
+import com.redhat.devtools.gateway.auth.code.sendGetRequest
 import com.redhat.devtools.gateway.auth.session.SsoLoginException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.net.ConnectException
-import java.net.NoRouteToHostException
-import java.net.SocketTimeoutException
-import java.net.URI
-import java.net.UnknownHostException
+import com.redhat.devtools.gateway.util.IdeHttpProxy
+import java.net.*
+import java.net.http.HttpClient
 import java.net.http.HttpTimeoutException
 import java.util.concurrent.TimeoutException
 
 class OidcProviderMetadataResolver(
-    private val authUrl: String
+    private val authUrl: String,
+    httpClient: HttpClient? = null
 ) {
-    private val issuer = Issuer(authUrl)
+
+    private val discoveryUrl = authUrl.trimEnd('/') + "/.well-known/openid-configuration"
 
     @Volatile
     private var cached: OIDCProviderMetadata? = null
+
+    private val httpClient: HttpClient by lazy {
+        httpClient
+            ?: IdeHttpProxy.configure(
+                HttpClient.newBuilder()
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+            ).build()
+    }
 
     suspend fun resolve(): OIDCProviderMetadata {
         cached?.let { return it }
 
         return try {
-            val request = OIDCProviderConfigurationRequest(issuer)
-            val httpResponse = withContext(Dispatchers.IO) {
-                request.toHTTPRequest().send()
-            }
-            val metadata = OIDCProviderMetadata.parse(httpResponse.bodyAsJSONObject)
+            val response = httpClient.sendGetRequest(discoveryUrl, "OIDC discovery failed")
+            val body = response.body()
+            val metadata = OIDCProviderMetadata.parse(body)
             cached = metadata
             metadata
         } catch (e: Exception) {
@@ -58,7 +62,6 @@ class OidcProviderMetadataResolver(
             }
         }
     }
-
 }
 
 /**
