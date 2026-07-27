@@ -45,7 +45,9 @@ abstract class AbstractAuthenticationStrategy(
      * Checks if a server/cluster has been selected.
      */
     protected fun isServerSelected(): Boolean {
-        return (tfServer as? javax.swing.JComboBox<*>)?.selectedItem != null
+        val combo = tfServer as? javax.swing.JComboBox<*> ?: return false
+        return combo.selectedItem != null
+                || combo.editor.item != null
     }
 
     override fun isDirty(saved: Cluster): Boolean = false
