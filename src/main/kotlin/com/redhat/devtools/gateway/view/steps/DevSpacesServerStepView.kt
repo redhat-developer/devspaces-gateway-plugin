@@ -11,13 +11,15 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.runBlockingCancellable
 import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.redhat.devtools.gateway.auth.tls.browseCertificate
@@ -31,7 +33,7 @@ import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.auth.session.RedHatAuthSessionManager
 import com.redhat.devtools.gateway.auth.tls.*
-import com.redhat.devtools.gateway.auth.tls.ui.UiTlsDecisionAdapter
+import com.redhat.devtools.gateway.auth.tls.ui.UITlsDecisionAdapter
 import com.redhat.devtools.gateway.kubeconfig.FileWatcher
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigMonitor
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
@@ -44,6 +46,7 @@ import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
 import com.redhat.devtools.gateway.util.isLoginUserCancelled
+import com.redhat.devtools.gateway.util.isTlsRelated
 import com.redhat.devtools.gateway.util.stripScheme
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
@@ -59,7 +62,7 @@ class DevSpacesServerStepView(
     private var devSpacesContext: DevSpacesContext,
     private val enableNextButton: (() -> Unit)?,
     private val triggerNextAction: (() -> Unit)? = null,
-) : DevSpacesWizardStep {
+) : DevSpacesWizardStep, Disposable {
 
     private lateinit var allClusters: List<Cluster>
 
@@ -71,8 +74,18 @@ class DevSpacesServerStepView(
 
     private val settings: ServerSettings = ServerSettings()
 
+    @Volatile
+    private var connectInProgress = false
+
+    /** Snapshot of [saveConfig] captured on the EDT when connect starts. */
+    @Volatile
+    private var saveConfigForConnect = false
+
     private lateinit var kubeconfigScope: CoroutineScope
     private lateinit var kubeconfigMonitor: KubeConfigMonitor
+    private var kubeconfigMonitoringActive = false
+    @Volatile
+    private var disposed = false
 
     private val saveConfigCheckbox = JBCheckBox(
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.checkbox.save_configuration")
@@ -83,7 +96,8 @@ class DevSpacesServerStepView(
     }
 
     private val saveConfig: Boolean
-        get() = saveConfigCheckbox.isEnabled && saveConfigCheckbox.isSelected
+        get() = saveConfigCheckbox.isEnabled
+                && saveConfigCheckbox.isSelected
 
     private val sessionManager =
         ApplicationManager.getApplication()
@@ -111,13 +125,13 @@ class DevSpacesServerStepView(
     private val authStrategies: List<AuthenticationStrategy> by lazy {
         val tokenStrategy = TokenAuthenticationStrategy(
             tfServer,
-            ::saveKubeconfig,
+            ::createTokenKubeConfigUpdate,
             ::onFieldChanged,
             ::createEnterKeyListener
         )
 
         val setTokenDisplay: suspend (String) -> Unit = { token ->
-            withContext(Dispatchers.Main) {
+            ApplicationManager.getApplication().invokeLater {
                 tokenStrategy.tfToken.text = token
             }
         }
@@ -126,25 +140,25 @@ class DevSpacesServerStepView(
             tokenStrategy,
             OpenShiftOAuthAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
+                ::createTokenKubeConfigUpdate,
                 setTokenDisplay
             ),
             ClientCertificateAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
-                ::saveKubeconfigWithCert,
+                ::createTokenKubeConfigUpdate,
+                ::createCertKubeConfigUpdate,
                 ::onFieldChanged
             ),
             OpenShiftCredentialsAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
+                ::createTokenKubeConfigUpdate,
                 ::onFieldChanged,
                 ::createEnterKeyListener,
                 setTokenDisplay
             ),
             RedHatSSOAuthenticationStrategy(
                 tfServer,
-                ::saveKubeconfig,
+                ::createTokenKubeConfigUpdate,
                 sessionManager
             )
         )
@@ -179,6 +193,7 @@ class DevSpacesServerStepView(
             currentStrategy = authStrategies.getOrNull(selectedIndex)
             enableNextButton?.invoke()
             enableSaveConfigCheckbox()
+            settings.saveAuthTab(selectedIndex)
         }
     }
 
@@ -235,12 +250,43 @@ class DevSpacesServerStepView(
     override val nextActionText = DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.next")
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.openshift_connection.button.previous")
+    private val sessionTrustStore = SessionTlsTrustStore()
+    private val persistentKeyStore = PersistentKeyStore(
+        path = Paths.get(
+            PathManager.getConfigPath(),
+            "devspaces",
+            "tls-truststore.p12"
+        ),
+        password = CharArray(0)
+    )
+
+    private val tlsTrustManager: TlsTrustManager = DefaultTlsTrustManager(
+        kubeConfigProvider = {
+            withContext(Dispatchers.IO) {
+                KubeConfigUtils.getAllConfigs(
+                    KubeConfigUtils.getAllConfigFiles()
+                )
+            }
+        },
+        kubeConfigWriter = { namedCluster, certs ->
+            withContext(Dispatchers.IO) {
+                KubeConfigTlsWriter.write(namedCluster, certs)
+            }
+        },
+        sessionTrustStore = sessionTrustStore,
+        persistentKeyStore = persistentKeyStore
+    )
 
     override fun onInit() {
         startKubeconfigMonitor()
         enableNextButton?.invoke()
 
         findStrategy<TokenAuthenticationStrategy>()?.startMonitoring(component)
+    }
+
+    override fun dispose() {
+        disposed = true
+        onDispose()
     }
 
     override fun onDispose() {
@@ -353,7 +399,8 @@ class DevSpacesServerStepView(
         }
     }
 
-    private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = { updatedClusters ->
+    private fun onClustersChanged(): suspend (List<Cluster>) -> Unit = action@{ updatedClusters ->
+        if (disposed) return@action
         this.allClusters = updatedClusters
         if (updatedClusters.isNotEmpty()) {
             val kubeConfigCurrentCluster = withContext(Dispatchers.IO) {
@@ -361,6 +408,7 @@ class DevSpacesServerStepView(
             }
             ApplicationManager.getApplication().invokeLater(
                 {
+                    if (disposed) return@invokeLater
                     currentContextClusterName = kubeConfigCurrentCluster
                     val previouslySelected = tfServer.selectedItem as? Cluster?
                     setClusters(updatedClusters)
@@ -368,6 +416,7 @@ class DevSpacesServerStepView(
                         (previouslySelected)?.name ?: kubeConfigCurrentCluster,
                         updatedClusters
                     )
+                    setSelectedAuthTab()
                     enableSaveConfigCheckbox()
                 },
                 ModalityState.stateForComponent(component)
@@ -380,64 +429,85 @@ class DevSpacesServerStepView(
         return true
     }
 
-    override fun onNext(): Boolean {
-        val selectedCluster = getSelectedCluster() ?: return false
+    override fun onNext(): Boolean = false
+
+    override fun isNavigationEnabled(): Boolean = !connectInProgress
+
+    override fun startAsyncNext(): WizardAsyncWork? {
+        val selectedCluster = getSelectedCluster() ?: return null
         val server = selectedCluster.url
-        val strategy = currentStrategy ?: return false
+        val strategy = currentStrategy ?: return null
 
-        if (!confirmAuthSwitchIfNeeded()) return false
-
+        if (!confirmAuthSwitchIfNeeded()) return null
+        connectInProgress = true
         onDispose()
 
-        var authResult: Result<Unit>? = null
+        saveConfigForConnect = saveConfig
+        val certAuthorityData = tfCertAuthority.text.ifBlank { null }
 
-        ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            {
-                runBlocking {
-                    val indicator = ProgressManager.getInstance().progressIndicator
-                    indicator.text = "Connecting to cluster..."
+        return WizardAsyncWork(
+            progressTitle = DevSpacesBundle.message("connector.wizard_step.openshift_connection.title"),
+        ) { indicator, onFinished ->
+            try {
+                indicator.isIndeterminate = true
 
-                    try {
-                        val tlsContext = resolveSslContext(server)
-                        val certAuthorityData = tfCertAuthority.text.ifBlank { null }
-
-                        strategy.authenticate(
-                            selectedCluster,
-                            server,
-                            certAuthorityData,
-                            tlsContext,
-                            devSpacesContext,
-                            indicator
-                        )
-                        authResult = Result.success(Unit)
-                    } catch (e: Exception) {
-                        authResult = Result.failure(e)
-                    }
+                val certificateAuthority = resolveCertificateAuthority(certAuthorityData)
+                if (certificateAuthority != null) {
+                    thisLogger().info(
+                        "TLS trust: wizard Certificate Authority provided " +
+                            "(file=${certificateAuthority.isFilePath})"
+                    )
+                    devSpacesContext.cluster = selectedCluster
                 }
-            },
-            "Connecting to OpenShift...",
-            true,
-            null,
-            component
-        )
 
-        val result = authResult!!
-        return result.fold(
-            onSuccess = {
-                settings.save(selectedCluster)
-                true
-            },
-            onFailure = { e ->
-                thisLogger().warn(e)
-                if (!e.isLoginUserCancelled()) {
-                    Dialogs.error(
-                        "Could not connect to cluster ${server.stripScheme()}.\n\nReason: ${e.message ?: "Unknown error"}",
-                        "Connection Failed"
+                indicator.text = "Establishing secure connection..."
+                val tlsContext = runBlockingCancellable {
+                    resolveTlsContext(
+                        server,
+                        strategy.getAuthMethod(),
+                        certificateAuthority
                     )
                 }
-                false
+
+                indicator.text = "Connecting to cluster..."
+                runBlockingCancellable {
+                    strategy.authenticate(
+                        selectedCluster,
+                        server,
+                        tlsContext,
+                        devSpacesContext,
+                        indicator
+                    )
+                }
+
+                settings.save(selectedCluster)
+                onFinished(true)
+            } catch (e: ProcessCanceledException) {
+                startTokenMonitor()
+                startKubeconfigMonitor()
+                throw e
+            } catch (e: Exception) {
+                handleConnectionFailure(server, e)
+                startTokenMonitor()
+                startKubeconfigMonitor()
+                onFinished(false)
+            } finally {
+                connectInProgress = false
             }
-        )
+        }
+    }
+
+    private fun handleConnectionFailure(server: String, e: Throwable) {
+        thisLogger().warn("Connection to $server failed", e)
+        if (!e.isLoginUserCancelled()) {
+            val reason = e.message ?: "Unknown error"
+            val tlsText = if (e.isTlsRelated()) "TLS details were written to idea.log (search for \"TLS trust\")." else ""
+            Dialogs.error(
+                "Could not connect to cluster ${server.stripScheme()}." +
+                        "\n\nReason: $reason${if (e.isTlsRelated()) "\n\n$tlsText" else ""}",
+                "Connection Failed"
+            )
+        }
     }
 
     private fun confirmAuthSwitchIfNeeded(): Boolean {
@@ -477,85 +547,99 @@ class DevSpacesServerStepView(
     override fun isNextEnabled(): Boolean =
         currentStrategy?.isNextEnabled() ?: false
 
-    private val sessionTrustStore = SessionTlsTrustStore()
-    private val persistentKeyStore = PersistentKeyStore(
-        path = Paths.get(
-            PathManager.getConfigPath(),
-            "devspaces",
-            "tls-truststore.p12"
-        ),
-        password = CharArray(0)
-    )
-
-    private val tlsTrustManager = DefaultTlsTrustManager(
-        kubeConfigProvider = {
-            withContext(Dispatchers.IO) {
-                KubeConfigUtils.getAllConfigs(
-                    KubeConfigUtils.getAllConfigFiles()
+    private suspend fun resolveTlsContext(
+        serverUrl: String,
+        authMethod: AuthMethod,
+        certificateAuthority: CertificateSource?,
+    ): TlsContext {
+        val decisionHandler: suspend (TlsServerCertificateInfo) -> TlsTrustDecision = { info ->
+            UITlsDecisionAdapter.decide(info, component)
+        }
+        return when (authMethod) {
+            AuthMethod.OPENSHIFT,
+            AuthMethod.OPENSHIFT_CREDENTIALS,
+            AuthMethod.REDHAT_SSO ->
+                tlsTrustManager.createOpenShiftTlsContext(
+                    serverUrl,
+                    decisionHandler,
+                    certificateAuthority
                 )
-            }
-        },
-        kubeConfigWriter = { namedCluster, certs ->
-            withContext(Dispatchers.IO) {
-                KubeConfigTlsWriter.write(namedCluster, certs)
-            }
-        },
-        sessionTrustStore = sessionTrustStore,
-        persistentKeyStore = persistentKeyStore
-    )
-
-    private suspend fun resolveSslContext(serverUrl: String): TlsContext {
-        return tlsTrustManager.ensureTrusted(
-            serverUrl = serverUrl,
-            decisionHandler = UiTlsDecisionAdapter::decide
-        )
+            else ->
+                tlsTrustManager.createTlsContext(
+                    serverUrl,
+                    decisionHandler,
+                    certificateAuthority,
+                    TlsEndpointKind.UNKNOWN
+                )
+        }
     }
 
-    private suspend fun saveKubeconfig(cluster: Cluster, token: String, indicator: ProgressIndicator) {
-        if (!saveConfig || token.isBlank()) return
+    private fun resolveCertificateAuthority(input: String?): CertificateSource? {
+        val source = CertificateSource.fromPathOrPem(input) ?: return null
+        source.validate()
+        return source
+    }
+
+    private suspend fun createTokenKubeConfigUpdate(cluster: Cluster, token: String, indicator: ProgressIndicator) {
+        if (!saveConfigForConnect || token.isBlank()) return
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
-                KubeConfigUpdate
-                    .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        token.trim())
-                    .apply()
-            }
-
+            applyKubeconfigTokenUpdate(cluster, token)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
+            ApplicationManager.getApplication().invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
     }
 
-    private suspend fun saveKubeconfigWithCert(cluster: Cluster, clientCertPem: String, clientKeyPem: String, indicator: ProgressIndicator) {
-        if (!saveConfig
+    private suspend fun createCertKubeConfigUpdate(
+        cluster: Cluster,
+        clientCertPem: String,
+        clientKeyPem: String,
+        indicator: ProgressIndicator
+    ) {
+        if (!saveConfigForConnect
             || clientCertPem.isBlank()
             || clientKeyPem.isBlank())
             return
 
         try {
             indicator.text = "Updating Kube config..."
-            withContext(Dispatchers.IO) {
-                KubeConfigUpdate
-                    .create(
-                        cluster.name.trim(),
-                        cluster.url.trim(),
-                        clientCertPem.trim(),
-                        clientKeyPem.trim())
-                    .apply()
-            }
+            applyKubeconfigClientCertUpdate(cluster, clientCertPem, clientKeyPem)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            withContext(Dispatchers.Main) {
+            ApplicationManager.getApplication().invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
+    }
+
+    /**
+     * Blocking kubeconfig write on the progress background thread.
+     * Avoids nesting [kotlinx.coroutines.runInterruptible] inside [runBlockingCancellable], which can
+     * deadlock when the platform handles VFS refresh on the EDT.
+     */
+    private fun applyKubeconfigTokenUpdate(cluster: Cluster, token: String) {
+        KubeConfigUpdate
+            .create(
+                cluster.name.trim(),
+                cluster.url.trim(),
+                token.trim(),
+            )
+            .apply()
+    }
+
+    private fun applyKubeconfigClientCertUpdate(cluster: Cluster, clientCertPem: String, clientKeyPem: String) {
+        KubeConfigUpdate
+            .create(
+                cluster.name.trim(),
+                cluster.url.trim(),
+                clientCertPem.trim(),
+                clientKeyPem.trim(),
+            )
+            .apply()
     }
 
     private fun setClusters(clusters: List<Cluster>) {
@@ -583,7 +667,16 @@ class DevSpacesServerStepView(
         findStrategy<OpenShiftCredentialsAuthenticationStrategy>()?.applyFromCluster(toSelect)
     }
 
+    private fun setSelectedAuthTab() {
+        val savedTabIndex = settings.loadAuthTab()
+        if (savedTabIndex in 0 until authTabs.tabCount) {
+            authTabs.selectedIndex = savedTabIndex
+        }
+    }
+
     private fun startKubeconfigMonitor() {
+        if (kubeconfigMonitoringActive) return
+
         this.kubeconfigScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         this.kubeconfigMonitor = KubeConfigMonitor(
             kubeconfigScope,
@@ -595,11 +688,19 @@ class DevSpacesServerStepView(
             kubeconfigMonitor.onClustersCollected(onClustersChanged())
         }
         kubeconfigMonitor.start()
+        kubeconfigMonitoringActive = true
     }
 
     private fun stopKubeconfigMonitor() {
+        if (!kubeconfigMonitoringActive) return
+
         kubeconfigMonitor.stop()
         kubeconfigScope.cancel()
+        kubeconfigMonitoringActive = false
+    }
+
+    private fun startTokenMonitor() {
+        findStrategy<TokenAuthenticationStrategy>()?.startMonitoring(component)
     }
 
     private class ServerSettings {
@@ -613,6 +714,14 @@ class DevSpacesServerStepView(
         fun save(toSave: Cluster?) {
             val cluster = toSave ?: return
             service.state.server = cluster.url
+        }
+
+        fun loadAuthTab(): Int {
+            return service.state.authTabIndex
+        }
+
+        fun saveAuthTab(tabIndex: Int) {
+            service.state.authTabIndex = tabIndex
         }
     }
 }

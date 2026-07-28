@@ -11,4 +11,12 @@
  */
 package com.redhat.devtools.gateway.util
 
+import java.net.URI
+
 fun String.stripScheme(): String = substringAfter("://", this)
+
+/** Returns the scheme/host/port base URL used for TLS trust lookups. */
+fun URI.toServerBaseUrl(): String {
+    val port = port
+    return if (port > 0) "$scheme://$host:$port" else "$scheme://$host"
+}

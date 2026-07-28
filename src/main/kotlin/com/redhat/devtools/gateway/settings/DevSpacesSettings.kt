@@ -23,4 +23,5 @@ class DevSpacesSettings : SimplePersistentStateComponent<DevSpacesState>(DevSpac
 class DevSpacesState : BaseState() {
     var server by string()
     var token by string()
+    var authTabIndex by property(0)
 }

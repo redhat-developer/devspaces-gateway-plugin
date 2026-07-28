@@ -16,7 +16,6 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import io.kubernetes.client.util.KubeConfig
 import io.mockk.every
 import io.mockk.mockk
-import org.assertj.core.api.Assertions.assertThat
 import java.nio.file.Path
 
 object KubeConfigTestHelpers {

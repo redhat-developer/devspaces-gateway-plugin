@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.auth.sandbox
 
+import com.redhat.devtools.gateway.util.IdeHttpProxy
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import java.net.URI
@@ -23,10 +24,11 @@ class SandboxApi(
     private val timeoutMs: Long
 ) {
 
-    private val httpClient = HttpClient.newBuilder()
-        .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build()
+    private val httpClient = IdeHttpProxy.configure(
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+    ).build()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -39,10 +41,7 @@ class SandboxApi(
             .GET()
             .build()
 
-        val response = httpClient.sendAsync(
-            request,
-            HttpResponse.BodyHandlers.ofString()
-        ).await()
+        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
 
         if (response.statusCode() != 200) {
             return null
@@ -58,10 +57,7 @@ class SandboxApi(
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
-        val response = httpClient.sendAsync(
-            request,
-            HttpResponse.BodyHandlers.discarding()
-        ).await()
+        val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()).await()
 
         return response.statusCode() in 200..299
     }

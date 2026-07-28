@@ -13,7 +13,9 @@ package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import io.kubernetes.client.PortForward
+import io.kubernetes.client.custom.IOTrio
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
@@ -27,7 +29,6 @@ import java.io.OutputStream
 import java.net.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.time.Duration.Companion.seconds
 
 class DevWorkspacePods(private val client: ApiClient) {
 
@@ -38,6 +39,18 @@ class DevWorkspacePods(private val client: ApiClient) {
     }
 
     private val logger = logger<DevWorkspacePods>()
+
+    // Bounded by OkHttp's default 10s connect/read/write timeouts on the shared client
+    fun isPodRunning(pod: V1Pod): Boolean {
+        val name = pod.metadata?.name ?: return false
+        val namespace = pod.metadata?.namespace ?: return false
+        return try {
+            val current = CoreV1Api(client).readNamespacedPod(name, namespace).execute()
+            current.status?.phase == "Running"
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
@@ -74,30 +87,18 @@ class DevWorkspacePods(private val client: ApiClient) {
                 container = container,
                 command = command,
                 onOpen = { io ->
-                    stdoutStream = io.stdout
-                    stderrStream = io.stderr
+                    launchCheckCancelled(checkCancelled, scope, io)
 
                     stdoutJob = scope.launch { readStream(io.stdout, stdout, checkCancelled) }
                     stderrJob = scope.launch { readStream(io.stderr, stderr, checkCancelled) }
-
-                    scope.launch {
-                        try {
-                            listOfNotNull(stdoutJob, stderrJob).joinAll()
-                            closed.await()
-
-                            checkCancelled?.invoke()
-                            cont.resume(stdout.toString())
-                        } catch (e: Throwable) {
-                            if (e.isCancellationException()) cont.cancel(e)
-                            else if (cont.isActive) cont.resumeWithException(e)
-                        }
-                    }
+                    launchJoinStdOutStdErr(scope, stdoutJob, stderrJob, checkCancelled, closed, cont, stdout, execClientApi)
                 },
                 onClosed = { _, _ ->
                     closed.complete(Unit)
                 },
                 onError = { err, _ ->
                     closed.complete(Unit)
+                    shutdownExecClient(execClientApi)
                     cont.resumeWithException(err)
                 },
                 timeoutMs = timeout * 1000,
@@ -112,10 +113,66 @@ class DevWorkspacePods(private val client: ApiClient) {
                     execHandle.future.cancel(true)
                 } catch (_: Throwable) {}
                 scope.cancel()
+                shutdownExecClient(execClientApi)
             }
         } catch (e: Exception) {
+            shutdownExecClient(execClientApi)
             if (cont.isActive) cont.resumeWithException(e)
         }
+    }
+
+    private fun launchJoinStdOutStdErr(
+        scope: CoroutineScope,
+        stdoutJob: Job,
+        stderrJob: Job,
+        checkCancelled: (() -> Unit)?,
+        closed: CompletableDeferred<Unit>,
+        cont: CancellableContinuation<String>,
+        stdout: StringBuilder,
+        execClientApi: ApiClient
+    ) {
+        scope.launch {
+            try {
+                listOfNotNull(stdoutJob, stderrJob).joinAll()
+                checkCancelled?.invoke()
+                closed.await()
+
+                checkCancelled?.invoke()
+                if (cont.isActive) cont.resume(stdout.toString())
+            } catch (e: Throwable) {
+                if (e.isCancellationException()) cont.cancel(e)
+                else if (cont.isActive) cont.resumeWithException(e)
+            } finally {
+                scope.cancel()
+                shutdownExecClient(execClientApi)
+            }
+        }
+    }
+
+    private fun launchCheckCancelled(
+        checkCancelled: (() -> Unit)?,
+        scope: CoroutineScope,
+        io: IOTrio
+    ) {
+        if (checkCancelled == null) {
+            return
+        }
+        scope.launch {
+            try {
+                while (isActive) {
+                    checkCancelled.invoke()
+                    delay(200)
+                }
+            } catch (_: Throwable) {
+                runCatching { io.stdout.close() }
+                runCatching { io.stderr.close() }
+            }
+        }
+    }
+
+    private fun shutdownExecClient(client: ApiClient) {
+        runCatching { client.httpClient.dispatcher.executorService.shutdownNow() }
+        runCatching { client.httpClient.connectionPool.evictAll() }
     }
 
     private fun readStream(
@@ -123,11 +180,15 @@ class DevWorkspacePods(private val client: ApiClient) {
         output: StringBuilder,
         checkCancelled: (() -> Unit)?
     ) {
-        while (true) {
-            checkCancelled?.invoke()
-            val b = input.read()
-            if (b == -1) break
-            output.append(b.toChar())
+        try {
+            while (true) {
+                checkCancelled?.invoke()
+                val b = input.read()
+                if (b == -1) break
+                output.append(b.toChar())
+            }
+        } catch (_: IOException) {
+            // Stream was closed (possibly due to cancellation)
         }
     }
 
@@ -208,6 +269,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                         "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
                     )
                     if (isActive) {
+                        @Suppress("ConvertLongToDuration")
                         delay(RECONNECT_DELAY)
                     }
                 } finally {
@@ -324,7 +386,8 @@ class DevWorkspacePods(private val client: ApiClient) {
         isCancelled: (() -> Unit)? = null
     ): Boolean {
         val labelSelector = "$WORKSPACE_LABEL_KEY=$workspaceName"
-        return withTimeoutOrNull(timeout.seconds) {
+        @Suppress("ConvertLongToDuration")
+        return withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 isCancelled?.invoke()
 
@@ -333,7 +396,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 } catch (e: Exception) {
                     if (e.isCancellationException()) throw e
                     logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
-                    delay(1.seconds)
+                    delay(1000L)
                     continue
                 }
 
@@ -344,7 +407,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 }
 
                 logger.debug("Still waiting for ${pods.items.size} pod(s) to be deleted for $namespace/$workspaceName")
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")

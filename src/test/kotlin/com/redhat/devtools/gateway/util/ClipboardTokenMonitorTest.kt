@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.intellij.testFramework.junit5.TestApplication
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import kotlin.time.Duration.Companion.milliseconds
 
+@TestApplication
 class ClipboardTokenMonitorTest {
 
     private lateinit var monitor: ClipboardTokenMonitor

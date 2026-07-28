@@ -85,7 +85,6 @@ class TokenAuthenticationStrategy(
     override suspend fun authenticate(
         selectedCluster: Cluster,
         server: String,
-        certAuthority: String?,
         tlsContext: TlsContext,
         devSpacesContext: DevSpacesContext,
         indicator: ProgressIndicator
@@ -96,12 +95,9 @@ class TokenAuthenticationStrategy(
 
         val client = createValidatedApiClient(
             server,
-            certAuthority,
             token,
-            null,
-            null,
-            tlsContext,
-            "Authentication failed: invalid server URL or token."
+            tlsContext = tlsContext,
+            errorMessage = "Authentication failed: invalid server URL or token."
         )
 
         saveKubeconfig.invoke(selectedCluster, token, indicator)

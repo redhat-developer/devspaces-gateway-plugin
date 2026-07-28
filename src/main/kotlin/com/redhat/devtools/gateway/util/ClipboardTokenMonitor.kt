@@ -11,8 +11,10 @@
  */
 package com.redhat.devtools.gateway.util
 
+import com.intellij.openapi.application.EDT
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.asContextElement
 import kotlinx.coroutines.*
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Monitors the system clipboard for OpenShift tokens and notifies listeners when detected.
@@ -105,7 +107,9 @@ class ClipboardTokenMonitor(
 
         this.pollingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
-                val value = readClipboardText()
+                val value = withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
+                    readClipboardText()
+                }
 
                 if (value != null && value != lastClipboardValue) {
                     lastClipboardValue = value
@@ -115,7 +119,8 @@ class ClipboardTokenMonitor(
                     }
                 }
 
-                delay(pollingIntervalMs.milliseconds)
+                @Suppress("ConvertLongToDuration")
+                delay(pollingIntervalMs)
             }
         }
     }

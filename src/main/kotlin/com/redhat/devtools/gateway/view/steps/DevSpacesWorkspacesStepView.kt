@@ -17,7 +17,6 @@ import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
 import com.intellij.ui.ColoredListCellRenderer
@@ -87,10 +86,10 @@ class DevSpacesWorkspacesStepView(
 
         row {
             cell(JBScrollPane(listDevWorkspaces)
-                    .apply {
-                        preferredSize = Dimension(preferredSize.width, 200)
-                        minimumSize = Dimension(minimumSize.width, 100)
-                    })
+                .apply {
+                    preferredSize = Dimension(preferredSize.width, 200)
+                    minimumSize = Dimension(minimumSize.width, 100)
+                })
                 .align(AlignX.FILL)
                 .align(AlignY.FILL)
         }.resizableRow().bottomGap(BottomGap.MEDIUM)
@@ -130,6 +129,7 @@ class DevSpacesWorkspacesStepView(
 
         watchManager = WorkspacesWatch(devSpacesContext.client, listDWDataModel)
         refreshAndWatchAllDevWorkspaces()
+        enableButtons()
     }
 
     override fun onPrevious(): Boolean {
@@ -143,7 +143,7 @@ class DevSpacesWorkspacesStepView(
             return false
         }
         devSpacesContext.devWorkspace = workspace
-        val serverStatus = try {
+        try {
             getServerStatus()
         } catch (e: Exception) {
             if (e.isCancellationException()) {
@@ -311,8 +311,13 @@ class DevSpacesWorkspacesStepView(
 
                     val remoteIdeServer = RemoteIDEServer(devSpacesContext)
                     status = runBlocking {
+                        // Progress text stays visible for the whole wait; update so a long poll
+                        // does not look frozen while RemoteIDEServer probes status.
+                        progressIndicator.text =
+                            "Waiting for workspace IDE to become ready (up to ${RemoteIDEServer.readyTimeout}s)..."
                         remoteIdeServer.waitServerReady(checkCancelled)
-                        remoteIdeServer.getStatus()
+                        progressIndicator.text = "Reading workspace IDE status..."
+                        remoteIdeServer.getStatus(checkCancelled)
                     }
                 } catch (e: Exception) {
                     if (e.isCancellationException()) {
@@ -342,7 +347,7 @@ class DevSpacesWorkspacesStepView(
         }
     }
 
-        private fun connect() {
+    private fun connect() {
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
@@ -424,7 +429,10 @@ class DevSpacesWorkspacesStepView(
 
     override fun isNextEnabled(): Boolean {
         val workspace = getSelectedWorkspace() ?: return false
-        return isRunning(workspace) && !isAlreadyConnected(workspace)
+        // Do not gate on "already connected": in IDEA the wizard often stays open after
+        // Guest close, and thin-client / activeWorkspaces tracking is too unreliable to
+        // keep Connect disabled. Tooltip still reflects isAlreadyConnected.
+        return isRunning(workspace)
     }
 
     private fun isStopped(workspace: DevWorkspace?): Boolean {
@@ -440,7 +448,7 @@ class DevSpacesWorkspacesStepView(
      */
     private fun isAlreadyConnected(workspace: DevWorkspace?): Boolean {
         if (workspace == null) return false
-        return devSpacesContext.activeWorkspaces.any { it.namespace == workspace.namespace && it.name == workspace.name }
+        return devSpacesContext.isWorkspaceActive(workspace)
     }
 
     class DevWorkspaceListRenderer : ColoredListCellRenderer<DevWorkspace>() {
@@ -508,7 +516,6 @@ class DevSpacesWorkspacesStepView(
     ) {
         private val devWorkspaces = DevWorkspaces(client)
         private val watchManager = DevWorkspaceWatchManager(
-            client = client,
             createWatcher = { ns, latestResourceVersion ->
                 devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
             },
