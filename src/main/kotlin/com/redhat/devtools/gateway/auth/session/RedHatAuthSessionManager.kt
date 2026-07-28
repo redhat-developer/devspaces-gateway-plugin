@@ -41,9 +41,7 @@ class RedHatAuthSessionManager : AbstractAuthSessionManager() {
 
     private val authConfig = AuthConfig()
 
-    private val providerMetadata = runBlocking {
-        OidcProviderMetadataResolver(authConfig.authUrl).resolve()
-    }
+    private val metadataResolver = OidcProviderMetadataResolver(authConfig.authUrl)
 
     private lateinit var authFlow: RedHatAuthCodeFlow
 
@@ -59,7 +57,7 @@ class RedHatAuthSessionManager : AbstractAuthSessionManager() {
                 authFlow = RedHatAuthCodeFlow(
                     clientId = authConfig.clientId,
                     redirectUri = RedirectUrlBuilder.callbackUrl(serverConfig, port),
-                    providerMetadata = providerMetadata
+                    providerMetadata = metadataResolver.resolve()
                 )
 
                 val request = authFlow.startAuthFlow()

@@ -17,5 +17,6 @@ data class TlsServerCertificateInfo(
     val serverUrl: String,
     val certificateChain: List<X509Certificate>,
     val fingerprintSha256: String,
-    val problem: TlsTrustProblem
+    val problem: TlsTrustProblem,
+    val endpointKind: TlsEndpointKind = TlsEndpointKind.UNKNOWN,
 )

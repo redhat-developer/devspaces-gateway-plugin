@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.auth.tls
 
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
@@ -36,10 +37,34 @@ object SslContextFactory {
             init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
         }
 
-        return TlsContext(sslContext, trustAll)
+        return TlsContext(sslContext, trustAll, isInsecure = true)
+    }
+
+    /** TLS context that trusts the JVM default certificate authorities. */
+    fun fromSystemTrust(): TlsContext {
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(null as java.security.KeyStore?)
+
+        val trustManager = tmf.trustManagers
+            .filterIsInstance<X509TrustManager>()
+            .first()
+
+        val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
+            init(null, tmf.trustManagers, SecureRandom())
+        }
+
+        return TlsContext(sslContext, trustManager, usesSystemTrust = true)
     }
 
     fun fromTrustedCerts(certs: List<X509Certificate>): TlsContext {
+        val defaultTrustManager = defaultTrustManager()
+        if (certs.isEmpty()) {
+            val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
+                init(null, arrayOf<TrustManager>(defaultTrustManager), SecureRandom())
+            }
+            return TlsContext(sslContext, defaultTrustManager, usesSystemTrust = true)
+        }
+
         val keyStore = KeyStoreUtils.createEmpty()
 
         certs.forEachIndexed { idx, cert ->
@@ -55,12 +80,17 @@ object SslContextFactory {
         )
         tmf.init(keyStore)
 
-        val trustManager = tmf.trustManagers
+        val customTrustManager = tmf.trustManagers
             .filterIsInstance<X509TrustManager>()
             .first()
 
+        val trustManager = CompositeX509TrustManager(
+            defaultTrustManager,
+            customTrustManager,
+        )
+
         val sslContext = SSLContext.getInstance(SSL_PROTOCOL).apply {
-            init(null, tmf.trustManagers, SecureRandom())
+            init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
         }
 
         return TlsContext(sslContext, trustManager)
@@ -77,7 +107,51 @@ object SslContextFactory {
             )
         }
 
-        return TlsContext(sslContext, capturingTrustManager)
+        return TlsContext(sslContext, capturingTrustManager, isCapturingProbe = true)
     }
 
+}
+
+private fun defaultTrustManager(): X509TrustManager {
+    val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+    tmf.init(null as java.security.KeyStore?)
+
+    return tmf.trustManagers
+        .filterIsInstance<X509TrustManager>()
+        .first()
+}
+
+private class CompositeX509TrustManager(
+    private val defaultTrustManager: X509TrustManager,
+    private val customTrustManager: X509TrustManager,
+) : X509TrustManager {
+
+    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+        checkTrusted(
+            { defaultTrustManager.checkClientTrusted(chain, authType) },
+            { customTrustManager.checkClientTrusted(chain, authType) },
+        )
+    }
+
+    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+        checkTrusted(
+            { defaultTrustManager.checkServerTrusted(chain, authType) },
+            { customTrustManager.checkServerTrusted(chain, authType) },
+        )
+    }
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> =
+        defaultTrustManager.acceptedIssuers + customTrustManager.acceptedIssuers
+
+    private fun checkTrusted(defaultCheck: () -> Unit, customCheck: () -> Unit) {
+        try {
+            defaultCheck()
+        } catch (defaultFailure: CertificateException) {
+            try {
+                customCheck()
+            } catch (_: CertificateException) {
+                throw defaultFailure
+            }
+        }
+    }
 }

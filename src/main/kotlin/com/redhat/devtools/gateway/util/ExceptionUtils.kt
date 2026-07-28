@@ -27,3 +27,14 @@ fun Throwable.isCancellationException(): Boolean = (this is CancellationExceptio
 
 fun Throwable.isLoginUserCancelled(): Boolean =
     generateSequence(this) { it.cause }.any { it is SsoLoginException.Cancelled }
+
+fun Throwable.isTlsRelated(): Boolean =
+    generateSequence(this) { it.cause }.any { throwable ->
+        val message = throwable.message.orEmpty()
+        val className = throwable::class.java.name
+        className.contains("SSL", ignoreCase = true) ||
+            className.contains("Tls", ignoreCase = true) ||
+            message.contains("PKIX", ignoreCase = true) ||
+            message.contains("certificate", ignoreCase = true) ||
+            message.contains("handshake", ignoreCase = true)
+    }

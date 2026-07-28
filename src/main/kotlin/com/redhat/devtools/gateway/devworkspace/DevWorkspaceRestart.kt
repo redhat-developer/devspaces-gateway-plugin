@@ -172,8 +172,7 @@ class DevWorkspaceRestart(
         thisLogger().debug("Starting workspace and waiting...")
         workspaces.startAndWait(
             namespace,
-            workspaceName,
-            20
+            workspaceName
         )
         thisLogger().debug("Workspace started and running")
     }

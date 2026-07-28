@@ -129,6 +129,7 @@ class DevSpacesWorkspacesStepView(
 
         watchManager = WorkspacesWatch(devSpacesContext.client, listDWDataModel)
         refreshAndWatchAllDevWorkspaces()
+        enableButtons()
     }
 
     override fun onPrevious(): Boolean {
@@ -310,8 +311,13 @@ class DevSpacesWorkspacesStepView(
 
                     val remoteIdeServer = RemoteIDEServer(devSpacesContext)
                     status = runBlocking {
+                        // Progress text stays visible for the whole wait; update so a long poll
+                        // does not look frozen while RemoteIDEServer probes status.
+                        progressIndicator.text =
+                            "Waiting for workspace IDE to become ready (up to ${RemoteIDEServer.readyTimeout}s)..."
                         remoteIdeServer.waitServerReady(checkCancelled)
-                        remoteIdeServer.getStatus()
+                        progressIndicator.text = "Reading workspace IDE status..."
+                        remoteIdeServer.getStatus(checkCancelled)
                     }
                 } catch (e: Exception) {
                     if (e.isCancellationException()) {
@@ -423,7 +429,10 @@ class DevSpacesWorkspacesStepView(
 
     override fun isNextEnabled(): Boolean {
         val workspace = getSelectedWorkspace() ?: return false
-        return isRunning(workspace) && !isAlreadyConnected(workspace)
+        // Do not gate on "already connected": in IDEA the wizard often stays open after
+        // Guest close, and thin-client / activeWorkspaces tracking is too unreliable to
+        // keep Connect disabled. Tooltip still reflects isAlreadyConnected.
+        return isRunning(workspace)
     }
 
     private fun isStopped(workspace: DevWorkspace?): Boolean {
@@ -439,7 +448,7 @@ class DevSpacesWorkspacesStepView(
      */
     private fun isAlreadyConnected(workspace: DevWorkspace?): Boolean {
         if (workspace == null) return false
-        return devSpacesContext.activeWorkspaces.any { it.namespace == workspace.namespace && it.name == workspace.name }
+        return devSpacesContext.isWorkspaceActive(workspace)
     }
 
     class DevWorkspaceListRenderer : ColoredListCellRenderer<DevWorkspace>() {

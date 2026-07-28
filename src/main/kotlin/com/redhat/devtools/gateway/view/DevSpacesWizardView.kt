@@ -15,6 +15,7 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.view.steps.DevSpacesWorkspacesStepView
 import com.redhat.devtools.gateway.view.steps.DevSpacesServerStepView
 import com.redhat.devtools.gateway.view.steps.DevSpacesWizardStep
+import com.redhat.devtools.gateway.view.steps.WizardAsyncWork
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
@@ -35,16 +36,34 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     private var nextButton = JButton()
 
     init {
-        steps.add(DevSpacesServerStepView(devSpacesContext, { enableNextButton() }) { nextStep() })
-        steps.add(DevSpacesWorkspacesStepView(devSpacesContext) { enableNextButton() }.also {
-            Disposer.register(this, it)
-        })
-
+        steps.add(
+            DevSpacesServerStepView(
+                devSpacesContext = devSpacesContext,
+                enableNextButton = { enableNavigationButtons() },
+                triggerNextAction = { nextStep() },
+            ).also {
+                Disposer.register(this, it)
+            }
+        )
+        steps.add(
+            DevSpacesWorkspacesStepView(devSpacesContext)
+            { enableNavigationButtons() }
+                .also {
+                    Disposer.register(this, it)
+                }
+        )
         addToBottom(createButtons())
         applyStep(0)
     }
 
     override fun dispose() {
+        // Children registered with Disposer are disposed before this runs.
+        // Call onDispose for any step that is not itself a Disposable.
+        steps.forEach { step ->
+            if (step !is Disposable) {
+                step.onDispose()
+            }
+        }
         steps.clear()
     }
 
@@ -73,10 +92,33 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     }
 
     private fun nextStep() {
-        if (steps[currentStep].onNext()) applyStep(+1)
+        if (currentStep !in steps.indices) return
+        val step = steps[currentStep]
+        if (!step.isNavigationEnabled()) return
+
+        val asyncWork = step.startAsyncNext()
+        if (asyncWork != null) {
+            runAsyncNext(asyncWork)
+            return
+        }
+        if (step.onNext()) {
+            applyStep(+1)
+        }
+    }
+
+    private fun runAsyncNext(work: WizardAsyncWork) {
+        enableNavigationButtons(false)
+        WizardAsyncWork.execute(work) { advance ->
+            enableNavigationButtons(true)
+            if (advance) {
+                applyStep(+1)
+            }
+        }
     }
 
     private fun previousStep() {
+        if (currentStep !in steps.indices) return
+        WizardAsyncWork.invalidatePending()
         if (!steps[currentStep].onPrevious()) return
 
         if (isFirstStep()) {
@@ -87,10 +129,12 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
     }
 
     private fun applyStep(shift: Int) {
+        if (currentStep !in steps.indices) return
         remove(steps[currentStep].component)
         updateUI()
 
         currentStep += shift
+        if (currentStep !in steps.indices) return
         steps[currentStep].apply {
             addToCenter(component)
             nextButton.text = nextActionText
@@ -98,12 +142,17 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
             onInit()
         }
 
-        enableNextButton()
+        enableNavigationButtons()
     }
 
-    private fun enableNextButton() {
+    private fun enableNavigationButtons(enabled: Boolean? = null) {
+        if (!canEnableNavigationButtons(steps.size, currentStep)) {
+            return
+        }
         val step = steps[currentStep]
-        nextButton.isEnabled = step.isNextEnabled()
+        val navigationEnabled = enabled ?: step.isNavigationEnabled()
+        previousButton.isEnabled = navigationEnabled
+        nextButton.isEnabled = navigationEnabled && step.isNextEnabled()
     }
 
     private fun isFirstStep(): Boolean {
@@ -114,3 +163,10 @@ class DevSpacesWizardView(devSpacesContext: DevSpacesContext) : BorderLayoutPane
         return currentStep == steps.size - 1
     }
 }
+
+/**
+ * Returns true when [currentStep] is a valid index into a wizard step list of [stepCount].
+ * Used to ignore navigation updates after [DevSpacesWizardView.dispose] clears steps.
+ */
+internal fun canEnableNavigationButtons(stepCount: Int, currentStep: Int): Boolean =
+    currentStep in 0 until stepCount

@@ -14,6 +14,8 @@ package com.redhat.devtools.gateway.devworkspace
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.openshift.Utils
+import com.redhat.devtools.gateway.openshift.isRetryable
+import com.redhat.devtools.gateway.openshift.shouldBeIgnored
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
@@ -95,9 +97,8 @@ class DevWorkspaces(private val client: ApiClient) {
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
         // Quick editor ID check
-        val segment = devWorkspace.cheEditor.split("/").getOrNull(1)
-        if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
-             return true
+        if (devWorkspace.cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+            return true
         }
 
         // DevWorkspace Template check
@@ -135,9 +136,6 @@ class DevWorkspaces(private val client: ApiClient) {
         ).execute()
         return DevWorkspace.from(dwObj)
     }
-
-    fun ApiException.shouldBeIgnored(): Boolean = code == 403 || code == 404
-    fun ApiException.isRetryable(): Boolean = code in setOf(429, 500, 502, 503, 504)
 
     // Returns a map of DW Owner UID tp list of DW Templates
     private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
@@ -202,7 +200,7 @@ class DevWorkspaces(private val client: ApiClient) {
     fun startAndWait(
         namespace: String,
         name: String,
-        timeout: Long = RUNNING_TIMEOUT,
+        timeoutSec: Long = RUNNING_TIMEOUT,
         checkCancelled: (() -> Unit)? = null
     ) {
         val devWorkspace = get(namespace, name)
@@ -212,8 +210,8 @@ class DevWorkspaces(private val client: ApiClient) {
             start(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeout, checkCancelled) }) {
-            throw IOException("Workspace '$name' is not running after $timeout seconds")
+        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeoutSec, checkCancelled) }) {
+            throw IOException("Workspace '$name' is not running after $timeoutSec seconds")
         }
     }
 
@@ -221,7 +219,7 @@ class DevWorkspaces(private val client: ApiClient) {
     fun stopAndWait(
         namespace: String,
         name: String,
-        timeout: Long = RUNNING_TIMEOUT,
+        timeoutSec: Long = RUNNING_TIMEOUT, // seconds
         checkCancelled: (() -> Unit)? = null
     ) {
         val devWorkspace = get(namespace, name)
@@ -231,8 +229,8 @@ class DevWorkspaces(private val client: ApiClient) {
             stop(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeout, checkCancelled) }) {
-            throw IOException("Workspace '$name' has not stopped after $timeout seconds")
+        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeoutSec, checkCancelled) }) {
+            throw IOException("Workspace '$name' has not stopped after $timeoutSec seconds")
         }
     }
 
@@ -242,10 +240,10 @@ class DevWorkspaces(private val client: ApiClient) {
         namespace: String,
         name: String,
         desiredPhase: String,
-        timeout: Long, // in seconds
+        timeoutSec: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        return withTimeoutOrNull(timeout * 1000L) {
+        return withTimeoutOrNull(timeoutSec * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {

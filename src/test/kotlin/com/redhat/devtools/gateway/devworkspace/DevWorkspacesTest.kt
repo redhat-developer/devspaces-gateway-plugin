@@ -199,6 +199,42 @@ class DevWorkspacesTest {
             .hasMessageContaining("API error")
     }
 
+    @Test
+    fun `#isIdeaEditorBased returns true for full path editor annotation`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea-server/latest")
+        assert(devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
+    @Test
+    fun `#isIdeaEditorBased returns true for editor name only`() {
+        val dw = createDevWorkspaceWithEditor("che-idea-server")
+        assert(devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
+    @Test
+    fun `#isIdeaEditorBased returns true for editor name with version`() {
+        val dw = createDevWorkspaceWithEditor("che-idea-server/latest")
+        assert(devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
+    @Test
+    fun `#isIdeaEditorBased returns true for editor name with prefix`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea-server")
+        assert(devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
+    @Test
+    fun `#isIdeaEditorBased returns false for non-idea editor`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        assert(!devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
+    @Test
+    fun `#isIdeaEditorBased returns false for unknown editor`() {
+        val dw = createDevWorkspaceWithEditor("unknown")
+        assert(!devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
+    }
+
     // Helper methods
     private fun mockGetDevWorkspace(devWorkspace: Any) {
         every {
@@ -269,6 +305,20 @@ class DevWorkspacesTest {
                 any()
             )
         }
+    }
+
+    private fun createDevWorkspaceWithEditor(cheEditor: String): DevWorkspace {
+        return DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf("che.eclipse.org/che-editor" to cheEditor),
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
     }
 
     private fun createMockDevWorkspace(
