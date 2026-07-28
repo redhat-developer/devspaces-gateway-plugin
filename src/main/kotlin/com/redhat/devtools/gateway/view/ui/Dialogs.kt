@@ -1,6 +1,7 @@
 package com.redhat.devtools.gateway.view.ui
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ui.Messages
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.Icon
@@ -32,10 +33,11 @@ object Dialogs {
         title: String,
         options: Array<String>,
         defaultOptionIndex: Int = 0,
-        icon: Icon? = Messages.getWarningIcon()
+        icon: Icon? = Messages.getWarningIcon(),
+        modalityState: ModalityState? = null
     ): Int {
         val result = AtomicInteger(-1)
-        ApplicationManager.getApplication().invokeAndWait {
+        ApplicationManager.getApplication().invokeAndWait({
             result.set(
                 Messages.showDialog(
                     message,
@@ -45,7 +47,7 @@ object Dialogs {
                     icon
                 )
             )
-        }
+        }, modalityState ?: ModalityState.defaultModalityState())
         return result.get()
     }
 
@@ -64,14 +66,16 @@ object Dialogs {
         title: String,
         buttons: Array<String>,
         confirmOptionIndex: Int,
-        defaultOptionIndex: Int = 0
+        defaultOptionIndex: Int = 0,
+        modalityState: ModalityState? = null
     ): Boolean {
         return showInEdt(
             message,
             title,
             buttons,
             defaultOptionIndex,
-            Messages.getWarningIcon()
+            Messages.getWarningIcon(),
+            modalityState
         ) == confirmOptionIndex
     }
 
@@ -96,14 +100,15 @@ object Dialogs {
      *
      * @return true if the user wants to restart the Pod, false if they want to cancel the connection
      */
-    fun ideNotResponding(): Boolean {
+    fun ideNotResponding(modalityState: ModalityState? = null): Boolean {
         return confirm(
             message = "The workspace IDE is not responding properly.\n" +
                     "Would you like to try restarting the Pod or cancel the connection?",
             title = "Cannot Connect to workspace IDE",
             buttons = arrayOf("Cancel Connection", "Restart Pod and try again"),
             confirmOptionIndex = 1,
-            defaultOptionIndex = 0
+            defaultOptionIndex = 0,
+            modalityState = modalityState
         )
     }
 

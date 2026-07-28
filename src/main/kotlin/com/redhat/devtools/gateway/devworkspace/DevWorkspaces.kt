@@ -12,8 +12,10 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.google.gson.reflect.TypeToken
-import com.redhat.devtools.gateway.openshift.Utils
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.Utils
+import com.redhat.devtools.gateway.openshift.isRetryable
+import com.redhat.devtools.gateway.openshift.shouldBeIgnored
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
@@ -23,8 +25,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 data class DevWorkspaceListResult(
     val items: List<DevWorkspace>,
@@ -97,9 +97,8 @@ class DevWorkspaces(private val client: ApiClient) {
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
         // Quick editor ID check
-        val segment = devWorkspace.cheEditor.split("/").getOrNull(1)
-        if (segment != null && CHE_EDITOR_ID_REGEX.matches(segment)) {
-             return true
+        if (devWorkspace.cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+            return true
         }
 
         // DevWorkspace Template check
@@ -140,28 +139,36 @@ class DevWorkspaces(private val client: ApiClient) {
 
     // Returns a map of DW Owner UID tp list of DW Templates
     private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
-        val dwTemplateList = customApi
-            .listNamespacedCustomObject(
-                "workspace.devfile.io",
-                "v1alpha2",
-                namespace,
-                "devworkspacetemplates",
-            )
-            .execute()
+        try {
+            val dwTemplateList = customApi
+                .listNamespacedCustomObject(
+                    "workspace.devfile.io",
+                    "v1alpha2",
+                    namespace,
+                    "devworkspacetemplates",
+                )
+                .execute()
 
-        val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
-        return items
-            .map { DevWorkspaceTemplate.from(it) }
-            .flatMap { templ ->
-                templ.ownerRefencesUids.map { uid -> uid to templ }
+            val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
+            return items
+                .map { DevWorkspaceTemplate.from(it) }
+                .flatMap { templ ->
+                    templ.ownerRefencesUids.map { uid -> uid to templ }
+                }
+                .groupBy(
+                    keySelector = { it.first },   // UID
+                    valueTransform = { it.second } // DevWorkspaceTemplate
+                )
+        } catch (e: ApiException) {
+            if (e.shouldBeIgnored()) {
+                return emptyMap()
             }
-            .groupBy(
-                keySelector = { it.first },   // UID
-                valueTransform = { it.second } // DevWorkspaceTemplate
-            )
+            thisLogger().info(e.message)
+            throw e
+        }
     }
 
-    @Throws(ApiException::class)
+@Throws(ApiException::class)
     fun start(namespace: String, name: String) {
         DevWorkspacePatch(namespace, name, client) {
             get(namespace, name)
@@ -193,7 +200,7 @@ class DevWorkspaces(private val client: ApiClient) {
     fun startAndWait(
         namespace: String,
         name: String,
-        timeout: Long = RUNNING_TIMEOUT,
+        timeoutSec: Long = RUNNING_TIMEOUT,
         checkCancelled: (() -> Unit)? = null
     ) {
         val devWorkspace = get(namespace, name)
@@ -203,8 +210,8 @@ class DevWorkspaces(private val client: ApiClient) {
             start(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeout, checkCancelled) }) {
-            throw IOException("Workspace '$name' is not running after $timeout seconds")
+        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeoutSec, checkCancelled) }) {
+            throw IOException("Workspace '$name' is not running after $timeoutSec seconds")
         }
     }
 
@@ -212,7 +219,7 @@ class DevWorkspaces(private val client: ApiClient) {
     fun stopAndWait(
         namespace: String,
         name: String,
-        timeout: Long = RUNNING_TIMEOUT,
+        timeoutSec: Long = RUNNING_TIMEOUT, // seconds
         checkCancelled: (() -> Unit)? = null
     ) {
         val devWorkspace = get(namespace, name)
@@ -222,27 +229,31 @@ class DevWorkspaces(private val client: ApiClient) {
             stop(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeout, checkCancelled) }) {
-            throw IOException("Workspace '$name' has not stopped after $timeout seconds")
+        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeoutSec, checkCancelled) }) {
+            throw IOException("Workspace '$name' has not stopped after $timeoutSec seconds")
         }
     }
 
+    @Suppress("ConvertLongToDuration")
     @Throws(ApiException::class, IOException::class, CancellationException::class)
     suspend fun waitPhase(
         namespace: String,
         name: String,
         desiredPhase: String,
-        timeout: Long, // in seconds
+        timeoutSec: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        return withTimeoutOrNull(timeout.seconds) {
+        return withTimeoutOrNull(timeoutSec * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
-                } catch (_: Exception) {
-                    delay(1.seconds)
-                    continue
+                } catch (e: ApiException) {
+                    if (e.isRetryable()) {
+                        delay(1000L)
+                        continue
+                    }
+                    throw e
                 }
 
                 checkCancelled?.invoke()
@@ -253,7 +264,7 @@ class DevWorkspaces(private val client: ApiClient) {
                         -> return@withTimeoutOrNull false
                 }
 
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")
@@ -270,14 +281,15 @@ class DevWorkspaces(private val client: ApiClient) {
         timeout: Long, // in seconds
         checkCancelled: (() -> Unit)? = null
     ): Boolean {
-        return withTimeoutOrNull(timeout.seconds) {
+        @Suppress("ConvertLongToDuration")
+        return withTimeoutOrNull(timeout * 1000L) {
             while (true) {
                 checkCancelled?.invoke()
 
                 val devWorkspace = try {
                     DevWorkspaces(client).get(namespace, name)
                 } catch (e: Exception) {
-                    delay(1.seconds)
+                    delay(1000L)
                     continue
                 }
 
@@ -286,7 +298,7 @@ class DevWorkspaces(private val client: ApiClient) {
                     return@withTimeoutOrNull true // phase changed out of the given set
                 }
 
-                delay(1.seconds)
+                delay(1000L)
             }
 
             @Suppress("UNREACHABLE_CODE")

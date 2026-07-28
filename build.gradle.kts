@@ -1,5 +1,6 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestResult
@@ -12,11 +13,24 @@ plugins {
     alias(libs.plugins.changelog) // Gradle Changelog Plugin
     alias(libs.plugins.qodana) // Gradle Qodana Plugin
     alias(libs.plugins.kover) // Gradle Kover Plugin
-    kotlin("plugin.serialization") version "2.3.21" // Serialization needed for RedHat Auth
+    kotlin("plugin.serialization") version libs.versions.kotlin.get() // Serialization needed for RedHat Auth
 }
 
 group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
+
+// -Pidea switches from Gateway (GW) to IntelliJ IDEA (IU)
+val isIdea = providers.gradleProperty("idea").isPresent
+val resolvedPlatformType = if (isIdea) {
+    "IU"
+} else {
+    providers.gradleProperty("platformType").get()
+}
+val resolvedBundledPlugins = if (isIdea) {
+    "com.jetbrains.gateway"
+} else {
+    providers.gradleProperty("platformBundledPlugins").get()
+}
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -56,10 +70,10 @@ dependencies {
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
-        create(providers.gradleProperty("platformType"), providers.gradleProperty("platformVersion"))
+        create(resolvedPlatformType, providers.gradleProperty("platformVersion"))
 
         // Plugin Dependencies. Uses `platformBundledPlugins` property from the gradle.properties file for bundled IntelliJ Platform plugins.
-        bundledPlugins(providers.gradleProperty("platformBundledPlugins").map { it.split(',') })
+        bundledPlugins(resolvedBundledPlugins.split(',').filter { it.isNotBlank() })
 
         // Plugin Dependencies. Uses `platformPlugins` property from the gradle.properties file for plugin from JetBrains Marketplace.
         plugins(providers.gradleProperty("platformPlugins").map { it.split(',') })
@@ -69,20 +83,17 @@ dependencies {
         testFramework(TestFrameworkType.JUnit5)
     }
 
-    implementation("io.kubernetes:client-java:26.0.0")
+    // 24.x aligns with OkHttp 4.12 (Java CacheControl); 25+ pulls OkHttp 5.x which needs stdlib 2.2+.
+    implementation("io.kubernetes:client-java:24.0.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.3")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.3")
 
     // RedHat Auth dependencies
-    implementation("io.ktor:ktor-server-core-jvm:3.4.3")
-    implementation("io.ktor:ktor-server-netty-jvm:3.4.3")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:3.4.3")
-
     implementation("com.nimbusds:oauth2-oidc-sdk:11.15")  // Core OIDC/OAuth2
     implementation("com.nimbusds:nimbus-jose-jwt:10.9")   // JWT processing
 
     // JSON serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:${libs.versions.kotlinxSerialization.get()}")
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html
@@ -230,20 +241,13 @@ tasks {
 
 intellijPlatformTesting {
     runIde {
-        register("runIdeForUiTests") {
-            task {
-                jvmArgumentProviders += CommandLineArgumentProvider {
-                    listOf(
-                        "-Drobot-server.port=8082",
-                        "-Dide.mac.message.dialogs.as.sheets=false",
-                        "-Djb.privacy.policy.text=<!--999.999-->",
-                        "-Djb.consents.confirmation.enabled=false",
-                    )
-                }
-            }
+        // Visible next to runIde under "intellij platform" in the Gradle tool window
+        register("runIdeIdea") {
+            type = IntelliJPlatformType.IntellijIdeaUltimate
+            version = providers.gradleProperty("platformVersion")
 
             plugins {
-                robotServerPlugin()
+                bundledPlugin("com.jetbrains.gateway")
             }
         }
     }

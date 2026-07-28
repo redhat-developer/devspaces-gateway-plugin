@@ -18,8 +18,16 @@ import com.redhat.devtools.gateway.openshift.mapOfNotNull
 import io.kubernetes.client.persister.ConfigPersister
 import org.yaml.snakeyaml.DumperOptions
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class BlockStyleFilePersister(private val file: File) : ConfigPersister {
+
+    companion object {
+        private val fileLocks = ConcurrentHashMap<String, Any>()
+
+        private fun lockFor(file: File): Any =
+            fileLocks.getOrPut(file.canonicalPath) { Any() }
+    }
 
     @Throws(java.io.IOException::class)
     override fun save(
@@ -39,7 +47,7 @@ class BlockStyleFilePersister(private val file: File) : ConfigPersister {
             "users" to users,
         )
 
-        synchronized(file) {
+        synchronized(lockFor(file)) {
             val options = DumperOptions().apply { width = 0 }
             val yamlFactory = YAMLFactory.builder()
                 .dumperOptions(options)

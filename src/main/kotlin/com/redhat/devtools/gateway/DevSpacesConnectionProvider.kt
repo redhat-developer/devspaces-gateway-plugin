@@ -20,23 +20,12 @@ import com.intellij.ui.dsl.builder.panel
 import com.jetbrains.gateway.api.ConnectionRequestor
 import com.jetbrains.gateway.api.GatewayConnectionHandle
 import com.jetbrains.gateway.api.GatewayConnectionProvider
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
-import com.redhat.devtools.gateway.openshift.OpenShiftClientFactory
-import com.redhat.devtools.gateway.openshift.isNotFound
-import com.redhat.devtools.gateway.openshift.isUnauthorized
+import com.redhat.devtools.gateway.openshift.toWorkspaceException
 import com.redhat.devtools.gateway.util.ProgressCountdown
-import com.redhat.devtools.gateway.util.isCancellationException
-import com.redhat.devtools.gateway.util.messageWithoutPrefix
 import com.redhat.devtools.gateway.view.SelectClusterDialog
-import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.util.concurrent.CancellationException
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -76,9 +65,17 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         indicator.isIndeterminate = true
                         indicator.text = "Connecting to DevSpace..."
 
-                        val handle = doConnect(parameters, indicator)
+                        val handle = doConnect(parameters, ctx, indicator)
                         val thinClient = handle.clientHandle
                             ?: throw RuntimeException("Failed to obtain ThinClientHandle")
+
+                        if (thinClient.clientPresent) {
+                            indicator.text = "Workspace IDE has started successfully"
+                            indicator.text2 = "Opening project window…"
+                            runDelayed(1000) { if (indicator.isRunning) indicator.stop() }
+                            cont.resume(handle)
+                            return@runProcessWithProgressSynchronously
+                        }
 
                         indicator.text = "Waiting for workspace IDE to start..."
 
@@ -100,29 +97,21 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                                 cont.resumeWith(Result.failure(error))
                             }
                         }
-                    } catch (e: ApiException) {
-                        indicator.text = "Connection failed"
-                        runDelayed(2000, { if (indicator.isRunning) indicator.stop() })
-                        if (!(handleUnauthorizedError(e) || handleNotFoundError(e))) {
-                            Dialogs.error(
-                                e.messageWithoutPrefix() ?: "Could not connect to workspace.",
-                                "Connection Error"
-                            )
-                        }
 
-                        if (cont.isActive) cont.resume(null)
-                    } catch (e: Exception) {
-                        if (e.isCancellationException() || indicator.isCanceled) {
-                            indicator.text2 = "Error: ${e.message}"
-                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
-                        } else {
-                            runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
-                            Dialogs.error(
-                                e.message ?: "Could not connect to workspace.",
-                                "Connection Error"
-                            )
+                        runBlocking {
+                            withTimeoutOrNull(60_000L) { ready.await() } ?: run {
+                                if (ready.isActive) {
+                                    indicator.text = "Workspace IDE did not report readiness in time."
+                                    ready.completeExceptionally(
+                                        RuntimeException("Workspace IDE did not report readiness in time.")
+                                    )
+                                }
+                            }
                         }
-                        cont.resume(null)
+                    } catch (e: Exception) {
+                        DevSpacesConnectionProviderErrors.showDialog(e, ctx, indicator)
+                        runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
+                        if (cont.isActive) cont.resume(null)
                     } finally {
                         indicator.dispose()
                     }
@@ -185,44 +174,25 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
     @Throws(IllegalArgumentException::class)
     private fun doConnect(
         parameters: Map<String, String>,
+        ctx: DevSpacesContext,
         indicator: ProgressCountdown
     ): GatewayConnectionHandle {
         thisLogger().debug("Launched Dev Spaces connection provider", parameters)
 
         indicator.update(message = "Preparing connection environment…")
 
-        val dwNamespace = parameters[DW_NAMESPACE]
-        if (dwNamespace.isNullOrBlank()) {
-            thisLogger().error("Query parameter \"$DW_NAMESPACE\" is missing")
-            throw IllegalArgumentException("Query parameter \"$DW_NAMESPACE\" is missing")
-        }
+        val dwNamespace = validateDevWorkspaceNamespace(parameters[DW_NAMESPACE])
+        val dwName = validateDevWorkspaceName(parameters[DW_NAME])
 
-        val dwName = parameters[DW_NAME]
-        if (dwName.isNullOrBlank()) {
-            thisLogger().error("Query parameter \"$DW_NAME\" is missing")
-            throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
+        if (!ctx.hasClient()) {
+            throw IllegalStateException("Cluster dialog completed without authenticating")
         }
-        val ctx = DevSpacesContext()
-
-        indicator.update(message = "Initializing Kubernetes connection…")
-        val factory = OpenShiftClientFactory(KubeConfigUtils)
-        ctx.client = factory.create()
 
         indicator.update(message = "Fetching workspace “$dwName” from namespace “$dwNamespace”…")
-        ctx.devWorkspace = DevWorkspaces(ctx.client).get(dwNamespace, dwName)
+        ctx.devWorkspace = fetchDevWorkspace(ctx, dwNamespace, dwName)
 
         indicator.update(message = "Connecting to workspace IDE…")
-        val thinClient = runBlocking(Dispatchers.IO) {
-            DevSpacesConnection(ctx)
-                .connect({}, {}, {},
-                    onProgress = { value ->
-                        indicator.update(value.title, value.message, value.countdownSeconds)
-                    },
-                    checkCancelled = {
-                        if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
-                    }
-                )
-        }
+        val thinClient = connectToWorkspace(ctx, indicator)
 
         indicator.update(message = "Connection established successfully.")
         return DevSpacesConnectionHandle(
@@ -230,6 +200,22 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
             thinClient,
             { createComponent(dwName) },
             dwName)
+    }
+
+    private fun validateDevWorkspaceName(dwName: String?): String {
+        if (dwName.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAME\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAME\" is missing")
+        }
+        return dwName
+    }
+
+    private fun validateDevWorkspaceNamespace(dwNamespace: String?): String {
+        if (dwNamespace.isNullOrBlank()) {
+            thisLogger().error("Query parameter \"$DW_NAMESPACE\" is missing")
+            throw IllegalArgumentException("Query parameter \"$DW_NAMESPACE\" is missing")
+        }
+        return dwNamespace
     }
 
     override fun isApplicable(parameters: Map<String, String>): Boolean {
@@ -254,31 +240,37 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
         }
     }
 
-    private fun handleUnauthorizedError(err: ApiException): Boolean {
-        if (!err.isUnauthorized()) return false
-
-        Dialogs.error(
-            "Your session has expired.\n" +
-                    "Please authenticate again to continue.\n\n" +
-                    "If you are using token-based authentication, update your token in the kubeconfig file.",
-            "Authentication Required"
-        )
-        return true
+    private fun fetchDevWorkspace(
+        ctx: DevSpacesContext,
+        namespace: String,
+        name: String,
+    ) = try {
+        DevWorkspaces(ctx.client).get(namespace, name)
+    } catch (e: ApiException) {
+        throw e.toWorkspaceException(namespace, name, ctx.client.basePath) ?: e
     }
 
-    private fun handleNotFoundError(err: ApiException): Boolean {
-        if (!err.isNotFound()) return false
-
-        val message = """
-            Workspace support not found.
-            You're likely connected to a cluster that doesn't have the DevWorkspace Operator installed, or the specified workspace doesn't exist.
-        
-            Please verify your Kubernetes context, namespace, and that the DevWorkspace Operator is installed and running.
-        """.trimIndent()
-
-        Dialogs.error(message, "Resource Not Found")
-        return true
-    }
+    private fun connectToWorkspace(ctx: DevSpacesContext, indicator: ProgressCountdown) =
+        runBlocking(Dispatchers.IO) {
+            try {
+                DevSpacesConnection(ctx).connect(
+                    {}, {}, {},
+                    onProgress = { value ->
+                        indicator.update(value.title, value.message, value.countdownSeconds)
+                    },
+                    checkCancelled = {
+                        if (indicator.isCanceled) throw CancellationException("User cancelled the operation")
+                    },
+                    modalityState = indicator.modalityState
+                )
+            } catch (e: ApiException) {
+                throw e.toWorkspaceException(
+                    namespace = ctx.devWorkspace.namespace,
+                    name = ctx.devWorkspace.name,
+                    clusterUrl = ctx.client.basePath,
+                ) ?: e
+            }
+        }
 
     private fun runDelayed(delay: Int, runnable: () -> Unit) {
         Timer(delay) {

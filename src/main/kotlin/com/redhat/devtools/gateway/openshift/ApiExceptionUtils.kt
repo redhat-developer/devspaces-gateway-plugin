@@ -11,31 +11,127 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.google.gson.Gson
+import com.redhat.devtools.gateway.devworkspace.WorkspaceAccessDeniedException
+import com.redhat.devtools.gateway.devworkspace.WorkspaceException
+import com.redhat.devtools.gateway.devworkspace.WorkspaceNotFoundException
 import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.models.V1Status
 
 fun ApiException.isNotFound(): Boolean {
     return code == 404
+        || getStatus()?.code == 404
+        || getStatus()?.reason == "NotFound"
 }
 
 fun ApiException.isUnauthorized(): Boolean {
-    return code == 401
+    return code == 401 || getStatus()?.code == 401
+}
+
+fun ApiException.isForbidden(): Boolean {
+    return code == 403 || getStatus()?.code == 403
+}
+
+fun ApiException.isDevWorkspaceCrdMissing(): Boolean {
+    val status = getStatus() ?: return false
+    val message = status.message.orEmpty()
+    if (message.contains("could not find the requested resource", ignoreCase = true)
+        && message.contains("devworkspaces", ignoreCase = true)
+    ) {
+        return true
+    }
+    val details = status.details ?: return false
+    return "devworkspaces".equals(details.kind, ignoreCase = true) && details.name.isNullOrBlank()
+}
+
+fun ApiException.isDevWorkspaceResourceMissing(name: String): Boolean {
+    val status = getStatus() ?: return false
+    val message = status.message.orEmpty()
+    if (message.contains("\"$name\" not found", ignoreCase = true)) {
+        return true
+    }
+    val details = status.details ?: return false
+    return details.name == name && "devworkspaces".equals(details.kind, ignoreCase = true)
+}
+
+fun ApiException.isDevWorkspaceAccessDenied(namespace: String): Boolean {
+    if (!isForbidden()) return false
+    val message = buildString {
+        append(getStatus()?.message.orEmpty())
+        append(responseBody.orEmpty())
+    }
+    return message.contains("devworkspaces", ignoreCase = true)
+        || message.contains("namespace \"$namespace\"", ignoreCase = true)
+        || message.contains("namespaces \"$namespace\"", ignoreCase = true)
+}
+
+fun ApiException.toWorkspaceException(
+    namespace: String,
+    name: String,
+    clusterUrl: String,
+): WorkspaceException? = when {
+    isDevWorkspaceAccessDenied(namespace) -> WorkspaceAccessDeniedException(namespace, name, clusterUrl, this)
+    isDevWorkspaceCrdMissing() -> WorkspaceNotFoundException(namespace, name, clusterUrl, this)
+    isDevWorkspaceResourceMissing(name) -> WorkspaceNotFoundException(namespace, name, clusterUrl, this)
+    isNotFound() -> WorkspaceNotFoundException(namespace, name, clusterUrl, this)
+    else -> null
 }
 
 /**
  * Converts HTTP status code to human-readable message.
  */
-fun ApiException.codeToReasonPhrase(): String {
-    val statusMessage = when (code) {
-        400 -> "Bad Request"
-        401 -> "Unauthorized"
-        403 -> "Forbidden"
-        404 -> "Not Found"
-        408 -> "Request Timeout"
-        500 -> "Internal Server Error"
-        502 -> "Bad Gateway"
-        503 -> "Service Unavailable"
-        504 -> "Gateway Timeout"
-        else -> "HTTP Error $code"
-    }
-    return statusMessage
+private fun statusCodeReasonPhrase(code: Int): String = when (code) {
+    100 -> "Continue"
+    101 -> "Switching Protocols"
+    200 -> "OK"
+    201 -> "Created"
+    202 -> "Accepted"
+    204 -> "No Content"
+    301 -> "Moved Permanently"
+    302 -> "Found"
+    304 -> "Not Modified"
+    307 -> "Temporary Redirect"
+    308 -> "Permanent Redirect"
+    400 -> "Bad Request"
+    401 -> "Unauthorized"
+    403 -> "Forbidden"
+    404 -> "Not Found"
+    405 -> "Method Not Allowed"
+    406 -> "Not Acceptable"
+    407 -> "Proxy Authentication Required"
+    408 -> "Request Timeout"
+    409 -> "Conflict"
+    410 -> "Gone"
+    413 -> "Payload Too Large"
+    414 -> "URI Too Long"
+    415 -> "Unsupported Media Type"
+    416 -> "Range Not Satisfiable"
+    422 -> "Unprocessable Content"
+    429 -> "Too Many Requests"
+    500 -> "Internal Server Error"
+    501 -> "Not Implemented"
+    502 -> "Bad Gateway"
+    503 -> "Service Unavailable"
+    504 -> "Gateway Timeout"
+    506 -> "Variant Also Negotiates"
+    else -> "HTTP Error $code"
+}
+
+/** Converts HTTP status code to human-readable message. */
+fun ApiException.codeToReasonPhrase(): String = statusCodeReasonPhrase(code)
+
+/** Converts HTTP status code to human-readable message. */
+fun Int.reasonPhrase(): String = statusCodeReasonPhrase(this)
+
+fun ApiException.shouldBeIgnored(): Boolean =
+    code == 403 || code == 404
+fun ApiException.isRetryable(): Boolean =
+    code in setOf(429, 500, 502, 503, 504)
+
+fun ApiException.getStatus(): V1Status? {
+    return responseBody?.takeIf { it.isNotEmpty() }
+        ?.let {
+            runCatching { Gson().fromJson(it, V1Status::class.java) }
+        }
+        ?.getOrNull()
 }

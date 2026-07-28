@@ -38,14 +38,14 @@ class KubeConfigClusterTest {
 
     @Test
     fun `#fromMap parses cluster with certificate-authority path`() {
+        // given
         val map = mapOf(
             "server" to "https://api.example.com:6443",
             "certificate-authority" to "/home/user/.minikube/ca.crt"
         )
-
         val cluster = KubeConfigCluster.fromMap(map)
-
         assertThat(cluster).isNotNull
+        // when, then
         assertThat(cluster?.certificateAuthority?.value).isEqualTo("/home/user/.minikube/ca.crt")
         assertThat(cluster?.certificateAuthority?.isFilePath).isTrue()
     }
@@ -173,4 +173,26 @@ class KubeConfigClusterTest {
             .hasSize(1)
             .containsEntry("server", "https://endor.starwars.galaxy:6443")
     }
+
+    @Test
+    fun `#isSkipTlsVerify returns true when insecure-skip-tls-verify is set`() {
+        // given
+        val cluster = KubeConfigCluster(
+            server = "https://api.example.com:6443",
+            insecureSkipTlsVerify = true
+        )
+        // when, then
+        assertThat(cluster.isSkipTlsVerify()).isTrue()
+    }
+
+    @Test
+    fun `#isSkipTlsVerify returns false when insecure-skip-tls-verify is null`() {
+        // given
+        val cluster = KubeConfigCluster(
+            server = "https://api.example.com:6443"
+        )
+        // when, then
+        assertThat(cluster.isSkipTlsVerify()).isFalse()
+    }
+
 }

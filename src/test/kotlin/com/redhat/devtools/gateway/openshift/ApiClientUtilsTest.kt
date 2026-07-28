@@ -8,6 +8,7 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import io.kubernetes.client.openapi.ApiClient
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test

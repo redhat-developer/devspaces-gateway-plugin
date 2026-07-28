@@ -15,7 +15,6 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 
-import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.apis.AuthorizationV1Api
 import io.kubernetes.client.openapi.models.V1SelfSubjectAccessReview
 import io.kubernetes.client.openapi.models.V1SelfSubjectAccessReviewSpec
@@ -46,8 +45,19 @@ class Projects(private val client: ApiClient) {
     @Throws(ApiException::class)
     fun isAuthenticated(): Boolean {
         return try {
-            CoreV1Api(client).listNamespace().execute()
-            true  // 200 OK - authenticated and authorized
+            AuthorizationV1Api(client).createSelfSubjectAccessReview(
+                V1SelfSubjectAccessReview()
+                    .spec(
+                        V1SelfSubjectAccessReviewSpec()
+                            .resourceAttributes(
+                                V1ResourceAttributes()
+                                    .group("project.openshift.io")
+                                    .resource("projects")
+                                    .verb("list")
+                            )
+                    )
+            ).execute()
+            true  // 201 Created - authenticated; access result is not relevant here
         } catch (e: ApiException) {
             when (e.code) {
                 401 -> false  // Unauthorized - not authenticated

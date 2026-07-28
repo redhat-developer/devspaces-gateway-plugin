@@ -72,5 +72,6 @@ class OAuthCallbackServer(
     }
 
     override suspend fun awaitCallback(timeoutMs: Long): Parameters? =
+        @Suppress("ConvertLongToDuration")
         withTimeoutOrNull(timeoutMs) { callbackDeferred?.await() }
 }

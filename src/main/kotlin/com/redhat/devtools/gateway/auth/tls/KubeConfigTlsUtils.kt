@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.auth.tls
 
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
-import io.kubernetes.client.util.KubeConfig
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
@@ -21,23 +20,22 @@ import kotlin.io.path.readText
 
 object KubeConfigTlsUtils {
 
-    fun findClusterByServer(
-        serverUrl: String,
-        kubeConfigs: List<KubeConfig>
-    ): KubeConfigNamedCluster? =
-        kubeConfigs
-            .flatMap { it.clusters ?: emptyList() }
-            .mapNotNull { KubeConfigNamedCluster.fromMap(it as Map<*, *>) }
-            .firstOrNull { it.cluster.server == serverUrl }
-
     fun extractCaCertificates(
         namedCluster: KubeConfigNamedCluster
-    ): List<X509Certificate> {
-        val caSource = namedCluster.cluster.certificateAuthority ?: return emptyList()
-        val caContent = if (caSource.isFilePath) {
-            caSource.toPath().readText()
-        } else {
-            Base64.getDecoder().decode(caSource.value).toString(Charsets.UTF_8)
+    ): List<X509Certificate> =
+        namedCluster.cluster.certificateAuthority
+            ?.let(::extractCaCertificates)
+            .orEmpty()
+
+    fun extractCaCertificates(caSource: CertificateSource): List<X509Certificate> {
+        val caContent = try {
+            if (caSource.isFilePath) {
+                caSource.toPath().readText()
+            } else {
+                Base64.getDecoder().decode(caSource.value).toString(Charsets.UTF_8)
+            }
+        } catch (_: Exception) {
+            return emptyList()
         }
 
         val factory = CertificateFactory.getInstance("X.509")

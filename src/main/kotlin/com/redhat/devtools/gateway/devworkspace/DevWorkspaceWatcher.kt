@@ -12,9 +12,6 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.application.EDT
-import com.redhat.devtools.gateway.openshift.Projects
-import com.redhat.devtools.gateway.openshift.Utils
-import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.*
 
@@ -76,13 +73,13 @@ class DevWorkspaceWatcher(
                 watcher.close()
             }
 
+            @Suppress("ConvertLongToDuration")
             delay(100)
         }
     }
 }
 
 class DevWorkspaceWatchManager(
-    private val client: ApiClient,
     private val createWatcher: (String, String?) -> Watch<Any>,
     private val createFilter: (String) -> ((DevWorkspace) -> Boolean),
     private val listener: DevWorkspaceListener,
@@ -90,9 +87,11 @@ class DevWorkspaceWatchManager(
 ) {
     private val watchers = mutableListOf<DevWorkspaceWatcher>()
 
-    fun start(lastResourceVersions: Map<String, String?>? = null) {
-        Projects(client).list().onEach { project ->
-            val ns = Utils.getValue(project, arrayOf("metadata","name")) as String
+    fun start(lastResourceVersions: Map<String, String?> = emptyMap()) {
+        lastResourceVersions.forEach { (ns, resourceVersion) ->
+            if (resourceVersion == null) {
+                return@forEach
+            }
             val w = DevWorkspaceWatcher(
                 namespace = ns,
                 createWatcher = createWatcher,
@@ -101,7 +100,7 @@ class DevWorkspaceWatchManager(
                 scope = scope
             )
             watchers += w
-            w.start(lastResourceVersions?.get(ns))
+            w.start(resourceVersion)
         }
     }
 
@@ -110,4 +109,3 @@ class DevWorkspaceWatchManager(
         watchers.clear()
     }
 }
-
