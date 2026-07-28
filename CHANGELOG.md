@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-07-28
+
+### ✨ New Features and Enhancements
+
+- feature: allow to run gateway plugin in IDEA/Remote Development (CRW-11741) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/340
+- feat: honor IDE HTTP proxy for all clients (CRW-11942) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/343
+- feat: remember selected authentication tab in connection wizard by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/336
+
+### 🐛 Bug Fixes
+
+- fix: cancel button hangs during workspace IDE connection (CRW-11729) by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/338
+- fix: V0.0.16 can't connect with Openshift Oauth by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/317
+- fix: relax che-editor ID detection to match any path segment (CRW-11960) by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/344
+- fix: show wizard and insightful error when SSO is unreachable (CRW-11958) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/342
+- fix: allow connect by join-link even if kubeconf/current-context points to different cluster (CRW-11729) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/330 
+- fix: dont timeout quickly when reconnecting after workspace restart (CRW-11734)  by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/329
+- fix: connection wizard may freeze when switching back from browser (CRW-11983) by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/345
+
 ## [0.0.17] - 2026-07-13
 
 ### ✨ New Features and Enhancements
@@ -295,7 +313,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.18...HEAD
+[0.0.18]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...0.0.18
 [0.0.17]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...0.0.17
 [0.0.16]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.15...0.0.16
 [0.0.15]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.14...0.0.15
