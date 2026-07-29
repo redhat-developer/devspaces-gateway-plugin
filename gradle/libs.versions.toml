@@ -10,7 +10,7 @@ intelliJPlatform = "2.16.0"
 kotlin = "2.1.10"
 kotlinxSerialization = "1.8.1"
 kover = "0.9.8"
-qodana = "2026.1.0"
+qodana = "2026.2.0"
 
 [libraries]
 assertj-core = { group = "org.assertj", name = "assertj-core", version.ref = "assertj" }
