@@ -13,9 +13,7 @@ package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
-import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import io.kubernetes.client.PortForward
-import io.kubernetes.client.custom.IOTrio
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
@@ -27,8 +25,6 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.*
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class DevWorkspacePods(private val client: ApiClient) {
 
@@ -60,140 +56,18 @@ class DevWorkspacePods(private val client: ApiClient) {
         container: String,
         timeout: Long = 60,
         checkCancelled: (() -> Unit)? = null
-    ): String = suspendCancellableCoroutine { cont ->
-        val metadata = pod.metadata
-            ?: throw IllegalArgumentException("Pod metadata is missing")
-        val namespace = metadata.namespace
-            ?: throw IllegalArgumentException("Pod namespace is missing")
-        val podName = metadata.name
-            ?: throw IllegalArgumentException("Pod name is missing")
-
-        val closed = CompletableDeferred<Unit>()
-        val stdout = StringBuilder()
-        val stderr = StringBuilder()
-
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-        val execClientApi = createIsolatedExecClient(client)
-        var stdoutJob: Job? = null
-        var stderrJob: Job? = null
-        lateinit var stdoutStream: InputStream
-        lateinit var stderrStream: InputStream
-
-        try {
-            val execHandle = ContainerAwareExec(execClientApi).containerAwareExec(
-                namespace = namespace,
-                pod = podName,
-                container = container,
-                command = command,
-                onOpen = { io ->
-                    launchCheckCancelled(checkCancelled, scope, io)
-
-                    stdoutJob = scope.launch { readStream(io.stdout, stdout, checkCancelled) }
-                    stderrJob = scope.launch { readStream(io.stderr, stderr, checkCancelled) }
-                    launchJoinStdOutStdErr(scope, stdoutJob, stderrJob, checkCancelled, closed, cont, stdout, execClientApi)
-                },
-                onClosed = { _, _ ->
-                    closed.complete(Unit)
-                },
-                onError = { err, _ ->
-                    closed.complete(Unit)
-                    shutdownExecClient(execClientApi)
-                    cont.resumeWithException(err)
-                },
-                timeoutMs = timeout * 1000,
-                tty = false
-            )
-
-            cont.invokeOnCancellation { cause ->
-                try { stdoutStream.close() } catch (_: Throwable) {}
-                try { stderrStream.close() } catch (_: Throwable) {}
-                try {
-                    execHandle.job.cancel(CancellationException("Pods.exec cancellation"))
-                    execHandle.future.cancel(true)
-                } catch (_: Throwable) {}
-                scope.cancel()
-                shutdownExecClient(execClientApi)
-            }
-        } catch (e: Exception) {
-            shutdownExecClient(execClientApi)
-            if (cont.isActive) cont.resumeWithException(e)
-        }
+    ): String {
+        val metadata = pod.metadata ?: throw IOException("Pod metadata is missing")
+        return PodExecSession(
+            client = client,
+            namespace = metadata.namespace,
+            podName = metadata.name,
+            container = container,
+            command = command,
+            timeout = timeout,
+            checkCancelled = checkCancelled
+        ).execute()
     }
-
-    private fun launchJoinStdOutStdErr(
-        scope: CoroutineScope,
-        stdoutJob: Job,
-        stderrJob: Job,
-        checkCancelled: (() -> Unit)?,
-        closed: CompletableDeferred<Unit>,
-        cont: CancellableContinuation<String>,
-        stdout: StringBuilder,
-        execClientApi: ApiClient
-    ) {
-        scope.launch {
-            try {
-                listOfNotNull(stdoutJob, stderrJob).joinAll()
-                checkCancelled?.invoke()
-                closed.await()
-
-                checkCancelled?.invoke()
-                if (cont.isActive) cont.resume(stdout.toString())
-            } catch (e: Throwable) {
-                if (e.isCancellationException()) cont.cancel(e)
-                else if (cont.isActive) cont.resumeWithException(e)
-            } finally {
-                scope.cancel()
-                shutdownExecClient(execClientApi)
-            }
-        }
-    }
-
-    private fun launchCheckCancelled(
-        checkCancelled: (() -> Unit)?,
-        scope: CoroutineScope,
-        io: IOTrio
-    ) {
-        if (checkCancelled == null) {
-            return
-        }
-        scope.launch {
-            try {
-                while (isActive) {
-                    checkCancelled.invoke()
-                    delay(200)
-                }
-            } catch (_: Throwable) {
-                runCatching { io.stdout.close() }
-                runCatching { io.stderr.close() }
-            }
-        }
-    }
-
-    private fun shutdownExecClient(client: ApiClient) {
-        runCatching { client.httpClient.dispatcher.executorService.shutdownNow() }
-        runCatching { client.httpClient.connectionPool.evictAll() }
-    }
-
-    private fun readStream(
-        input: InputStream,
-        output: StringBuilder,
-        checkCancelled: (() -> Unit)?
-    ) {
-        try {
-            while (true) {
-                checkCancelled?.invoke()
-                val b = input.read()
-                if (b == -1) break
-                output.append(b.toChar())
-            }
-        } catch (_: IOException) {
-            // Stream was closed (possibly due to cancellation)
-        }
-    }
-
-    private fun createIsolatedExecClient(base: ApiClient): ApiClient =
-        ApiClientUtils.cloneForExec(base)
 
     @Throws(IOException::class)
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
@@ -204,7 +78,7 @@ class DevWorkspacePods(private val client: ApiClient) {
         )
         scope.acceptConnections(serverSocket, pod, localPort, remotePort)
         return Closeable {
-            runCatching { serverSocket.close() }
+            closeQuietly(serverSocket)
             scope.cancel()
         }
     }
@@ -282,7 +156,7 @@ class DevWorkspacePods(private val client: ApiClient) {
                 "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
                 e)
         } finally {
-            runCatching { clientSocket.close() }
+            closeQuietly(clientSocket)
         }
     }
 
@@ -314,8 +188,13 @@ class DevWorkspacePods(private val client: ApiClient) {
     }
 
     private fun closeStreams(port: Int, forwardResult: PortForward.PortForwardResult?) {
-      runCatching { forwardResult?.getInputStream(port)?.close() }
-      runCatching { forwardResult?.getOutboundStream(port)?.close() }
+      // getInputStream/getOutboundStream can throw; isolate so one failure does not skip the other close
+      runCatching { forwardResult?.getInputStream(port) }
+          .onSuccess { closeQuietly(it) }
+          .onFailure { logger.debug("Could not get input stream for port $port while closing port-forward", it) }
+      runCatching { forwardResult?.getOutboundStream(port) }
+          .onSuccess { closeQuietly(it) }
+          .onFailure { logger.debug("Could not get outbound stream for port $port while closing port-forward", it) }
     }
 
     private fun InputStream.copyToAndFlush(destination: OutputStream) {
