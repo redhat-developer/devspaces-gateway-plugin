@@ -12,9 +12,7 @@
 package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
-import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.application.*
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProcessCanceledException
@@ -22,11 +20,13 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.runBlockingCancellable
 import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
-import com.redhat.devtools.gateway.auth.tls.browseCertificate
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.components.JBTextField
-import com.intellij.ui.dsl.builder.*
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.AlignY
+import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
@@ -40,14 +40,14 @@ import com.redhat.devtools.gateway.kubeconfig.KubeConfigUpdate
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import com.redhat.devtools.gateway.openshift.Cluster
 import com.redhat.devtools.gateway.settings.DevSpacesSettings
+import com.redhat.devtools.gateway.util.isLoginUserCancelled
+import com.redhat.devtools.gateway.util.isTlsRelated
+import com.redhat.devtools.gateway.util.stripScheme
 import com.redhat.devtools.gateway.view.steps.auth.*
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.FilteringComboBox
 import com.redhat.devtools.gateway.view.ui.PasteClipboardMenu
 import com.redhat.devtools.gateway.view.ui.requestInitialFocus
-import com.redhat.devtools.gateway.util.isLoginUserCancelled
-import com.redhat.devtools.gateway.util.isTlsRelated
-import com.redhat.devtools.gateway.util.stripScheme
 import kotlinx.coroutines.*
 import java.awt.event.ItemEvent
 import java.awt.event.KeyAdapter
@@ -131,7 +131,7 @@ class DevSpacesServerStepView(
         )
 
         val setTokenDisplay: suspend (String) -> Unit = { token ->
-            ApplicationManager.getApplication().invokeLater {
+            invokeLater {
                 tokenStrategy.tfToken.text = token
             }
         }
@@ -406,21 +406,18 @@ class DevSpacesServerStepView(
             val kubeConfigCurrentCluster = withContext(Dispatchers.IO) {
                 KubeConfigUtils.getCurrentClusterName()
             }
-            ApplicationManager.getApplication().invokeLater(
-                {
-                    if (disposed) return@invokeLater
-                    currentContextClusterName = kubeConfigCurrentCluster
-                    val previouslySelected = tfServer.selectedItem as? Cluster?
-                    setClusters(updatedClusters)
-                    setSelectedCluster(
-                        (previouslySelected)?.name ?: kubeConfigCurrentCluster,
-                        updatedClusters
-                    )
-                    setSelectedAuthTab()
-                    enableSaveConfigCheckbox()
-                },
-                ModalityState.stateForComponent(component)
-            )
+            withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
+                if (disposed) return@withContext
+                currentContextClusterName = kubeConfigCurrentCluster
+                val previouslySelected = tfServer.selectedItem as? Cluster?
+                setClusters(updatedClusters)
+                setSelectedCluster(
+                    (previouslySelected)?.name ?: kubeConfigCurrentCluster,
+                    updatedClusters
+                )
+                setSelectedAuthTab()
+                enableSaveConfigCheckbox()
+            }
         }
     }
 
@@ -588,7 +585,7 @@ class DevSpacesServerStepView(
             applyKubeconfigTokenUpdate(cluster, token)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            ApplicationManager.getApplication().invokeLater {
+            invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
@@ -610,7 +607,7 @@ class DevSpacesServerStepView(
             applyKubeconfigClientCertUpdate(cluster, clientCertPem, clientKeyPem)
         } catch (e: Exception) {
             thisLogger().warn(e.message ?: "Could not save configuration file", e)
-            ApplicationManager.getApplication().invokeLater {
+            invokeLater {
                 Dialogs.error(e.message ?: "Could not save configuration file", "Save Config Failed")
             }
         }
