@@ -12,6 +12,8 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.application.EDT
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.asContextElement
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.*
 
@@ -55,13 +57,13 @@ class DevWorkspaceWatcher(
                     if (!scope.isActive || stopped) break
 
                     val dw = DevWorkspace.from(event.`object`)
-                    withContext(Dispatchers.EDT) {
+                    if (event.type == "ADDED") {
+                        matches = createFilter(namespace)
+                    }
+                    withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
                         if (stopped) return@withContext
                         when (event.type) {
-                            "ADDED"    -> {
-                                matches = createFilter(namespace) // Need this to make it read the new templates list
-                                if(matches(dw)) listener.onAdded(dw)
-                            }
+                            "ADDED"    -> if(matches(dw)) listener.onAdded(dw)
                             "MODIFIED" -> if(matches(dw)) listener.onUpdated(dw) else listener.onDeleted(dw)
                             "DELETED"  -> listener.onDeleted(dw)
                         }

@@ -13,8 +13,8 @@ package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.invokeLater
-import com.intellij.openapi.application.runInEdt
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.util.Disposer
@@ -209,14 +209,17 @@ class DevSpacesWorkspacesStepView(
                 dwListResult.items
             }
 
-        invokeLater {
-            val selectedIndex = listDevWorkspaces.selectedIndex
-            listDWDataModel.apply {
-                clear()
-                addAll(devWorkspaces)
-            }
-            listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
-        }
+        ApplicationManager.getApplication().invokeLater(
+            {
+                val selectedIndex = listDevWorkspaces.selectedIndex
+                listDWDataModel.apply {
+                    clear()
+                    addAll(devWorkspaces)
+                }
+                listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
+            },
+            ModalityState.any()
+        )
 
         return lastResourceVersions
     }
@@ -233,11 +236,16 @@ class DevSpacesWorkspacesStepView(
     private fun refreshDevWorkspace(namespace: String, name: String) {
         val refreshedDevWorkspace = DevWorkspaces(devSpacesContext.client).get(namespace, name)
 
-        listDWDataModel
-            .indexOf(refreshedDevWorkspace)
-            .also {
-                if (it != -1) listDWDataModel[it] = refreshedDevWorkspace
-            }
+        ApplicationManager.getApplication().invokeLater(
+            {
+                listDWDataModel
+                    .indexOf(refreshedDevWorkspace)
+                    .also {
+                        if (it != -1) listDWDataModel[it] = refreshedDevWorkspace
+                    }
+            },
+            ModalityState.any()
+        )
     }
 
     private fun startDevWorkspace() {
@@ -401,20 +409,23 @@ class DevSpacesWorkspacesStepView(
     }
 
     private fun enableButtons() {
-        runInEdt {
-            val workspace = getSelectedWorkspace()
+        ApplicationManager.getApplication().invokeLater(
+            {
+                val workspace = getSelectedWorkspace()
 
-            startDevWorkspaceButton.isEnabled = isStopped(workspace)
-            stopDevWorkspaceButton.isEnabled = isRunning(workspace)
+                startDevWorkspaceButton.isEnabled = isStopped(workspace)
+                stopDevWorkspaceButton.isEnabled = isRunning(workspace)
 
-            refreshNextButton()
+                refreshNextButton()
 
-            if (isAlreadyConnected(workspace)) {
-                stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
-            } else {
-                stopDevWorkspaceButton.toolTipText = null
-            }
-        }
+                if (isAlreadyConnected(workspace)) {
+                    stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
+                } else {
+                    stopDevWorkspaceButton.toolTipText = null
+                }
+            },
+            ModalityState.any()
+        )
     }
 
     private fun getSelectedWorkspace(): DevWorkspace? {
@@ -528,24 +539,30 @@ class DevSpacesWorkspacesStepView(
                 }
 
                 override fun onUpdated(dw: DevWorkspace) {
-                    runInEdt {
-                        val idx = indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
-                        if (idx == -1) {
-                            val index = findInsertIndex(dw)
-                            workspacesDataModel.add(index, dw)
-                        } else {
-                            workspacesDataModel.set(idx, dw)
-                        }
-                    }
+                    ApplicationManager.getApplication().invokeLater(
+                        {
+                            val idx = indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
+                            if (idx == -1) {
+                                val index = findInsertIndex(dw)
+                                workspacesDataModel.add(index, dw)
+                            } else {
+                                workspacesDataModel.set(idx, dw)
+                            }
+                        },
+                        ModalityState.any()
+                    )
                 }
 
                 override fun onDeleted(dw: DevWorkspace) {
-                    runInEdt {
-                        val idx = indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
-                        if (idx >= 0) {
-                            workspacesDataModel.remove(idx)
-                        }
-                    }
+                    ApplicationManager.getApplication().invokeLater(
+                        {
+                            val idx = indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
+                            if (idx >= 0) {
+                                workspacesDataModel.remove(idx)
+                            }
+                        },
+                        ModalityState.any()
+                    )
                 }
 
                 private fun findInsertIndex(dw: DevWorkspace): Int {
