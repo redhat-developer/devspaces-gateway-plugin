@@ -30,6 +30,8 @@ import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.unmockkConstructor
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -552,6 +554,192 @@ class DevWorkspacePodsTest {
     }
 
     @Test
+    fun `#exec onError after onOpen completes with one failure and shuts down client once`() = runBlocking {
+        // given — ContainerAwareExec calls onOpen then onError (mid-stream error)
+        mockkConstructor(ContainerAwareExec::class)
+        val onErrorCalled = java.util.concurrent.atomic.AtomicBoolean()
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val onError = it.invocation.args[6] as java.util.function.BiConsumer<Throwable, IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream(ByteArray(0))
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            // Simulate mid-stream error after onOpen has fired
+            onError.accept(IOException("mid-stream connection reset"), io)
+            onErrorCalled.set(true)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container"
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+
+        // exactly one failure (not double-completed)
+        assertThat(onErrorCalled).isTrue()
+
+        // client shut down at least once (joiner finally block handles it)
+        verify(atLeast = 1) {
+            execClient.httpClient.dispatcher.executorService.shutdownNow()
+        }
+        verify(atLeast = 1) {
+            execClient.httpClient.connectionPool.evictAll()
+        }
+    }
+
+    private class CloseTrackingInputStream(private val delegate: java.io.InputStream) : java.io.InputStream() {
+        var closed = false
+            private set
+        override fun read(): Int = delegate.read()
+        override fun close() { closed = true; delegate.close() }
+    }
+
+    @Test
+    fun `#exec closes stdout and stderr on cancellation`() = runBlocking {
+        // given — ContainerAwareExec returns a fake process with close-tracking streams
+        val stdout = CloseTrackingInputStream(ByteArrayInputStream("data".toByteArray()))
+        val stderr = CloseTrackingInputStream(ByteArrayInputStream(ByteArray(0)))
+        val fakeProcess = mockk<Process>(relaxed = true).also {
+            every { it.inputStream } returns stdout
+            every { it.errorStream } returns stderr
+            every { it.outputStream } returns mockk(relaxed = true)
+            every { it.isAlive } returns true
+        }
+
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        val onOpenReady = CompletableDeferred<Unit>()
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = fakeProcess.inputStream
+            io.stderr = fakeProcess.errorStream
+            io.stdin = fakeProcess.outputStream
+            onOpen.accept(io)
+            onOpenReady.complete(Unit)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when — launch exec, wait for onOpen, then cancel
+        val job = scope.launch {
+            pods.exec(
+                pod = testPod,
+                command = arrayOf("echo"),
+                container = "test-container",
+                timeout = 60
+            )
+        }
+        onOpenReady.await()
+        job.cancel()
+        job.join()
+
+        // then — stdout and stderr should be closed
+        assertThat(stdout.closed).isTrue()
+        assertThat(stderr.closed).isTrue()
+    }
+
+    @Test
+    fun `#exec fails when error occurs before onOpen`() = runBlocking {
+        // given — ContainerAwareExec calls onError without onOpen (connection failed before ready)
+
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onError = it.invocation.args[6] as java.util.function.BiConsumer<Throwable, IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream(ByteArray(0))
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            // Simulate error callback fired without onOpen (connection failed before ready)
+            onError.accept(IOException("connection refused before onOpen"), io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container"
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+
+        verify {
+            execClient.httpClient.dispatcher.executorService.shutdownNow()
+            execClient.httpClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
     fun `#exec cancels cleanly when checkCancelled throws`() = runBlocking {
         // given — ContainerAwareExec returns a fake process that produces data
         val stdout = PipedOutputStream()
@@ -711,6 +899,270 @@ class DevWorkspacePodsTest {
         verify {
             execClient.httpClient.dispatcher.executorService.shutdownNow()
             execClient.httpClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `#exec throws IOException when process exits non-zero`() = runBlocking {
+        // given
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onClosed = it.invocation.args[5] as java.util.function.BiConsumer<Int, IOTrio>
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream("stdout".toByteArray())
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            onClosed.accept(1, io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container",
+                    timeout = 60
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+            .hasMessageContaining("exit code 1")
+    }
+
+    @Test
+    fun `#exec throws IOException when exec times out`() = runBlocking {
+        // given
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onClosed = it.invocation.args[5] as java.util.function.BiConsumer<Int, IOTrio>
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream("stdout".toByteArray())
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            onClosed.accept(Int.MAX_VALUE, io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container",
+                    timeout = 60
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+            .hasMessageContaining("timed out")
+    }
+
+    @Test
+    fun `#exec includes stderr in IOException when exit code is non-zero`() = runBlocking {
+        // given
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onClosed = it.invocation.args[5] as java.util.function.BiConsumer<Int, IOTrio>
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream("stdout".toByteArray())
+            io.stderr = ByteArrayInputStream("boom".toByteArray())
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            onClosed.accept(1, io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container",
+                    timeout = 60
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+            .hasMessageContaining("exit code 1")
+            .hasMessageContaining("boom")
+    }
+
+    @Test
+    fun `#exec returns stdout when exit code is 0`() = runBlocking {
+        // given
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onClosed = it.invocation.args[5] as java.util.function.BiConsumer<Int, IOTrio>
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = ByteArrayInputStream("hello world".toByteArray())
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            onClosed.accept(0, io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then
+        assertThat(pods.exec(
+            pod = testPod,
+            command = arrayOf("echo"),
+            container = "test-container",
+            timeout = 60
+        )).isEqualTo("hello world")
+    }
+
+    @Test
+    fun `#exec fails when stdout stream errors even if exit code is 0`() = runBlocking {
+        // given — stdout delivers partial data then throws (no clean EOF)
+        mockkConstructor(ContainerAwareExec::class)
+        val fakeHandle = ContainerAwareExec.ExecHandle(
+            future = java.util.concurrent.CompletableFuture.completedFuture(0),
+            job = mockk(relaxed = true)
+        )
+        every {
+            anyConstructed<ContainerAwareExec>().containerAwareExec(
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+            )
+        } answers {
+            @Suppress("UNCHECKED_CAST")
+            val onClosed = it.invocation.args[5] as java.util.function.BiConsumer<Int, IOTrio>
+            val onOpen = it.invocation.args[4] as java.util.function.Consumer<IOTrio>
+            val io = IOTrio()
+            io.stdout = ThrowingAfterDataInputStream("partial".toByteArray())
+            io.stderr = ByteArrayInputStream(ByteArray(0))
+            io.stdin = mockk(relaxed = true)
+            onOpen.accept(io)
+            onClosed.accept(0, io)
+            fakeHandle
+        }
+
+        mockkObject(ApiClientUtils)
+        val execClient = mockk<ApiClient>(relaxed = true)
+        every { ApiClientUtils.cloneForExec(any()) } returns execClient
+
+        val testPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply {
+                name = "test-pod"
+                namespace = "test-ns"
+            }
+        }
+
+        // when / then — must not return the partial buffer as success
+        assertThatThrownBy {
+            runBlocking {
+                pods.exec(
+                    pod = testPod,
+                    command = arrayOf("echo"),
+                    container = "test-container",
+                    timeout = 60
+                )
+            }
+        }.isInstanceOf(IOException::class.java)
+            .hasMessageContaining("stream closed before output was fully read")
+    }
+
+    /** Returns all bytes once, then throws instead of EOF (-1). */
+    private class ThrowingAfterDataInputStream(private val data: ByteArray) : java.io.InputStream() {
+        private var index = 0
+        override fun read(): Int {
+            if (index < data.size) return data[index++].toInt() and 0xFF
+            throw IOException("connection reset")
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (index >= data.size) throw IOException("connection reset")
+            val n = minOf(len, data.size - index)
+            System.arraycopy(data, index, b, off, n)
+            index += n
+            return n
         }
     }
 }
