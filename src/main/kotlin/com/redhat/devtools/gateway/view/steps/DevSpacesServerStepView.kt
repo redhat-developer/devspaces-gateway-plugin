@@ -13,7 +13,9 @@ package com.redhat.devtools.gateway.view.steps
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.asContextElement
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -406,21 +408,18 @@ class DevSpacesServerStepView(
             val kubeConfigCurrentCluster = withContext(Dispatchers.IO) {
                 KubeConfigUtils.getCurrentClusterName()
             }
-            ApplicationManager.getApplication().invokeLater(
-                {
-                    if (disposed) return@invokeLater
-                    currentContextClusterName = kubeConfigCurrentCluster
-                    val previouslySelected = tfServer.selectedItem as? Cluster?
-                    setClusters(updatedClusters)
-                    setSelectedCluster(
-                        (previouslySelected)?.name ?: kubeConfigCurrentCluster,
-                        updatedClusters
-                    )
-                    setSelectedAuthTab()
-                    enableSaveConfigCheckbox()
-                },
-                ModalityState.stateForComponent(component)
-            )
+            withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
+                if (disposed) return@withContext
+                currentContextClusterName = kubeConfigCurrentCluster
+                val previouslySelected = tfServer.selectedItem as? Cluster?
+                setClusters(updatedClusters)
+                setSelectedCluster(
+                    (previouslySelected)?.name ?: kubeConfigCurrentCluster,
+                    updatedClusters
+                )
+                setSelectedAuthTab()
+                enableSaveConfigCheckbox()
+            }
         }
     }
 
