@@ -124,7 +124,7 @@ fun ApiException.codeToReasonPhrase(): String = statusCodeReasonPhrase(code)
 fun Int.reasonPhrase(): String = statusCodeReasonPhrase(this)
 
 fun ApiException.shouldBeIgnored(): Boolean =
-    code == 403 || code == 404
+    code == 401 || code == 403 || code == 404
 fun ApiException.isRetryable(): Boolean =
     code in setOf(429, 500, 502, 503, 504)
 

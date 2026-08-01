@@ -26,9 +26,22 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
 
+data class DevWorkspaceListItem(
+    val workspace: DevWorkspace,
+    val editorLabel: String
+)
+
 data class DevWorkspaceListResult(
-    val items: List<DevWorkspace>,
-    val resourceVersion: String?
+    val items: List<DevWorkspaceListItem>,
+    val resourceVersion: String?,
+    val templateMap: Map<String, List<DevWorkspaceTemplate>> = emptyMap(),
+    /** True when listing templates was ignored (401/403/404); empty map alone is not unavailable. */
+    val templatesUnavailable: Boolean = false
+)
+
+data class TemplateMapLoad(
+    val map: Map<String, List<DevWorkspaceTemplate>>,
+    val unavailable: Boolean // true when 401/403/404
 )
 
 val DevWorkspace.cheEditor: String
@@ -61,38 +74,62 @@ class DevWorkspaces(private val client: ApiClient) {
                 "devworkspaces"
             ).execute()
 
-            val devWorkspaceTemplateMap = getTemplateMap(namespace)
+            val templateMapLoad = loadTemplateMap(namespace)
             val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
             val dwList = dwItems
                 .map { dwItem -> DevWorkspace.from(dwItem) }
-                .filter { isIdeaEditorBased(it, devWorkspaceTemplateMap) }
+                .map { dw -> DevWorkspaceListItem(dw, resolveEditorLabel(dw, templateMapLoad.map)) }
             val lastResourceVersion = (Utils.getValue(response, arrayOf("metadata", "resourceVersion")) as String?)
 
-            return DevWorkspaceListResult(dwList, lastResourceVersion)
+            return DevWorkspaceListResult(
+                dwList,
+                lastResourceVersion,
+                templateMapLoad.map,
+                templatesUnavailable = templateMapLoad.unavailable
+            )
         } catch (e: ApiException) {
             thisLogger().info(e.message)
 
-            return when (e.code) {
-                403, 404 -> {
-                    // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
-                    // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, or the given cluster doesn't have
-                    // the RedHat DevSpaces operator installed on it, etc.
-                    //
-                    // It doesn't make sense to show an error to the user in such cases,
-                    // so let's skip it silently.
-                    DevWorkspaceListResult(emptyList(), null)
-                }
-                else -> {
-                    thisLogger().error("Kubernetes API error ${e.code}", e)
-                    throw e
-                }
+            if (e.shouldBeIgnored()) {
+                // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
+                // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, or the given cluster doesn't have
+                // the RedHat DevSpaces operator installed on it, etc.
+                //
+                // It doesn't make sense to show an error to the user in such cases,
+                // so let's skip it silently.
+                return DevWorkspaceListResult(emptyList(), null)
             }
+            thisLogger().error("Kubernetes API error ${e.code}", e)
+            throw e
         }
     }
 
     @Throws(ApiException::class)
     fun list(namespace: String): List<DevWorkspace> {
-       return listWithResult(namespace).items
+       return listWithResult(namespace).items.map { it.workspace }
+    }
+
+    fun resolveEditorLabel(
+        devWorkspace: DevWorkspace,
+        templateMap: Map<String, List<DevWorkspaceTemplate>>
+    ): String {
+        val cheEditor = Utils.getValue(
+            devWorkspace.annotations,
+            arrayOf("che.eclipse.org/che-editor")
+        ) as? String
+        if (!cheEditor.isNullOrBlank()) {
+            // If any path segment matches the JetBrains editor id regex -> "JetBrains"
+            if (devWorkspace.cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+                return "JetBrains"
+            }
+            // Otherwise use a short segment from the annotation
+            return cheEditor.split("/").firstOrNull { it.isNotBlank() } ?: "Unknown"
+        }
+        // No annotation: check templates for an idea-server volume
+        if (isIdeaEditorBased(devWorkspace, templateMap)) {
+            return "JetBrains"
+        }
+        return "Unknown"
     }
 
     fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
@@ -116,16 +153,6 @@ class DevWorkspaces(private val client: ApiClient) {
         }
     }
 
-    // Creates a filter for the Idea-based DevWorkspaces
-    fun createIdeaEditorFilter(
-        namespace: String
-    ): (DevWorkspace) -> Boolean {
-        val templateMap = getTemplateMap(namespace)
-        return { dw: DevWorkspace ->
-            isIdeaEditorBased(dw, templateMap)
-        }
-    }
-
     fun get(namespace: String, name: String): DevWorkspace {
         val dwObj = customApi.getNamespacedCustomObject(
             "workspace.devfile.io",
@@ -137,8 +164,8 @@ class DevWorkspaces(private val client: ApiClient) {
         return DevWorkspace.from(dwObj)
     }
 
-    // Returns a map of DW Owner UID tp list of DW Templates
-    private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
+    // Returns a map of DW Owner UID to list of DW Templates, plus availability flag.
+    fun loadTemplateMap(namespace: String): TemplateMapLoad {
         try {
             val dwTemplateList = customApi
                 .listNamespacedCustomObject(
@@ -150,7 +177,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 .execute()
 
             val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
-            return items
+            val map = items
                 .map { DevWorkspaceTemplate.from(it) }
                 .flatMap { templ ->
                     templ.ownerRefencesUids.map { uid -> uid to templ }
@@ -159,9 +186,10 @@ class DevWorkspaces(private val client: ApiClient) {
                     keySelector = { it.first },   // UID
                     valueTransform = { it.second } // DevWorkspaceTemplate
                 )
+            return TemplateMapLoad(map, unavailable = false)
         } catch (e: ApiException) {
             if (e.shouldBeIgnored()) {
-                return emptyMap()
+                return TemplateMapLoad(emptyMap(), unavailable = true)
             }
             thisLogger().info(e.message)
             throw e

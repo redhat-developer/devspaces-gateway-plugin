@@ -11,6 +11,8 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import java.io.Closeable
+
 object Utils {
     @JvmStatic
     fun getValue(obj: Any?, path: Array<String>): Any? {
@@ -76,4 +78,6 @@ fun <K, V> mapOfNotNull(vararg pairs: Pair<K, V?>): Map<K, V> {
         value?.let { key to it }
     }.toMap()
 }
+
+fun closeQuietly(closeable: Closeable?) = runCatching { closeable?.close() }
 

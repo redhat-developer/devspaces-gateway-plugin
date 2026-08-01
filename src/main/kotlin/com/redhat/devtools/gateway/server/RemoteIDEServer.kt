@@ -23,6 +23,13 @@ import java.io.IOException
 import java.util.concurrent.CancellationException
 
 /**
+ * Thrown when the workspace pod no longer contains an idea-server container.
+ * This is a terminal condition — the workspace is unusable — so it must fail fast
+ * instead of being retried until the ready timeout elapses (CRW-11897).
+ */
+class IdeServerContainerNotFoundException(message: String) : IOException(message)
+
+/**
  * Represent an IDE server running in a CDE.
  */
 class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
@@ -99,6 +106,42 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             }
     }
 
+    /**
+     * Rethrows [IdeServerContainerNotFoundException] — a terminal condition where the workspace
+     * is unusable — so it fails fast instead of being retried until the ready timeout elapses.
+     */
+    private fun rethrowIfTerminal(e: Exception) {
+        if (e is IdeServerContainerNotFoundException) throw e
+    }
+
+    /**
+     * Re-resolves the workspace pod and idea-server container.
+     *
+     * @return `true` when refreshed successfully, `false` on transient failures (retried).
+     * Terminal conditions (cancellation, missing idea-server container) are rethrown.
+     */
+    @Throws(CancellationException::class)
+    private fun refreshPod(refreshFailures: IntArray): Boolean {
+        return try {
+            pod = findPod()
+            container = findContainer()
+            refreshFailures[0] = 0
+            true
+        } catch (e: Exception) {
+            if (e.isCancellationException()) throw e
+            rethrowIfTerminal(e)
+            refreshFailures[0]++
+            thisLogger().debug("Failed to refresh workspace pod during IDE state check", e)
+            if (refreshFailures[0] == REFRESH_FAILURE_WARNING_THRESHOLD) {
+                thisLogger().warn(
+                    "Pod/container refresh has failed ${refreshFailures[0]} consecutive times; " +
+                    "stale pod references may cause incorrect status checks"
+                )
+            }
+            false
+        }
+    }
+
     @Throws(CancellationException::class)
     private suspend fun isServerState(
         isReadyState: Boolean,
@@ -107,26 +150,14 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         refreshFailures: IntArray = intArrayOf(0),
     ): Boolean {
         return try {
-            if (refreshPodBeforeCheck) {
-                runCatching {
-                    pod = findPod()
-                    container = findContainer()
-                }.onFailure { e ->
-                    if (e.isCancellationException()) throw e
-                    refreshFailures[0]++
-                    thisLogger().debug("Failed to refresh workspace pod during IDE state check", e)
-                    if (refreshFailures[0] == REFRESH_FAILURE_WARNING_THRESHOLD) {
-                        thisLogger().warn(
-                            "Pod/container refresh has failed ${refreshFailures[0]} consecutive times; " +
-                            "stale pod references may cause incorrect status checks"
-                        )
-                    }
-                    return false
-                }.onSuccess { refreshFailures[0] = 0 }
+            // Re-resolve pod while waiting for ready so a recycled pod is not missed.
+            if (refreshPodBeforeCheck && !refreshPod(refreshFailures)) {
+                return false
             }
             getStatus(checkCancelled).isReady == isReadyState
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
+            rethrowIfTerminal(e)
             thisLogger().debug("Failed to check workspace IDE state.", e)
             false
         }
@@ -192,7 +223,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         return pod.spec!!.containers.find { container ->
             container.ports?.any { port -> port.name == "idea-server" } != null
         }
-            ?: throw IOException(
+            ?: throw IdeServerContainerNotFoundException(
                 "Workspace IDE container not found in the Pod: ${pod.metadata?.name}"
             )
     }
