@@ -15,6 +15,7 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.mockk.*
+import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -235,6 +236,224 @@ class DevWorkspacesTest {
         assert(!devWorkspaces.isIdeaEditorBased(dw, emptyMap()))
     }
 
+    @Test
+    fun `#list includes non-Idea workspaces`() {
+        // given
+        mockListDevWorkspaces(
+            listOf(
+                createDevWorkspaceItem("idea-workspace", "eclipse/che-idea-server/latest"),
+                createDevWorkspaceItem("code-workspace", "eclipse/che-code/latest")
+            )
+        )
+        mockListDevWorkspaceTemplates(emptyList())
+
+        // when
+        val workspaces = devWorkspaces.list(namespace)
+
+        // then
+        assertThat(workspaces).hasSize(2)
+        assertThat(workspaces.map { it.name })
+            .containsExactlyInAnyOrder("idea-workspace", "code-workspace")
+    }
+
+    @Test
+    fun `#listWithResult resolves labels for Idea and non-Idea workspaces`() {
+        // given
+        mockListDevWorkspaces(
+            listOf(
+                createDevWorkspaceItem("idea-workspace", "eclipse/che-idea-server/latest"),
+                createDevWorkspaceItem("code-workspace", "eclipse/che-code/latest")
+            )
+        )
+        mockListDevWorkspaceTemplates(emptyList())
+
+        // when
+        val result = devWorkspaces.listWithResult(namespace)
+
+        // then
+        assertThat(result.items).hasSize(2)
+        assertThat(result.items.first { it.workspace.name == "idea-workspace" }.editorLabel)
+            .isEqualTo("JetBrains")
+        assertThat(result.items.first { it.workspace.name == "code-workspace" }.editorLabel)
+            .isEqualTo("eclipse")
+    }
+
+    @Test
+    fun `#listWithResult treats unauthorized templates list as unknown label without throwing`() {
+        listWithResultTemplatesIgnored(ApiException(401, "Unauthorized"))
+    }
+
+    @Test
+    fun `#listWithResult treats forbidden templates list as unknown label without throwing`() {
+        listWithResultTemplatesIgnored(ApiException(403, "Forbidden"))
+    }
+
+    @Test
+    fun `#listWithResult treats not-found templates list as unknown label without throwing`() {
+        listWithResultTemplatesIgnored(ApiException(404, "Not Found"))
+    }
+
+    @Test
+    fun `#listWithResult resolves template-based JetBrains workspace`() {
+        // given — no che-editor annotation, but a template with an idea-server volume
+        mockListDevWorkspaces(listOf(createDevWorkspaceItem("template-workspace", null)))
+        mockListDevWorkspaceTemplates(
+            listOf(
+                mapOf(
+                    "metadata" to mapOf(
+                        "name" to "template-workspace-template",
+                        "namespace" to namespace,
+                        "ownerReferences" to listOf(
+                            mapOf(
+                                "apiVersion" to "workspace.devfile.io/v1alpha2",
+                                "kind" to "DevWorkspace",
+                                "uid" to "test-uid"
+                            )
+                        )
+                    ),
+                    "spec" to mapOf(
+                        "components" to listOf(
+                            mapOf("volume" to mapOf("name" to "idea-server"))
+                        )
+                    )
+                )
+            )
+        )
+
+        // when
+        val result = devWorkspaces.listWithResult(namespace)
+
+        // then
+        assertThat(result.items).hasSize(1)
+        assertThat(result.items[0].editorLabel).isEqualTo("JetBrains")
+    }
+
+    @Test
+    fun `#listWithResult includes templateMap in result`() {
+        // given
+        mockListDevWorkspaces(listOf(createDevWorkspaceItem("template-workspace", null)))
+        mockListDevWorkspaceTemplates(
+            listOf(
+                mapOf(
+                    "metadata" to mapOf(
+                        "name" to "template-workspace-template",
+                        "namespace" to namespace,
+                        "ownerReferences" to listOf(
+                            mapOf(
+                                "apiVersion" to "workspace.devfile.io/v1alpha2",
+                                "kind" to "DevWorkspace",
+                                "uid" to "test-uid"
+                            )
+                        )
+                    ),
+                    "spec" to mapOf(
+                        "components" to listOf(
+                            mapOf("volume" to mapOf("name" to "idea-server"))
+                        )
+                    )
+                )
+            )
+        )
+
+        // when
+        val result = devWorkspaces.listWithResult(namespace)
+
+        // then
+        assertThat(result.templateMap).isNotEmpty
+        assertThat(result.templateMap).containsKey("test-uid")
+        assertThat(result.templateMap["test-uid"]).hasSize(1)
+        assertThat(result.templatesUnavailable).isFalse()
+    }
+
+    @Test
+    fun `#loadTemplateMap returns unavailable true for 401`() {
+        // given
+        mockListDevWorkspaceTemplatesThrows(ApiException(401, "Unauthorized"))
+
+        // when
+        val load = devWorkspaces.loadTemplateMap(namespace)
+
+        // then
+        assertThat(load.unavailable).isTrue()
+        assertThat(load.map).isEmpty()
+    }
+
+    @Test
+    fun `#loadTemplateMap returns unavailable true for 403`() {
+        // given
+        mockListDevWorkspaceTemplatesThrows(ApiException(403, "Forbidden"))
+
+        // when
+        val load = devWorkspaces.loadTemplateMap(namespace)
+
+        // then
+        assertThat(load.unavailable).isTrue()
+        assertThat(load.map).isEmpty()
+    }
+
+    @Test
+    fun `#loadTemplateMap returns unavailable true for 404`() {
+        // given
+        mockListDevWorkspaceTemplatesThrows(ApiException(404, "Not Found"))
+
+        // when
+        val load = devWorkspaces.loadTemplateMap(namespace)
+
+        // then
+        assertThat(load.unavailable).isTrue()
+        assertThat(load.map).isEmpty()
+    }
+
+    @Test
+    fun `#loadTemplateMap returns available with map on success`() {
+        // given
+        mockListDevWorkspaceTemplates(
+            listOf(
+                mapOf(
+                    "metadata" to mapOf(
+                        "name" to "template-workspace-template",
+                        "namespace" to namespace,
+                        "ownerReferences" to listOf(
+                            mapOf(
+                                "apiVersion" to "workspace.devfile.io/v1alpha2",
+                                "kind" to "DevWorkspace",
+                                "uid" to "test-uid"
+                            )
+                        )
+                    ),
+                    "spec" to mapOf(
+                        "components" to listOf(
+                            mapOf("volume" to mapOf("name" to "idea-server"))
+                        )
+                    )
+                )
+            )
+        )
+
+        // when
+        val load = devWorkspaces.loadTemplateMap(namespace)
+
+        // then
+        assertThat(load.unavailable).isFalse()
+        assertThat(load.map).isNotEmpty
+        assertThat(load.map).containsKey("test-uid")
+    }
+
+    private fun listWithResultTemplatesIgnored(exception: ApiException) {
+        // given
+        mockListDevWorkspaces(listOf(createDevWorkspaceItem("plain-workspace", null)))
+        mockListDevWorkspaceTemplatesThrows(exception)
+
+        // when
+        val result = devWorkspaces.listWithResult(namespace)
+
+        // then
+        assertThat(result.items).hasSize(1)
+        assertThat(result.items[0].editorLabel).isEqualTo("Unknown")
+        assertThat(result.templateMap).isEmpty()
+        assertThat(result.templatesUnavailable).isTrue()
+    }
+
     // Helper methods
     private fun mockGetDevWorkspace(devWorkspace: Any) {
         every {
@@ -262,6 +481,71 @@ class DevWorkspacesTest {
         } returns mockk {
             every { execute() } throws exception
         }
+    }
+
+    private fun mockListDevWorkspaces(items: List<Map<String, Any>>) {
+        every {
+            anyConstructed<CustomObjectsApi>().listNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces"
+            )
+        } returns mockk {
+            every { execute() } returns mapOf(
+                "metadata" to mapOf("resourceVersion" to "1"),
+                "items" to items
+            )
+        }
+    }
+
+    private fun mockListDevWorkspaceTemplates(items: List<Map<String, Any>>) {
+        every {
+            anyConstructed<CustomObjectsApi>().listNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspacetemplates"
+            )
+        } returns mockk {
+            every { execute() } returns mapOf("items" to items)
+        }
+    }
+
+    private fun mockListDevWorkspaceTemplatesThrows(exception: ApiException) {
+        every {
+            anyConstructed<CustomObjectsApi>().listNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspacetemplates"
+            )
+        } returns mockk {
+            every { execute() } throws exception
+        }
+    }
+
+    private fun createDevWorkspaceItem(name: String, cheEditor: String?): Map<String, Any> {
+        val annotations = if (cheEditor != null) {
+            mapOf("che.eclipse.org/che-editor" to cheEditor)
+        } else {
+            emptyMap<String, String>()
+        }
+        return mapOf(
+            "metadata" to mapOf(
+                "name" to name,
+                "namespace" to namespace,
+                "uid" to "test-uid",
+                "annotations" to annotations,
+                "labels" to mapOf("kubernetes.io/metadata.name" to name)
+            ),
+            "spec" to mapOf(
+                "started" to true
+            ),
+            "status" to mapOf(
+                "phase" to "Running"
+            )
+        )
     }
 
     private fun mockPatchDevWorkspace(callBuilder: okhttp3.Call) {

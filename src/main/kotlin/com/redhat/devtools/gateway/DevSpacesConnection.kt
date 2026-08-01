@@ -28,6 +28,7 @@ import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.util.isIdeServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.models.V1Pod
@@ -304,6 +305,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 remoteIdeServer.apply { waitServerReady(checkCancelled) }.getStatus(checkCancelled)
             }.getOrElse { e ->
                 if (e.isCancellationException()) throw e
+                // Terminal: no idea-server container — do not offer "restart pod" (CRW-11897).
+                if (e.isIdeServerContainerNotFound()) throw e
                 RemoteIDEServerStatus.empty()
             }
 

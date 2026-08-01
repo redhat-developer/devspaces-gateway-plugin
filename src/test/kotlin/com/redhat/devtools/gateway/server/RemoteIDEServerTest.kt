@@ -89,6 +89,24 @@ class RemoteIDEServerTest {
     }
 
     @Test
+    fun `#waitServerReady fails fast when idea-server container is missing`() {
+        // given — refreshing the pod/container during the ready-wait finds no idea-server container
+        every {
+            remoteIDEServer["findContainer"]()
+        } throws IdeServerContainerNotFoundException("Workspace IDE container not found in the Pod: test-pod")
+
+        // when
+        val exception = assertThrows<IOException> {
+            runBlocking {
+                remoteIDEServer.waitServerReady(timeout = 30)
+            }
+        }
+
+        // then — fails immediately instead of retrying until the ready timeout elapses
+        assertThat(exception.message).contains("Workspace IDE container not found")
+    }
+
+    @Test
     fun `#waitServerReady should NOT reach timeout and throw if server status has a join link but no projects`() {
         // given
         val withoutProjects = remoteIDEServerStatus(
