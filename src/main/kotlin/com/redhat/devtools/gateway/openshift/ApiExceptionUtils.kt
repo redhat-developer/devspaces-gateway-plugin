@@ -123,8 +123,6 @@ fun ApiException.codeToReasonPhrase(): String = statusCodeReasonPhrase(code)
 /** Converts HTTP status code to human-readable message. */
 fun Int.reasonPhrase(): String = statusCodeReasonPhrase(this)
 
-fun ApiException.shouldBeIgnored(): Boolean =
-    code == 403 || code == 404
 fun ApiException.isRetryable(): Boolean =
     code in setOf(429, 500, 502, 503, 504)
 

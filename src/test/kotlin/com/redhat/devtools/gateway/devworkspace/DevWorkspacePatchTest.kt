@@ -328,23 +328,6 @@ class DevWorkspacePatchTest {
             .hasMessageContaining("Patch failed")
     }
 
-    private fun createDevWorkspace(
-        name: String = workspaceName,
-        namespace: String = this.namespace,
-        annotations: Map<String, String> = emptyMap()
-    ): DevWorkspace {
-        val metadata = DevWorkspaceObjectMeta(
-            name = name,
-            namespace = namespace,
-            uid = "test-uid",
-            annotations = annotations,
-            labels = emptyMap()
-        )
-        val spec = DevWorkspaceSpec(started = true)
-        val status = DevWorkspaceStatus(phase = "Running")
-        return DevWorkspace(metadata, spec, status)
-    }
-
     @Test
     fun `#hasRestartAnnotation returns true when annotation is present and set to true`() {
         // given

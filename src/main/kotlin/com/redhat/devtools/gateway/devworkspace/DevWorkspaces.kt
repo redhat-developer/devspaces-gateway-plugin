@@ -14,8 +14,11 @@ package com.redhat.devtools.gateway.devworkspace
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.openshift.Utils
+import com.redhat.devtools.gateway.openshift.isDevWorkspaceCrdMissing
+import com.redhat.devtools.gateway.openshift.isForbidden
+import com.redhat.devtools.gateway.openshift.isNotFound
 import com.redhat.devtools.gateway.openshift.isRetryable
-import com.redhat.devtools.gateway.openshift.shouldBeIgnored
+import com.redhat.devtools.gateway.openshift.isUnauthorized
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
@@ -26,9 +29,23 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.CancellationException
 
+data class DevWorkspaceListItem(
+    val workspace: DevWorkspace,
+    val editor: WorkspaceEditorInfo,
+)
+
 data class DevWorkspaceListResult(
-    val items: List<DevWorkspace>,
-    val resourceVersion: String?
+    val items: List<DevWorkspaceListItem>,
+    val resourceVersion: String?,
+    val templates: Map<String, List<DevWorkspaceTemplate>> = emptyMap(),
+    // True when the template list request failed with 401/403/404 (error ignored), so templates are unavailable.
+    // An empty map alone does not imply this.
+    val templatesUnavailable: Boolean = false
+)
+
+data class Templates(
+    val map: Map<String, List<DevWorkspaceTemplate>>,
+    val unavailable: Boolean // true when 401/403/404
 )
 
 val DevWorkspace.cheEditor: String
@@ -40,8 +57,6 @@ class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
     companion object {
-        private val CHE_EDITOR_ID_REGEX = Regex("che-.*-server", RegexOption.IGNORE_CASE)
-
         const val FAILED: String = "Failed"
         const val RUNNING: String = "Running"
         const val STOPPED: String = "Stopped"
@@ -53,77 +68,41 @@ class DevWorkspaces(private val client: ApiClient) {
 
     @Throws(ApiException::class)
     fun listWithResult(namespace: String): DevWorkspaceListResult {
-        try {
-            val response = customApi.listNamespacedCustomObject(
+        val response = try {
+            customApi.listNamespacedCustomObject(
                 "workspace.devfile.io",
                 "v1alpha2",
                 namespace,
                 "devworkspaces"
             ).execute()
-
-            val devWorkspaceTemplateMap = getTemplateMap(namespace)
-            val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
-            val dwList = dwItems
-                .map { dwItem -> DevWorkspace.from(dwItem) }
-                .filter { isIdeaEditorBased(it, devWorkspaceTemplateMap) }
-            val lastResourceVersion = (Utils.getValue(response, arrayOf("metadata", "resourceVersion")) as String?)
-
-            return DevWorkspaceListResult(dwList, lastResourceVersion)
         } catch (e: ApiException) {
-            thisLogger().info(e.message)
-
-            return when (e.code) {
-                403, 404 -> {
-                    // There might be some namespaces (OpenShift projects) in which the user cannot list resource "devworkspaces"
-                    // e.g. "openshift-virtualization-os-images" on Red Hat Dev Sandbox, or the given cluster doesn't have
-                    // the RedHat DevSpaces operator installed on it, etc.
-                    //
-                    // It doesn't make sense to show an error to the user in such cases,
-                    // so let's skip it silently.
-                    DevWorkspaceListResult(emptyList(), null)
-                }
-                else -> {
-                    thisLogger().error("Kubernetes API error ${e.code}", e)
-                    throw e
-                }
+            if (e.isSkippableNamespaceForDevWorkspaceListing(namespace)) {
+                thisLogger().info("Ignored: ${e.message}")
+                return DevWorkspaceListResult(emptyList(), null)
+            } else {
+                thisLogger().error("Kubernetes API error ${e.code}", e)
+                throw e
             }
         }
+
+        val templates = loadTemplates(namespace)
+        val dwItems = Utils.getValue(response, arrayOf("items")) as List<*>
+        val dwList = dwItems
+            .map { dwItem -> DevWorkspace.from(dwItem) }
+            .map { dw -> DevWorkspaceListItem(dw, WorkspaceEditorInfoProvider.create(dw, templates.map)) }
+        val lastResourceVersion = (Utils.getValue(response, arrayOf("metadata", "resourceVersion")) as String?)
+
+        return DevWorkspaceListResult(
+            dwList,
+            lastResourceVersion,
+            templates.map,
+            templatesUnavailable = templates.unavailable
+        )
     }
 
     @Throws(ApiException::class)
     fun list(namespace: String): List<DevWorkspace> {
-       return listWithResult(namespace).items
-    }
-
-    fun isIdeaEditorBased(devWorkspace: DevWorkspace, devWorkspaceTemplateMap: Map<String, List<DevWorkspaceTemplate>>): Boolean {
-        // Quick editor ID check
-        if (devWorkspace.cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
-            return true
-        }
-
-        // DevWorkspace Template check
-        val templates = devWorkspaceTemplateMap[devWorkspace.uid] ?: return false
-        return templates.any { template ->
-            @Suppress("UNCHECKED_CAST")
-            val components = template.components as? List<Any> ?: return@any false
-            components.any { component: Any ->
-                val map = component as? Map<*, *> ?: return@any false
-                val volume = map["volume"] as? Map<*, *>
-                // Check 'volume.name' first (v1alpha1), fallback to top-level 'name' (v1alpha2)
-                val name = volume?.get("name") as? String ?: map["name"] as? String
-                name.equals("idea-server", ignoreCase = true)
-            }
-        }
-    }
-
-    // Creates a filter for the Idea-based DevWorkspaces
-    fun createIdeaEditorFilter(
-        namespace: String
-    ): (DevWorkspace) -> Boolean {
-        val templateMap = getTemplateMap(namespace)
-        return { dw: DevWorkspace ->
-            isIdeaEditorBased(dw, templateMap)
-        }
+       return listWithResult(namespace).items.map { it.workspace }
     }
 
     fun get(namespace: String, name: String): DevWorkspace {
@@ -137,8 +116,18 @@ class DevWorkspaces(private val client: ApiClient) {
         return DevWorkspace.from(dwObj)
     }
 
-    // Returns a map of DW Owner UID tp list of DW Templates
-    private fun getTemplateMap(namespace: String): Map<String, List<DevWorkspaceTemplate>> {
+    /**
+     * Loads all DevWorkspaceTemplates for the given namespace and groups them by their owner reference UID.
+     *
+     * Queries the Kubernetes API for `devworkspacetemplates` resources in the specified namespace,
+     * parses each template, and builds a map from owner UID to the list of templates owned by that UID.
+     *
+     * If the API returns a 401/403/404, returns an empty map with `unavailable = true`.
+     *
+     * @param namespace the Kubernetes namespace to list templates from
+     * @return a [Templates] containing the UID-to-templates map and an availability flag
+     */
+    fun loadTemplates(namespace: String): Templates {
         try {
             val dwTemplateList = customApi
                 .listNamespacedCustomObject(
@@ -150,7 +139,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 .execute()
 
             val items = Utils.getValue(dwTemplateList, arrayOf("items")) as? List<*> ?: emptyList<Any>()
-            return items
+            val map = items
                 .map { DevWorkspaceTemplate.from(it) }
                 .flatMap { templ ->
                     templ.ownerRefencesUids.map { uid -> uid to templ }
@@ -159,9 +148,10 @@ class DevWorkspaces(private val client: ApiClient) {
                     keySelector = { it.first },   // UID
                     valueTransform = { it.second } // DevWorkspaceTemplate
                 )
+            return Templates(map, unavailable = false)
         } catch (e: ApiException) {
-            if (e.shouldBeIgnored()) {
-                return emptyMap()
+            if (e.isIgnorableTemplateListError()) {
+                return Templates(emptyMap(), unavailable = true)
             }
             thisLogger().info(e.message)
             throw e
@@ -324,4 +314,33 @@ class DevWorkspaces(private val client: ApiClient) {
             object : TypeToken<Watch.Response<Any>>() {}.type
         )
     }
+
+/** Returns `true` if the given exception is ignorable when listing templates.
+     * Returns `false` otherwise.
+     * Template list failures with 401, 403, or 404 are silently degraded to an empty
+     * map with [Templates.unavailable] set to true.
+     *
+     * Note: 401 is ignorable for templates because templates are optional metadata
+     * (editor detection falls back to annotation). However, 401 for devworkspaces
+     * listing is NOT ignorable and rethrows — see [isSkippableNamespaceForDevWorkspaceListing].
+     */
+    private fun ApiException.isIgnorableTemplateListError(): Boolean =
+        isUnauthorized() || isForbidden() || isNotFound()
+
+    /** Returns `true` if the given exception is skippable when listing devworkspaces
+     * for a specific namespace during multi-namespace scanning.
+     * Returns `false` otherwise.
+     * Skippable errors: CRD missing (404 with CRD-not-found response body),
+     * 403 (Forbidden), or plain 404 — the namespace has no DevSpaces/DevWorkspaces
+     * resources or access is denied for system namespaces in multi-namespace scans.
+     * Non-skippable: 401 (Unauthorized) propagates/rethrows, and other errors
+     * propagate normally.
+     */
+    private fun ApiException.isSkippableNamespaceForDevWorkspaceListing(namespace: String): Boolean = when {
+        isDevWorkspaceCrdMissing() -> true
+        isForbidden() -> true
+        isNotFound() -> true
+        else -> false
+    }
+
 }

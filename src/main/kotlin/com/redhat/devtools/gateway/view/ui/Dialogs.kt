@@ -3,6 +3,7 @@ package com.redhat.devtools.gateway.view.ui
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ui.Messages
+import com.redhat.devtools.gateway.DevSpacesBundle
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.Icon
 
@@ -93,6 +94,27 @@ object Dialogs {
             defaultOptionIndex,
             Messages.getErrorIcon()
         ) == confirmOptionIndex
+    }
+
+    /**
+     * Shows a warning dialog when connecting to a workspace whose editor is unknown.
+     * Returns `true` if the user click "Connect", `false` otherwise.
+     *
+     * @return true if the user wants to continue connecting, false to cancel
+     */
+    fun confirmUnknownEditor(modalityState: ModalityState? = ModalityState.any()): Boolean {
+        return confirm(
+            message = DevSpacesBundle.message(
+                "connector.wizard_step.remote_server_connection.dialog.unknown_editor.message"
+            ),
+            title = DevSpacesBundle.message(
+                "connector.wizard_step.remote_server_connection.dialog.unknown_editor.title"
+            ),
+            buttons = arrayOf("Cancel", "Connect"),
+            confirmOptionIndex = 1,
+            defaultOptionIndex = 0,
+            modalityState = modalityState
+        )
     }
 
     /**

@@ -71,7 +71,12 @@ internal class PodExecSession(
                 ctx.streamsReady.await()
                 listOfNotNull(ctx.stdoutJobRef.get(), ctx.stderrJobRef.get()).joinAll()
                 checkCancelled?.invoke()
-                val code = ctx.exitCode.await()
+
+                // Shut down the exec client before resuming the caller so that cleanup
+                // is complete once exec() returns or throws
+                val outcome = runCatching { ctx.exitCode.await() }
+                shutdownExecClient(ctx.execClient)
+                val code = outcome.getOrThrow()
 
                 checkCancelled?.invoke()
                 val stderrMsg = ctx.stderr.toString().takeIf { it.isNotBlank() }
