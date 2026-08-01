@@ -19,12 +19,25 @@ import java.awt.event.MouseEvent
 import javax.swing.JComboBox
 import javax.swing.JList
 import javax.swing.JPanel
+import javax.swing.JTable
 import javax.swing.event.AncestorEvent
 
 fun <T> JList<T>.onDoubleClick(action: (T) -> Unit) {
     object : DoubleClickListener() {
         override fun onDoubleClick(e: MouseEvent): Boolean {
             selectedValue?.let { action(it) }
+            return true
+        }
+    }.installOn(this)
+}
+
+fun JTable.onDoubleClick(action: (Int) -> Unit) {
+    object : DoubleClickListener() {
+        override fun onDoubleClick(e: MouseEvent): Boolean {
+            val row = rowAtPoint(e.point)
+            if (row !in 0..<rowCount) return false
+            setRowSelectionInterval(row, row)
+            action.invoke(row)
             return true
         }
     }.installOn(this)

@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.util
 
 import com.redhat.devtools.gateway.auth.session.SsoLoginException
+import com.redhat.devtools.gateway.server.ServerContainerNotFoundException
 import kotlinx.coroutines.TimeoutCancellationException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
@@ -24,6 +25,15 @@ fun Throwable.messageWithoutPrefix(): String? {
 fun Throwable.isTimeoutException(): Boolean = (this is TimeoutCancellationException || this is TimeoutException )
 
 fun Throwable.isCancellationException(): Boolean = (this is CancellationException && !isTimeoutException() )
+
+/**
+ * Returns true if this throwable or any of its causes is a `ServerContainerNotFoundException`.
+ * Traverses the exception chain to determine if the root cause is a missing server container.
+ *
+ * @return true if a `ServerContainerNotFoundException` is found in the exception chain, false otherwise
+ */
+fun Throwable.isServerContainerNotFound(): Boolean =
+    generateSequence(this) { it.cause }.any { it is ServerContainerNotFoundException }
 
 fun Throwable.isLoginUserCancelled(): Boolean =
     generateSequence(this) { it.cause }.any { it is SsoLoginException.Cancelled }

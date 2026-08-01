@@ -11,49 +11,69 @@
  */
 package com.redhat.devtools.gateway.view.steps
 
-import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.ModalityState
-import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.impl.welcomeScreen.WelcomeScreenUIManager
-import com.intellij.ui.ColoredListCellRenderer
-import com.intellij.ui.SimpleTextAttributes
-import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.dsl.builder.*
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.invokeLater
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.DevSpacesIcons
 import com.redhat.devtools.gateway.devworkspace.DevWorkspace
-import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListener
-import com.redhat.devtools.gateway.devworkspace.DevWorkspaceWatchManager
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListItem
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceTemplate
+import com.redhat.devtools.gateway.devworkspace.WorkspaceEditorKind
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.isCancellationException
+import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspaceTableModel
+import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspacesTable
+import com.redhat.devtools.gateway.view.steps.workspaces.WorkspacesWatch
 import com.redhat.devtools.gateway.view.ui.Dialogs
+import com.redhat.devtools.gateway.view.ui.Dialogs.confirmUnknownEditor
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
-import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.awt.Dimension
-import java.awt.FontMetrics
 import java.util.concurrent.CancellationException
-import javax.swing.DefaultListModel
 import javax.swing.JButton
-import javax.swing.JList
-import javax.swing.ListModel
 import javax.swing.event.ListSelectionEvent
 import javax.swing.event.ListSelectionListener
+import javax.swing.event.TableModelEvent
+import javax.swing.event.TableModelListener
+
+private const val NO_JETBRAINS_IDE_CONTAINER_MESSAGE =
+    "The workspace does not have a JetBrains IDE (idea-server) container, so it cannot be connected to."
+
+private fun WorkspaceEditorKind.isConnectableEditor(): Boolean {
+    return when (this) {
+        WorkspaceEditorKind.INTELLIJ_IDEA,
+        WorkspaceEditorKind.PYCHARM,
+        WorkspaceEditorKind.CLION,
+        WorkspaceEditorKind.GOLAND,
+        WorkspaceEditorKind.PHPSTORM,
+        WorkspaceEditorKind.RIDER,
+        WorkspaceEditorKind.RUBYMINE,
+        WorkspaceEditorKind.WEBSTORM,
+        WorkspaceEditorKind.HERDR,
+        WorkspaceEditorKind.KIRO,
+        WorkspaceEditorKind.JETBRAINS,
+        WorkspaceEditorKind.UNKNOWN ->
+            true
+        else -> false
+    }
+}
 
 val DevWorkspace.displayName: String
     get() {
@@ -69,8 +89,8 @@ class DevSpacesWorkspacesStepView(
     override val previousActionText =
         DevSpacesBundle.message("connector.wizard_step.remote_server_connection.button.previous")
 
-    private var listDWDataModel = DefaultListModel<DevWorkspace>()
-    private var listDevWorkspaces = JBList(listDWDataModel)
+    private var devWorkspacesTableModel = DevWorkspaceTableModel()
+    private var devWorkspacesTable = DevWorkspacesTable(devWorkspacesTableModel)
 
     private lateinit var startDevWorkspaceButton: JButton
     private lateinit var stopDevWorkspaceButton: JButton
@@ -85,7 +105,7 @@ class DevSpacesWorkspacesStepView(
         }
 
         row {
-            cell(JBScrollPane(listDevWorkspaces)
+            cell(JBScrollPane(devWorkspacesTable)
                 .apply {
                     preferredSize = Dimension(preferredSize.width, 200)
                     minimumSize = Dimension(minimumSize.width, 100)
@@ -117,17 +137,16 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun onInit() {
-        listDWDataModel.clear() // avoid glitch where user would see old list content before it's cleared
-        listDevWorkspaces.selectionModel.addListSelectionListener(DevWorkspaceSelection())
-        listDevWorkspaces.onDoubleClick {
+        devWorkspacesTableModel.clear() // avoid glitch where user would see old list content before it's cleared
+        devWorkspacesTable.selectionModel.addListSelectionListener(DevWorkspaceSelection())
+        devWorkspacesTable.onDoubleClick {
             onNext()
         }
-        listDevWorkspaces.cellRenderer = DevWorkspaceListRenderer()
-        listDevWorkspaces.setEmptyText(DevSpacesBundle.message("connector.wizard_step.remote_server_connection.list.empty_text"))
 
-        initListListeners(this)
+        initTableListeners(this)
 
-        watchManager = WorkspacesWatch(devSpacesContext.client, listDWDataModel)
+        watchManager?.dispose()
+        watchManager = WorkspacesWatch(devSpacesContext.client, devWorkspacesTableModel)
         refreshAndWatchAllDevWorkspaces()
         enableButtons()
     }
@@ -138,9 +157,18 @@ class DevSpacesWorkspacesStepView(
     }
 
     override fun onNext(): Boolean {
-        val workspace = getSelectedWorkspace() ?: return false
+        val item = getSelectedWorkspaceListItem() ?: return false
+        val workspace = item.workspace
+        if (!item.editor.kind.isConnectableEditor()) {
+            return false
+        }
         if (!isRunning(workspace)) {
             return false
+        }
+        if (item.editor.kind == WorkspaceEditorKind.UNKNOWN) {
+            if (!confirmUnknownEditor()) {
+                return false
+            }
         }
         devSpacesContext.devWorkspace = workspace
         try {
@@ -150,6 +178,11 @@ class DevSpacesWorkspacesStepView(
                 return false // canceled, stay on this step
             }
             thisLogger().error("Could not check workspace IDE status", e)
+            if (e.isServerContainerNotFound()) {
+                // do not offer restart pod
+                Dialogs.error(NO_JETBRAINS_IDE_CONTAINER_MESSAGE, "Cannot Connect to Workspace IDE")
+                return false
+            }
             if (Dialogs.ideNotResponding()) {
                 stopDevWorkspace()
                 connect()
@@ -161,20 +194,18 @@ class DevSpacesWorkspacesStepView(
         return false // Stay on this step after connection
     }
 
-    private fun initListListeners(disposable: Disposable) {
+    private fun initTableListeners(disposable: Disposable) {
         val selectionListener = ListSelectionListener { enableButtons() }
-        listDevWorkspaces.addListSelectionListener(selectionListener)
+        devWorkspacesTable.selectionModel.addListSelectionListener(selectionListener)
 
-        val dataListener = object : javax.swing.event.ListDataListener {
-            override fun intervalAdded(e: javax.swing.event.ListDataEvent) = enableButtons()
-            override fun intervalRemoved(e: javax.swing.event.ListDataEvent) = enableButtons()
-            override fun contentsChanged(e: javax.swing.event.ListDataEvent) = enableButtons()
+        val dataListener = object : TableModelListener {
+            override fun tableChanged(e: TableModelEvent) = enableButtons()
         }
-        listDWDataModel.addListDataListener(dataListener)
+        devWorkspacesTableModel.addTableModelListener(dataListener)
 
         Disposer.register(disposable) {
-            listDevWorkspaces.removeListSelectionListener(selectionListener)
-            listDWDataModel.removeListDataListener(dataListener)
+            devWorkspacesTable.selectionModel.removeListSelectionListener(selectionListener)
+            devWorkspacesTableModel.removeTableModelListener(dataListener)
         }
     }
 
@@ -201,100 +232,100 @@ class DevSpacesWorkspacesStepView(
 
     private fun refreshAllDevWorkspaces(): Map<String, String?> {
         val lastResourceVersions = mutableMapOf<String, String?>()
+        val templateMaps = mutableMapOf<String, Map<String, List<DevWorkspaceTemplate>>>()
+        val namespacesUnavailable = mutableSetOf<String>()
         val devWorkspaces = Projects(devSpacesContext.client).list()
             .map { Utils.getValue(it, arrayOf("metadata", "name")) as String }
             .flatMap { namespace ->
                 val dwListResult = DevWorkspaces(devSpacesContext.client).listWithResult(namespace)
                 lastResourceVersions[namespace] = dwListResult.resourceVersion
+                templateMaps[namespace] = dwListResult.templates
+                if (dwListResult.templatesUnavailable) {
+                    namespacesUnavailable.add(namespace)
+                }
                 dwListResult.items
             }
 
-        invokeLater(
-            ModalityState.any(),
-            {
-                val selectedIndex = listDevWorkspaces.selectedIndex
-                listDWDataModel.apply {
-                    clear()
-                    addAll(devWorkspaces)
-                }
-                listDevWorkspaces.selectedIndex = getValidSelectedIndex(selectedIndex)
+        invokeLater(ModalityState.any()) {
+            val selectedRow = devWorkspacesTable.selectedRow
+            devWorkspacesTableModel.apply {
+                clear()
+                addAll(devWorkspaces)
             }
-        )
+            devWorkspacesTable.updateColumnWidths()
+            val newSelection = getValidSelectedIndex(selectedRow)
+            if (newSelection >= 0) {
+                devWorkspacesTable.setRowSelectionInterval(newSelection, newSelection)
+            }
+        }
+
+        watchManager?.seedTemplateCache(templateMaps, namespacesUnavailable)
 
         return lastResourceVersions
     }
 
     private fun getValidSelectedIndex(selectedIndex: Int): Int {
         return if (selectedIndex >= 0
-            && selectedIndex < listDWDataModel.size) {
+            && selectedIndex < devWorkspacesTableModel.getRowCount()) {
             selectedIndex
         } else {
-            if (listDWDataModel.size > 0) 0 else -1
+            if (devWorkspacesTableModel.getRowCount() > 0) 0 else -1
         }
     }
 
     private fun refreshDevWorkspace(namespace: String, name: String) {
         val refreshedDevWorkspace = DevWorkspaces(devSpacesContext.client).get(namespace, name)
-
-        invokeLater(
-            ModalityState.any(),
-            {
-                listDWDataModel
-                    .indexOf(refreshedDevWorkspace)
-                    .also {
-                        if (it != -1) listDWDataModel[it] = refreshedDevWorkspace
-                    }
+        invokeLater(ModalityState.any()) {
+            val idx = devWorkspacesTableModel.indexOfFirst { it.workspace.namespace == namespace && it.workspace.name == name }
+            if (idx != -1) {
+                // Keep the previously resolved editor: the freshly fetched DevWorkspace has no template
+                // context here, so a template-based JetBrains icon must not flip to Unknown (CRW-11897).
+                devWorkspacesTableModel.set(
+                    idx,
+                    DevWorkspaceListItem(
+                        refreshedDevWorkspace,
+                        devWorkspacesTableModel[idx].editor
+                    )
+                )
+            } else {
+                thisLogger().debug(
+                    "refreshDevWorkspace: $namespace/$name not in list model; skipping UI update"
+                )
             }
-        )
+        }
     }
 
-    private fun startDevWorkspace() {
+    private fun startDevWorkspace() = runWorkspaceAction(
+        verb = { namespace, name -> DevWorkspaces(devSpacesContext.client).start(namespace, name) },
+        actionError = "Failed to start workspace",
+        progressTitle = "Starting Workspace"
+    )
+
+    private fun stopDevWorkspace() = runWorkspaceAction(
+        verb = { namespace, name -> DevWorkspaces(devSpacesContext.client).stop(namespace, name) },
+        actionError = "Failed to stop workspace",
+        progressTitle = "Stopping Workspace"
+    )
+
+    private fun runWorkspaceAction(
+        verb: (String, String) -> Unit,
+        actionError: String,
+        progressTitle: String
+    ) {
         val selectedWorkspace = getSelectedWorkspace() ?: return
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             {
                 try {
-                    DevWorkspaces(devSpacesContext.client).start(
-                        selectedWorkspace.namespace,
-                        selectedWorkspace.name
-                    )
-                    refreshDevWorkspace(
-                        selectedWorkspace.namespace,
-                        selectedWorkspace.name
-                    )
+                    verb(selectedWorkspace.namespace, selectedWorkspace.name)
+                    refreshDevWorkspace(selectedWorkspace.namespace, selectedWorkspace.name)
                     enableButtons()
                 } catch (e: Exception) {
-                    thisLogger().error("Failed to start workspace", e)
+                    thisLogger().error(actionError, e)
                     // UI already shows current state, just enable buttons
                     enableButtons()
                 }
             },
-            "Starting Workspace",
-            true,
-            null
-        )
-    }
-
-    private fun stopDevWorkspace() {
-        val selectedWorkspace = getSelectedWorkspace() ?: return
-        ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            {
-                try {
-                    DevWorkspaces(devSpacesContext.client).stop(
-                        selectedWorkspace.namespace,
-                        selectedWorkspace.name
-                    )
-                    refreshDevWorkspace(
-                        selectedWorkspace.namespace,
-                        selectedWorkspace.name
-                    )
-                    enableButtons()
-                } catch (e: Exception) {
-                    thisLogger().error("Failed to stop workspace", e)
-                    // UI already shows current state, just enable buttons
-                    enableButtons()
-                }
-            },
-            "Stopping Workspace",
+            progressTitle,
             true,
             null
         )
@@ -361,41 +392,37 @@ class DevSpacesWorkspacesStepView(
                 try {
                     runBlocking(Dispatchers.IO) {
                         DevSpacesConnection(devSpacesContext).connect(
-                            {
-                                refreshDevWorkspace(
-                                    devSpacesContext.devWorkspace.namespace,
-                                    devSpacesContext.devWorkspace.name
-                                )
-                                enableButtons()
-                            },
-                            {
-                                enableButtons()
-                            },
+                            { refreshSelectedAndButtons() },
+                            { enableButtons() },
                             {
                                 if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
-                                    refreshDevWorkspace(
-                                        devSpacesContext.devWorkspace.namespace,
-                                        devSpacesContext.devWorkspace.name
-                                    )
-                                    enableButtons()
+                                    refreshSelectedAndButtons()
                                 }
                             }
                         )
                     }
                 } catch (e: Exception) {
-                    refreshDevWorkspace(
-                        devSpacesContext.devWorkspace.namespace,
-                        devSpacesContext.devWorkspace.name
-                    )
-                    enableButtons()
+                    refreshSelectedAndButtons()
                     thisLogger().error("Workspace IDE connection failed.", e)
-                    Dialogs.error(e.messageWithoutPrefix() ?: "Could not connect to workspace IDE", "Connection Error")
+                    if (e.isServerContainerNotFound()) {
+                        Dialogs.error(NO_JETBRAINS_IDE_CONTAINER_MESSAGE, "Cannot Connect to Workspace IDE")
+                    } else {
+                        Dialogs.error(
+                            e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                            "Connection Error"
+                        )
+                    }
                 }
             },
             DevSpacesBundle.message("connector.loader.devspaces.connecting.text"),
             true,
             null
         )
+    }
+
+    private fun refreshSelectedAndButtons() {
+        refreshDevWorkspace(devSpacesContext.devWorkspace.namespace, devSpacesContext.devWorkspace.name)
+        enableButtons()
     }
 
     private fun waitDevWorkspaceStopped(devWorkspace: DevWorkspace): Boolean {
@@ -409,42 +436,23 @@ class DevSpacesWorkspacesStepView(
     }
 
     private fun enableButtons() {
-        invokeLater(
-            ModalityState.any(),
-            {
-                val workspace = getSelectedWorkspace()
+        invokeLater(ModalityState.any()) {
+            val workspace = getSelectedWorkspace()
 
-                startDevWorkspaceButton.isEnabled = isStopped(workspace)
-                stopDevWorkspaceButton.isEnabled = isRunning(workspace)
+            startDevWorkspaceButton.isEnabled = isStopped(workspace)
+            stopDevWorkspaceButton.isEnabled = isRunning(workspace)
 
-                refreshNextButton()
-
-                if (isAlreadyConnected(workspace)) {
-                    stopDevWorkspaceButton.toolTipText = "This workspace is already connected."
-                } else {
-                    stopDevWorkspaceButton.toolTipText = null
-                }
-            }
-
-        )
-    }
-
-    private fun getSelectedWorkspace(): DevWorkspace? {
-        val selectedIndex = listDevWorkspaces.minSelectionIndex
-        return if (selectedIndex >= 0
-            && selectedIndex < listDevWorkspaces.itemsCount) {
-            listDevWorkspaces.model.getElementAt(selectedIndex)
-        } else {
-            null
+            refreshNextButton()
         }
     }
 
+    private fun getSelectedWorkspaceListItem(): DevWorkspaceListItem? = devWorkspacesTable.selectedItem
+
+    private fun getSelectedWorkspace(): DevWorkspace? = getSelectedWorkspaceListItem()?.workspace
+
     override fun isNextEnabled(): Boolean {
-        val workspace = getSelectedWorkspace() ?: return false
-        // Do not gate on "already connected": in IDEA the wizard often stays open after
-        // Guest close, and thin-client / activeWorkspaces tracking is too unreliable to
-        // keep Connect disabled. Tooltip still reflects isAlreadyConnected.
-        return isRunning(workspace)
+        val item = getSelectedWorkspaceListItem() ?: return false
+        return item.editor.kind.isConnectableEditor() && isRunning(item.workspace)
     }
 
     private fun isStopped(workspace: DevWorkspace?): Boolean {
@@ -455,149 +463,19 @@ class DevSpacesWorkspacesStepView(
         return workspace?.running ?: false
     }
 
-    /**
-     * Returns true if the workspace is already connected (client-side session active).
-     */
-    private fun isAlreadyConnected(workspace: DevWorkspace?): Boolean {
-        if (workspace == null) return false
-        return devSpacesContext.isWorkspaceActive(workspace)
-    }
-
-    class DevWorkspaceListRenderer : ColoredListCellRenderer<DevWorkspace>() {
-        override fun customizeCellRenderer(
-            list: JList<out DevWorkspace>,
-            devWorkspace: DevWorkspace,
-            index: Int,
-            selected: Boolean,
-            hasFocus: Boolean
-        ) {
-            val icon = DevSpacesIcons.getWorkspacePhaseIcon(devWorkspace.phase) ?: AllIcons.Empty
-            setIcon(icon)
-
-            border = JBUI.Borders.emptyLeft(6)
-            font = JBFont.h4().asPlain()
-
-            append(devWorkspace.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
-            if (hasMultipleWorkspaces(list.model)) {
-                val fm = getFontMetrics(font)
-                val maxNameWidth = calculateMaxNameWidth(list.model, fm)
-                val padding = maxNameWidth - fm.stringWidth(devWorkspace.name) + 20 // extra gap
-                append(" ".repeat(padding / fm.stringWidth(" ")), SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                append(" @${devWorkspace.namespace}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-            }
-        }
-
-        private fun calculateMaxNameWidth(listModel: ListModel<out DevWorkspace>, fm: FontMetrics): Int {
-            var maxWidth = 0
-            for (i in 0 until listModel.size) {
-                val nameWidth = fm.stringWidth(listModel.getElementAt(i).name)
-                if (nameWidth > maxWidth) maxWidth = nameWidth
-            }
-            return maxWidth
-        }
-
-        private fun hasMultipleWorkspaces(listModel: ListModel<out DevWorkspace>): Boolean {
-            if (listModel.size <= 1) return false
-
-            val firstNamespace = listModel.getElementAt(0).namespace
-            return (1 until listModel.size)
-                .asSequence()
-                .map { listModel.getElementAt(it).namespace }
-                .any { it != firstNamespace }
-        }
-    }
-
     fun refreshNextButton() {
         enableNextButton?.invoke()
     }
 
     override fun dispose() {
-        watchManager?.stop()
+        watchManager?.dispose()
+        watchManager = null
     }
 
     inner class DevWorkspaceSelection : ListSelectionListener {
         override fun valueChanged(e: ListSelectionEvent) {
             enableButtons()
             refreshNextButton()
-        }
-    }
-
-    private class WorkspacesWatch(
-        private val client: ApiClient,
-        private val workspacesDataModel: DefaultListModel<DevWorkspace>
-    ) {
-        private val devWorkspaces = DevWorkspaces(client)
-        private val watchManager = DevWorkspaceWatchManager(
-            createWatcher = { ns, latestResourceVersion ->
-                devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
-            },
-            createFilter = { ns ->
-                devWorkspaces.createIdeaEditorFilter(ns)
-            },
-            listener = object : DevWorkspaceListener {
-                override fun onAdded(dw: DevWorkspace) {
-                    onUpdated(dw)
-                }
-
-                override fun onUpdated(dw: DevWorkspace) {
-                    invokeLater(
-                        ModalityState.any(),
-                        {
-                            val idx = indexOfFirst { it.name == dw.name && it.namespace == dw.namespace }
-                            if (idx == -1) {
-                                val index = findInsertIndex(dw)
-                                workspacesDataModel.add(index, dw)
-                            } else {
-                                workspacesDataModel.set(idx, dw)
-                            }
-                        }
-                    )
-                }
-
-                override fun onDeleted(dw: DevWorkspace) {
-                    invokeLater(
-                        ModalityState.any(),
-                        {
-                            val idx = indexOfFirst { it.namespace == dw.namespace && it.name == dw.name }
-                            if (idx >= 0) {
-                                workspacesDataModel.remove(idx)
-                            }
-                        }
-                    )
-                }
-
-                private fun findInsertIndex(dw: DevWorkspace): Int {
-                    val n = workspacesDataModel.size
-                    val groupStart = (0 until n).firstOrNull {
-                        workspacesDataModel[it].namespace >= dw.namespace
-                    } ?: n
-
-                    val insertIndex = (groupStart until n).firstOrNull {
-                        workspacesDataModel[it].namespace == dw.namespace && workspacesDataModel[it].name >= dw.name
-                    } ?: run {
-                        var endOfGroup = groupStart
-                        while (endOfGroup < n && workspacesDataModel[endOfGroup].namespace == dw.namespace) endOfGroup++
-                        endOfGroup
-                    }
-
-                    return insertIndex
-                }
-            }
-        )
-
-        private fun indexOfFirst(predicate: (DevWorkspace) -> Boolean): Int {
-            for (i in 0 until workspacesDataModel.size()) {
-                if (predicate(workspacesDataModel.get(i))) return i
-            }
-            return -1
-        }
-
-        fun start(lastResourceVersions: Map<String, String?> = emptyMap()) {
-            watchManager.start(lastResourceVersions)
-        }
-
-        fun stop() {
-            watchManager.stop()
         }
     }
 }
