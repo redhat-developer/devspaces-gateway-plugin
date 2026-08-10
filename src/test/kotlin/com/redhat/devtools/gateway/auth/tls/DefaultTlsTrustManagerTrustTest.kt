@@ -23,6 +23,9 @@ import com.redhat.devtools.gateway.auth.tls.TlsTrustManagerTestFixtures.successT
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import javax.net.ssl.X509TrustManager
 
 class DefaultTlsTrustManagerTrustTest {
@@ -287,6 +290,56 @@ class DefaultTlsTrustManagerTrustTest {
 
             assertThat(fixtureCertSerials(tlsContext.trustManager as X509TrustManager, kubeCa))
                 .containsExactly(kubeCa.serialNumber)
+        }
+    }
+
+    @Test
+    fun `#createTlsContext fails clearly on ConnectException without prompting`() {
+        runBlocking {
+            var prompted = false
+            val manager = createManager(
+                tlsProbe = { _, _ -> throw ConnectException("connection timed out") },
+            )
+
+            val error = runCatching {
+                manager.createTlsContext(
+                    API_SERVER_URL,
+                    decisionHandler = {
+                        prompted = true
+                        TlsTrustDecision.sessionOnly()
+                    },
+                )
+            }.exceptionOrNull()
+
+            assertThat(prompted).isFalse()
+            assertThat(error).isInstanceOf(IOException::class.java)
+            assertThat(error!!.message).contains("Cannot connect").contains("IDE HTTP proxy")
+            assertThat(error.cause).isInstanceOf(ConnectException::class.java)
+        }
+    }
+
+    @Test
+    fun `#createTlsContext fails clearly on SocketTimeoutException without prompting`() {
+        runBlocking {
+            var prompted = false
+            val manager = createManager(
+                tlsProbe = { _, _ -> throw SocketTimeoutException("read timed out") },
+            )
+
+            val error = runCatching {
+                manager.createTlsContext(
+                    API_SERVER_URL,
+                    decisionHandler = {
+                        prompted = true
+                        TlsTrustDecision.sessionOnly()
+                    },
+                )
+            }.exceptionOrNull()
+
+            assertThat(prompted).isFalse()
+            assertThat(error).isInstanceOf(IOException::class.java)
+            assertThat(error!!.message).contains("Cannot connect").contains("IDE HTTP proxy")
+            assertThat(error.cause).isInstanceOf(SocketTimeoutException::class.java)
         }
     }
 }
