@@ -40,7 +40,7 @@ object IdeHttpProxy {
     }
 
     fun configure(builder: OkHttpClient.Builder): OkHttpClient.Builder =
-        configure(builder, ideProxySelector())
+        configure(builder, proxySelector())
 
     fun configure(builder: OkHttpClient.Builder, selector: ProxySelector): OkHttpClient.Builder =
         builder
@@ -63,11 +63,11 @@ object IdeHttpProxy {
      * test scenarios that require a custom proxy configuration.
      *
      * @param builder the HTTP client builder to configure
-     * @param proxySelector optional proxy selector; defaults to the IDE proxy selector from [ideProxySelector]
+     * @param proxySelector optional proxy selector; defaults to the IDE proxy selector from [proxySelector]
      */
     fun configure(
         builder: HttpClient.Builder,
-        proxySelector: ProxySelector = ideProxySelector(),
+        proxySelector: ProxySelector = this.proxySelector(),
     ): HttpClient.Builder {
         runCatching { JdkProxyProvider.ensureDefault() }
             .onFailure { thisLogger().warn("Failed to ensure default JDK proxy provider", it) }
@@ -104,7 +104,12 @@ object IdeHttpProxy {
         }
     }
 
-    private fun ideProxySelector(): ProxySelector =
+    /**
+     * Returns the IDE-compatible [ProxySelector] from [JdkProxyProvider],
+     * falling back to the JVM default selector or a no-proxy selector when
+     * unavailable.
+     */
+    fun proxySelector(): ProxySelector =
         runCatching {
             JdkProxyProvider.ensureDefault()
             JdkProxyProvider.getInstance().proxySelector

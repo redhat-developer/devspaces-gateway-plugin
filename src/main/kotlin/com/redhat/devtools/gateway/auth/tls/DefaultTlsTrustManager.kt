@@ -19,9 +19,11 @@ import com.redhat.devtools.gateway.util.toServerBaseUrl
 import io.kubernetes.client.util.KubeConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.URI
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 
 class DefaultTlsTrustManager(
@@ -29,7 +31,7 @@ class DefaultTlsTrustManager(
     private val kubeConfigWriter: suspend (KubeConfigNamedCluster, List<X509Certificate>) -> Unit,
     private val sessionTrustStore: SessionTlsTrustStore,
     private val persistentKeyStore: PersistentKeyStore,
-    private val tlsProbe: (URI, TlsContext) -> Unit = { uri, ctx -> TlsProbe.connect(uri, ctx.sslContext) },
+    private val tlsProbe: (URI, TlsContext) -> Unit = { uri, ctx -> TlsConnectionProbe.connect(uri, ctx.sslContext) },
     private val oauthDiscovery: suspend (String, SSLContext) -> List<String> = { apiBaseUrl, sslContext ->
         OAuthDiscovery(apiBaseUrl, sslContext).endpointBaseUrls()
     }
@@ -105,6 +107,10 @@ class DefaultTlsTrustManager(
         } catch (e: SSLHandshakeException) {
             thisLogger().debug("TLS trust: JVM CAs do not trust $serverUrl (${e.message})")
             null
+        } catch (e: SSLException) {
+            throw e
+        } catch (e: IOException) {
+            throwConnectionError(serverUrl, e)
         }
     }
 
@@ -134,6 +140,10 @@ class DefaultTlsTrustManager(
                 "TLS trust: handshake failed with known certificate(s) for $serverUrl; will prompt (${e.message})"
             )
             null
+        } catch (e: SSLException) {
+            throw e
+        } catch (e: IOException) {
+            throwConnectionError(serverUrl, e)
         }
     }
 
@@ -153,16 +163,30 @@ class DefaultTlsTrustManager(
             null // probe succeeded without throwing — no cert info, caller logs unexpected success
         } catch (e: SSLHandshakeException) {
             val chain = (captureContext.trustManager as? CapturingTrustManager)
-                ?.serverCertificateChain?.toList() ?: throw e
+                ?.serverCertificateChain?.toList()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw e
 
             val trustAnchor = chain.first()
             CapturedCertInfo(
-                problem = if (trustedCerts.isEmpty()) TlsTrustProblem.UNTRUSTED_CERTIFICATE
-                    else TlsTrustProblem.CERTIFICATE_CHANGED,
+                problem = if (trustedCerts.isEmpty()) {
+                    TlsTrustProblem.UNTRUSTED_CERTIFICATE
+                } else {
+                    TlsTrustProblem.CERTIFICATE_CHANGED
+                },
                 chain = chain,
                 trustAnchor = trustAnchor,
             )
+        } catch (e: SSLException) {
+            throw e
+        } catch (e: IOException) {
+            throwConnectionError(serverUri.toString(), e)
         }
+    }
+
+    private fun throwConnectionError(serverUrl: String, e: IOException): Nothing {
+        thisLogger().warn("TLS trust: connectivity failure probing $serverUrl (${e.message})")
+        throw IOException("Cannot connect to $serverUrl (check network / IDE HTTP proxy): ${e.message}", e)
     }
 
     private suspend fun persistAndVerifyAcceptedTrust(
@@ -201,7 +225,13 @@ class DefaultTlsTrustManager(
 
         val finalCerts = (trustedCerts + trustAnchor).distinctBy { it.serialNumber }
         val tlsContext = SslContextFactory.fromTrustedCerts(finalCerts)
-        withContext(Dispatchers.IO) { tlsProbe(serverUri, tlsContext) }
+        try {
+            withContext(Dispatchers.IO) { tlsProbe(serverUri, tlsContext) }
+        } catch (e: SSLException) {
+            throw e
+        } catch (e: IOException) {
+            throwConnectionError(serverUrl, e)
+        }
         thisLogger().info("TLS trust: verified connection to $serverUrl after user acceptance")
         return tlsContext
     }
