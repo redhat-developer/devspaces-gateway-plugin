@@ -214,9 +214,7 @@ class CertificateSourceTest {
     @Test
     fun `#fromUserInput normalizes and base64-encodes single-line PEM`() {
         // given — self-signed fixture for this suite only (openssl req … *.invalid), not from any cluster
-        val singleLinePem =
-            // notsecret
-            "-----BEGIN CERTIFICATE-----MIICmDCCAgGgAwIBAgIUV5nqmQtJt7MtAFJDk8/mI/LvDgIwDQYJKoZIhvcNAQELBQAwXjEwMC4GA1UEAwwnZmFrZS1ub3JtYWxpemF0aW9uLXRlc3QuZXhhbXBsZS5pbnZhbGlkMR0wGwYDVQQKDBRFeGFtcGxlIFRlc3QgRml4dHVyZTELMAkGA1UEBhMCWFgwHhcNMjYwNTEzMTMyMDE0WhcNMzYwNTEwMTMyMDE0WjBeMTAwLgYDVQQDDCdmYWtlLW5vcm1hbGl6YXRpb24tdGVzdC5leGFtcGxlLmludmFsaWQxHTAbBgNVBAoMFEV4YW1wbGUgVGVzdCBGaXh0dXJlMQswCQYDVQQGEwJYWDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAziSew4ot/f/avtFRNfMG9YlviyDbGf1UqViaGI2G4r7gUGSF1a//hNe8+mNMdDfyg/s1VelBR0ajAUU+R45N6DRJFAdy8dYaHVxzrxKe7apk2PIqXBo7CI59I2D2KMkEWrYtSDtyXhg8GNb753/Tkw+6ifXp/5Px5GLkU93AlzUCAwEAAaNTMFEwHQYDVR0OBBYEFG3l/ZZpH4IpTASMXlFoaQbQdOlIMB8GA1UdIwQYMBaAFG3l/ZZpH4IpTASMXlFoaQbQdOlIMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADgYEAvEWA5kcQYgD+U2lwKueYgL/habm8KcUb+e+DK0b4y0WcuoTCqH+2XWaxh5JdG6BLIC+EdFYn9SNm6lo1nv2pOppoyvE5w/xcoPB0rrXr8Eu5PGqKDOWF7YdPcEkjGqL+/TUGiGQmCY0zpTia8+MBDlZLwI9im0W4TJAL2/Lhryg=-----END CERTIFICATE-----"
+        val singleLinePem = TlsTestCertificates.singleLine(TlsTestCertificates.NORMALIZATION_PEM)
 
         // when
         val source = CertificateSource.fromPathOrPem(singleLinePem)!!
@@ -233,25 +231,7 @@ class CertificateSourceTest {
     @Test
     fun `#fromUserInput handles properly formatted multi-line PEM`() {
         // given - proper synthetic PEM with newlines
-        // notsecret
-        val multiLinePem = """
-            -----BEGIN CERTIFICATE-----
-            MIICmDCCAgGgAwIBAgIUV5nqmQtJt7MtAFJDk8/mI/LvDgIwDQYJKoZIhvcNAQEL
-            BQAwXjEwMC4GA1UEAwwnZmFrZS1ub3JtYWxpemF0aW9uLXRlc3QuZXhhbXBsZS5p
-            bnZhbGlkMR0wGwYDVQQKDBRFeGFtcGxlIFRlc3QgRml4dHVyZTELMAkGA1UEBhMC
-            WFgwHhcNMjYwNTEzMTMyMDE0WhcNMzYwNTEwMTMyMDE0WjBeMTAwLgYDVQQDDCdm
-            YWtlLW5vcm1hbGl6YXRpb24tdGVzdC5leGFtcGxlLmludmFsaWQxHTAbBgNVBAoM
-            FEV4YW1wbGUgVGVzdCBGaXh0dXJlMQswCQYDVQQGEwJYWDCBnzANBgkqhkiG9w0B
-            AQEFAAOBjQAwgYkCgYEAziSew4ot/f/avtFRNfMG9YlviyDbGf1UqViaGI2G4r7g
-            UGSF1a//hNe8+mNMdDfyg/s1VelBR0ajAUU+R45N6DRJFAdy8dYaHVxzrxKe7apk
-            2PIqXBo7CI59I2D2KMkEWrYtSDtyXhg8GNb753/Tkw+6ifXp/5Px5GLkU93AlzUC
-            AwEAAaNTMFEwHQYDVR0OBBYEFG3l/ZZpH4IpTASMXlFoaQbQdOlIMB8GA1UdIwQY
-            MBaAFG3l/ZZpH4IpTASMXlFoaQbQdOlIMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
-            hvcNAQELBQADgYEAvEWA5kcQYgD+U2lwKueYgL/habm8KcUb+e+DK0b4y0WcuoTC
-            qH+2XWaxh5JdG6BLIC+EdFYn9SNm6lo1nv2pOppoyvE5w/xcoPB0rrXr8Eu5PGqK
-            DOWF7YdPcEkjGqL+/TUGiGQmCY0zpTia8+MBDlZLwI9im0W4TJAL2/Lhryg=
-            -----END CERTIFICATE-----
-        """.trimIndent()
+        val multiLinePem = TlsTestCertificates.NORMALIZATION_PEM
 
         // when
         val source = CertificateSource.fromPathOrPem(multiLinePem)!!

@@ -46,8 +46,7 @@ object PemUtils {
             .encodeToString(certificate.encoded)
 
         return buildString {
-            // notsecret
-            append("-----BEGIN CERTIFICATE-----\n")
+            append("-----BEGIN CERTIFICATE-----\n") // notsecret
             append(base64)
             append("\n-----END CERTIFICATE-----\n")
         }
@@ -69,13 +68,12 @@ object PemUtils {
         // JBTextField can strip or mangle newlines from pasted PEM → reformat if needed
         val reformatted = clean(normalized)
 
-        // notsecret
         val cleaned = reformatted
-            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----BEGIN PRIVATE KEY-----", "") // notsecret
             .replace("-----END PRIVATE KEY-----", "")
-            .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+            .replace("-----BEGIN RSA PRIVATE KEY-----", "")  // notsecret
             .replace("-----END RSA PRIVATE KEY-----", "")
-            .replace("-----BEGIN EC PRIVATE KEY-----", "")
+            .replace("-----BEGIN EC PRIVATE KEY-----", "")  // notsecret
             .replace("-----END EC PRIVATE KEY-----", "")
             .replace("\\s".toRegex(), "")
 

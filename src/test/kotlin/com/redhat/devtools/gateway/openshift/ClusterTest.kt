@@ -74,9 +74,9 @@ class ClusterTest {
     fun `#equals returns true for clusters with same properties`() {
         // given
         // when
-        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
-        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
-        val cluster3 = Cluster(name = "c3po", url = "https://api.robots.galaxy", token = "droid-token-1") // notsecret
+        val cluster1 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster2 = Cluster(name = "r2d2", url = "https://api.robots.galaxy", token = "droid-token-1")
+        val cluster3 = Cluster(name = "c3po", url = "https://api.robots.galaxy", token = "droid-token-1")
 
         // then
         assertThat(cluster1).isEqualTo(cluster2)
