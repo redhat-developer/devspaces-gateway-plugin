@@ -18,8 +18,6 @@ import org.junit.jupiter.api.Test
 
 class KubeConfigNamedUserTest {
 
-    // notsecret — token and credential-like strings are invented test fixtures only.
-
     @Test
     fun `#fromMap is parsing named user`() {
         // given

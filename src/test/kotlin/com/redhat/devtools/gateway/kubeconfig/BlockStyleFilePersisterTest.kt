@@ -21,8 +21,6 @@ import java.nio.file.Path
 
 class BlockStyleFilePersisterTest {
 
-    // notsecret — kubeconfig user token strings embedded in YAML snippets are invented test fixtures only.
-
     @TempDir
     lateinit var tempDir: Path
 

@@ -26,7 +26,6 @@ import kotlin.io.path.writeText
 
 class KubeConfigUtilsTest {
 
-    // notsecret — tokens and URLs embedded in kubeconfig YAML snippets below are invented test fixtures only.
     @TempDir
     lateinit var tempDir: Path
 
@@ -436,7 +435,7 @@ class KubeConfigUtilsTest {
             current-context: dagobah-context
         """.trimIndent()
         )
-        // notsecret
+
         val kubeConfigFile2 = createTempKubeConfigFile(
             "config2", """
             apiVersion: v1

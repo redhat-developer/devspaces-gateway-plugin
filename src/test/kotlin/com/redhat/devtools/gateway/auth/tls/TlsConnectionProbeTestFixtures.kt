@@ -57,17 +57,13 @@ object TlsConnectionProbeTestFixtures {
 
     private val CHAR_ARRAY_EMPTY = CharArray(0)
 
-    val SERVER_KEY_PEM = TlsConnectionProbeTestFixtures::class.java.classLoader
-        .getResourceAsStream("tls/server-key.pem")!!.readBytes().toString(Charsets.UTF_8)
+    val SERVER_KEY_PEM = TlsTestCertificates.readTlsResource("server-key.pem")
 
-    val SERVER_CERT_PEM = TlsConnectionProbeTestFixtures::class.java.classLoader
-        .getResourceAsStream("tls/server-cert.pem")!!.readBytes().toString(Charsets.UTF_8)
+    val SERVER_CERT_PEM = TlsTestCertificates.readTlsResource("server-cert.pem")
 
-    val MISMATCH_KEY_PEM = TlsConnectionProbeTestFixtures::class.java.classLoader
-        .getResourceAsStream("tls/mismatch-key.pem")!!.readBytes().toString(Charsets.UTF_8)
+    val MISMATCH_KEY_PEM = TlsTestCertificates.readTlsResource("mismatch-key.pem")
 
-    val MISMATCH_CERT_PEM = TlsConnectionProbeTestFixtures::class.java.classLoader
-        .getResourceAsStream("tls/mismatch-cert.pem")!!.readBytes().toString(Charsets.UTF_8)
+    val MISMATCH_CERT_PEM = TlsTestCertificates.readTlsResource("mismatch-cert.pem")
 
     fun createServerSslContext(keyPem: String, certPem: String): SSLContext {
         val key = PemUtils.parsePrivateKey(keyPem)
