@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-08-13
+
+### 🐛 Bug Fixes
+
+- fix: wizard UI stops updating when opened as modal dialog (CRW-12139) by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/358
+- fix: route TLS trust probe through IDE HTTP proxy (CRW-12333) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/361
+- fix: prevent github from scanning test secrets by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/362
+
+### ⬆️ Dependency Updates
+
+- build(deps): Bump gradle-wrapper from 9.5.0 to 9.6.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/327
+- build(deps): Bump junit-jupiter from 6.0.3 to 6.1.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/326
+- build(deps): Bump com.nimbusds:oauth2-oidc-sdk from 11.15 to 11.38 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/333
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.21.3 to 2.22.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/331
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.21.3 to 2.22.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/332
+- build(deps): Bump junit-jupiter from 6.1.1 to 6.1.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/350
+- build(deps): Bump mockk from 1.14.9 to 1.14.11 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/348
+
 ## [0.0.18] - 2026-07-28
 
 ### ✨ New Features and Enhancements
@@ -313,7 +331,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.18...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.19...HEAD
+[0.0.19]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.18...0.0.19
 [0.0.18]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...0.0.18
 [0.0.17]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...0.0.17
 [0.0.16]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.15...0.0.16
