@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.devworkspace
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.asContextElement
+import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.*
 
@@ -49,30 +50,39 @@ class DevWorkspaceWatcher(
 
     private suspend fun watchLoop(latestResourceVersion: String? = null) {
         while (scope.isActive && !stopped) {
-            val watcher = createWatcher(namespace, latestResourceVersion)
-            var matches = createFilter(namespace)
-
             try {
-                for (event in watcher) {
-                    if (!scope.isActive || stopped) break
+                val watcher = createWatcher(namespace, latestResourceVersion)
+                watcher.use { watcher ->
+                    var matches = createFilter(namespace)
+                    for (event in watcher) {
+                        if (!scope.isActive || stopped) break
 
-                    val dw = DevWorkspace.from(event.`object`)
-                    if (event.type == "ADDED") {
-                        matches = createFilter(namespace)
-                    }
-                    withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
-                        if (stopped) return@withContext
-                        when (event.type) {
-                            "ADDED"    -> if(matches(dw)) listener.onAdded(dw)
-                            "MODIFIED" -> if(matches(dw)) listener.onUpdated(dw) else listener.onDeleted(dw)
-                            "DELETED"  -> listener.onDeleted(dw)
+                        val dw = DevWorkspace.from(event.`object`)
+                        if (event.type == "ADDED") {
+                            matches = createFilter(namespace)
+                        }
+                        withContext(Dispatchers.EDT + ModalityState.any().asContextElement()) {
+                            if (stopped) return@withContext
+                            when (event.type) {
+                                "ADDED"    -> if(matches(dw)) listener.onAdded(dw)
+                                "MODIFIED" -> if(matches(dw)) listener.onUpdated(dw) else listener.onDeleted(dw)
+                                "DELETED"  -> listener.onDeleted(dw)
+                            }
                         }
                     }
+                    // connection dropped or closed — reconnect
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiException) {
+                if (e.code == 403 || e.code == 404) {
+                    // don't retry, user cannot watch this namespace/resource.
+                    stopped = true
+                    return
+                }
+                // Other Kubernetes API errors — retry.
             } catch (_: Exception) {
-                // connection dropped or closed — reconnect
-            } finally {
-                watcher.close()
+                // Connection dropped or closed — reconnect.
             }
 
             @Suppress("ConvertLongToDuration")
