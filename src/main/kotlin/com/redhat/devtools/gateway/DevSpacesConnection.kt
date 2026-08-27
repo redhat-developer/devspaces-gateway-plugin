@@ -215,11 +215,10 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             val workspacePatch = DevWorkspacePatch(
                 workspace.namespace,
                 workspace.name,
-                devSpacesContext.client,
-                {
-                    DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
-                }
-            )
+                devSpacesContext.client
+            ) {
+                DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
+            }
             try {
                 if (workspacePatch.hasRestartAnnotation()) {
                     closeAllProjects()
@@ -352,7 +351,17 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 false
             )
 
-        thinClient.onClientPresenceChanged.advise(thinClient.lifetime) { connectWaitDone.set(true) }
+        // A presence change is not necessarily a successful connection. Only complete the wait when the client is actually present
+        thinClient.onClientPresenceChanged.advise(thinClient.lifetime) {
+            if (thinClient.clientPresent) {
+                connectWaitDone.set(true)
+            }
+        }
+
+        // Avoid a race if the client becomes present before the listener is registered
+        if (thinClient.clientPresent) {
+            connectWaitDone.set(true)
+        }
 
         fun notifyThinClientClosed() {
             onThinClientClosed(
@@ -372,6 +381,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         return thinClient
     }
 
+    @Suppress("UnstableApiUsage")
     private suspend fun waitForThinClientConnect(
         thinClient: ThinClientHandle,
         connectWaitDone: AtomicBoolean,
