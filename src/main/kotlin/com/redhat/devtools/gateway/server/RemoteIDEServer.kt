@@ -77,9 +77,19 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             ).trim()
 
             checkCancelled?.invoke()
-            output.takeIf { it.isNotEmpty() }?.let {
-                runCatching { Gson().fromJson(it, RemoteIDEServerStatus::class.java) }.getOrNull()
-            } ?: RemoteIDEServerStatus.empty()
+            output.takeIf { it.isNotEmpty() }
+                ?.let {
+                    runCatching { Gson().fromJson(it, RemoteIDEServerStatus::class.java) }
+                        .onFailure { e ->
+                            thisLogger().warn(
+                                "Failed to parse remote IDE server status output, " +
+                                    "treating as not ready. Output: ${it.take(500)}",
+                                e,
+                            )
+                        }
+                        .getOrNull()
+                }
+                ?: RemoteIDEServerStatus.empty()
         }
 
     /**
