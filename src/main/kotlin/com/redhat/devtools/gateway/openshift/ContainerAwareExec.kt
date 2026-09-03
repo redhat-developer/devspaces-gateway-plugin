@@ -88,7 +88,6 @@ class ContainerAwareExec(
             } catch (t: Throwable) {
                 onError?.accept(t, io)
                 future.completeExceptionally(t)
-                throw t
             }
         }
 
