@@ -56,6 +56,10 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         withContext(Dispatchers.IO) {
             checkCancelled?.invoke()
             if (!DevWorkspacePods(devSpacesContext.client).isPodRunning(pod)) {
+                thisLogger().info(
+                    "Pod '${pod.metadata?.name}' is not running; " +
+                        "returning empty status."
+                )
                 return@withContext RemoteIDEServerStatus.empty()
             }
             checkCancelled?.invoke()
@@ -162,6 +166,12 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     ): Boolean =
         @Suppress("ConvertLongToDuration")
         withTimeoutOrNull(timeout * 1000L) {
+            thisLogger().info(
+                "Waiting for IDE server on pod '${pod.metadata?.name}' " +
+                    "container '${container.name}' to ${if (isReadyState) "become ready" else "terminate"}; " +
+                    "timeout: ${timeout}s."
+            )
+            var pollCount = 0
             val refreshFailures = intArrayOf(0)
             while (true) {
                 checkCancelled?.invoke()
@@ -173,9 +183,20 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                         refreshFailures,
                     )
                 ) {
+                    thisLogger().info(
+                        "IDE server on pod '${pod.metadata?.name}' " +
+                            "${if (isReadyState) "is ready" else "terminated"} after ${pollCount * 500}ms."
+                    )
                     return@withTimeoutOrNull true
                 }
 
+                pollCount++
+                if (pollCount % 10 == 0) {
+                    thisLogger().debug(
+                        "Still waiting for IDE server on pod '${pod.metadata?.name}' " +
+                            "(${pollCount * 500}ms / ${timeout * 1000}ms)."
+                    )
+                }
                 yield()
                 delay(500L)
             }
