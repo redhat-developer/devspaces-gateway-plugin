@@ -149,7 +149,11 @@ class ClipboardTokenMonitor(
      * @return The clipboard text or null if empty or not text
      */
     private fun readClipboardText(): String? {
-        return clipboardReader.readText()
+        return try {
+            clipboardReader.readText()
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

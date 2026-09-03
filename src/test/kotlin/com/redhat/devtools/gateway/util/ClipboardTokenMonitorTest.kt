@@ -433,6 +433,51 @@ class ClipboardTokenMonitorTest {
     }
 
     @Test
+    fun `#checkNow returns null when clipboard throws exception`() {
+        runBlocking {
+            // given
+            val failingReader = object : ClipboardReader {
+                override fun readText(): String? = throw IllegalStateException("cannot open system clipboard")
+            }
+            val monitor = ClipboardTokenMonitor(clipboardReader = failingReader)
+
+            // when
+            val result = monitor.checkNow()
+
+            // then
+            assertThat(result).isNull()
+        }
+    }
+
+    @Test
+    fun `monitor skips failed clipboard reads and continues polling`() {
+        runBlocking {
+            // given
+            val callCount = mutableListOf<Int>()
+            val reader = object : ClipboardReader {
+                var shouldFail = true
+                override fun readText(): String? {
+                    callCount.add(1)
+                    if (shouldFail) throw IllegalStateException("cannot open system clipboard")
+                    return "sha256~RecoveredToken1234567890123" // notsecret
+                }
+            }
+            val monitor = ClipboardTokenMonitor(pollingIntervalMs = 50, clipboardReader = reader)
+            monitor.addListener { token -> detectedTokens.add(token) }
+
+            // when
+            monitor.start()
+            delay(100.milliseconds) // fails on first polls
+            reader.shouldFail = false
+            delay(150.milliseconds) // recovers
+
+            // then
+            assertThat(detectedTokens).contains("sha256~RecoveredToken1234567890123")
+            monitor.stop()
+        }
+    }
+
+    @Test
     fun `#stop can be called multiple times safely`() {
         // when
         monitor.stop()

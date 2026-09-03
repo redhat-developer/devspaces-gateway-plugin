@@ -32,17 +32,16 @@ interface ClipboardReader {
  */
 class SystemClipboardReader : ClipboardReader {
     override fun readText(): String? {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        val contents = clipboard.getContents(null) ?: return null
-
         return try {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            val contents = clipboard.getContents(null) ?: return null
             if (contents.isDataFlavorSupported(DataFlavor.stringFlavor)) {
                 contents.getTransferData(DataFlavor.stringFlavor) as? String
             } else {
                 null
-            }
+            }?.trim()
         } catch (_: Exception) {
             null
-        }?.trim()
+        }
     }
 }
