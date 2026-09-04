@@ -15,7 +15,6 @@ import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
-import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
@@ -45,9 +44,6 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
          * status exec cannot burn the entire wait (CRW-11119).
          */
         const val STATUS_EXEC_TIMEOUT: Long = 15 // seconds
-
-        /** Number of consecutive pod-refresh failures before emitting a warning. */
-        const val REFRESH_FAILURE_WARNING_THRESHOLD: Int = 10
     }
 
     init {
@@ -112,7 +108,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
      */
     @Throws(IOException::class)
     suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = readyTimeout): Boolean {
-        return doWaitServerState(true, timeout, checkCancelled)
+        return waitForState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
                     "Workspace IDE is not ready after $timeout seconds.",
@@ -120,113 +116,27 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             }
     }
 
-    /**
-     * Re-resolves the workspace pod and idea-server container.
-     *
-     * @return `true` when refreshed successfully, `false` on transient failures (retried).
-     * Terminal conditions (cancellation, missing idea-server container) are rethrown.
-     */
-    @Throws(CancellationException::class)
-    private fun refreshPod(refreshFailures: IntArray): Boolean {
-        return try {
-            pod = findPod()
-            container = findContainer()
-            refreshFailures[0] = 0
-            true
-        } catch (e: Exception) {
-            if (e.isCancellationException()) throw e
-            if (e is ServerContainerNotFoundException) throw e
-            refreshFailures[0]++
-            thisLogger().debug("Failed to refresh workspace pod during IDE state check", e)
-            if (refreshFailures[0] == REFRESH_FAILURE_WARNING_THRESHOLD) {
-                thisLogger().warn(
-                    "Pod/container refresh has failed ${refreshFailures[0]} consecutive times; " +
-                    "stale pod references may cause incorrect status checks"
-                )
-            }
-            false
-        }
-    }
-
-    @Throws(CancellationException::class)
-    private suspend fun isServerState(
-        isReadyState: Boolean,
-        checkCancelled: (() -> Unit)? = null,
-        refreshPodBeforeCheck: Boolean = false,
-        refreshFailures: IntArray = intArrayOf(0),
-    ): Boolean {
-        return try {
-            // Re-resolve pod while waiting for ready so a recycled pod is not missed.
-            if (refreshPodBeforeCheck && !refreshPod(refreshFailures)) {
-                return false
-            }
-            getStatus(checkCancelled).isReady == isReadyState
-        } catch (e: Exception) {
-            if (e.isCancellationException()) throw e
-            if (e is ServerContainerNotFoundException) throw e
-            thisLogger().debug("Failed to check workspace IDE state.", e)
-            false
-        }
-    }
-
     @Throws(IOException::class)
     suspend fun waitServerTerminated(timeout: Long = 10L): Boolean {
-        return doWaitServerState(false, timeout)
+        return waitForState(false, timeout)
     }
 
-    /**
-     * Waits for the server to have or not have projects according to the given parameter.
-     * Times out the wait if the expected state is not reached within specified timeout.
-     *
-     * @param isReadyState True if server up and running with the projects all set are expected, False otherwise,
-     * @return True if the expected state is achieved within the timeout, False otherwise.
-     */
-    @Throws(IOException::class, CancellationException::class)
-    private suspend fun doWaitServerState(
+    private suspend fun waitForState(
         isReadyState: Boolean,
-        timeout: Long = readyTimeout,
+        timeout: Long,
         checkCancelled: (() -> Unit)? = null
-    ): Boolean =
-        @Suppress("ConvertLongToDuration")
-        withTimeoutOrNull(timeout * 1000L) {
-            thisLogger().info(
-                "Waiting for IDE server on pod '${pod.metadata?.name}' " +
-                    "container '${container.name}' to ${if (isReadyState) "become ready" else "terminate"}; " +
-                    "timeout: ${timeout}s."
-            )
-            var pollCount = 0
-            val refreshFailures = intArrayOf(0)
-            while (true) {
-                checkCancelled?.invoke()
-                if (isServerState(
-                        isReadyState,
-                        checkCancelled,
-                        // Re-resolve pod while waiting for ready so a recycled pod is not missed.
-                        refreshPodBeforeCheck = isReadyState,
-                        refreshFailures,
-                    )
-                ) {
-                    thisLogger().info(
-                        "IDE server on pod '${pod.metadata?.name}' " +
-                            "${if (isReadyState) "is ready" else "terminated"} after ${pollCount * 500}ms."
-                    )
-                    return@withTimeoutOrNull true
-                }
-
-                pollCount++
-                if (pollCount % 10 == 0) {
-                    thisLogger().debug(
-                        "Still waiting for IDE server on pod '${pod.metadata?.name}' " +
-                            "(${pollCount * 500}ms / ${timeout * 1000}ms)."
-                    )
-                }
-                yield()
-                delay(500L)
-            }
-
-            @Suppress("UNREACHABLE_CODE")
-            false
-        } ?: false
+    ): Boolean {
+        return RemoteIDEServerReadiness(
+            targetDescription = {
+                "IDE server on pod '${pod.metadata?.name}' container '${container.name}'"
+            },
+            isReady = { cancelled -> getStatus(cancelled).isReady },
+            refresh = {
+                pod = findPod()
+                container = findContainer()
+            },
+        ).waitFor(isReadyState, timeout, checkCancelled)
+    }
 
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
