@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.server
 
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.util.ExponentialBackoff
 import com.redhat.devtools.gateway.util.isCancellationException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -20,7 +21,8 @@ import kotlinx.coroutines.yield
 import java.io.IOException
 
 /**
- * Polls a state check until the expected state is reached or the given timeout elapses.
+ * Polls a state check with exponential backoff until the expected state is reached
+ * or the given timeout elapses.
  *
  * @param targetDescription Human-readable description of the waited target, used in log messages.
  * @param isReady Returns whether the server is currently ready. Non-terminal exceptions are
@@ -29,11 +31,15 @@ import java.io.IOException
  * @param refresh Target re-resolution before each readiness probe (only used when waiting
  * for ready). Failures are retried with a warning after [REFRESH_FAILURE_WARNING_THRESHOLD]
  * consecutive failures. Terminal exceptions are rethrown.
+ * @param backoff Delay sequence between probes. A successful refresh must NOT reset it:
+ * while the target is still not ready the delays keep growing (500ms, 1s, 2s, ... capped)
+ * instead of polling at a constant rate.
  */
 class RemoteIDEServerReadiness(
     private val targetDescription: () -> String,
     private val isReady: suspend (checkCancelled: (() -> Unit)?) -> Boolean,
     private val refresh: (() -> Unit)? = null,
+    private val backoff: ExponentialBackoff = ExponentialBackoff(),
 ) {
     /**
      * Waits until [isReady] reports the expected state.
@@ -77,7 +83,7 @@ class RemoteIDEServerReadiness(
                 pollCount++
                 logStillWaiting(pollCount, elapsedMillis, timeout)
                 yield()
-                val delayMillis = PROBE_DELAY_MILLIS
+                val delayMillis = backoff.nextDelayMillis()
                 elapsedMillis += delayMillis
                 delay(delayMillis)
             }
@@ -134,7 +140,6 @@ class RemoteIDEServerReadiness(
     companion object {
         private const val MILLISECONDS_PER_SECOND = 1000L
         private const val STILL_WAITING_LOG_INTERVAL = 10
-        private const val PROBE_DELAY_MILLIS = 500L
 
         /** Number of consecutive refresh failures before emitting a warning. */
         private const val REFRESH_FAILURE_WARNING_THRESHOLD = 10
