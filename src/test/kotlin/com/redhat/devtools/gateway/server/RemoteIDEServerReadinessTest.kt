@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.server
 
+import com.redhat.devtools.gateway.util.ExponentialBackoff
 import io.mockk.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -163,7 +164,7 @@ class RemoteIDEServerReadinessTest {
     }
 
     @Test
-    fun `#waitFor keeps constant polling rate while not ready despite successful refresh`() = runBlocking {
+    fun `#waitFor keeps growing backoff while not ready despite successful refresh`() = runBlocking {
         val probeTimes = mutableListOf<Long>()
         val isReady = mockk<suspend ((() -> Unit)?) -> Boolean>()
         coEvery { isReady(any()) } answers {
@@ -173,21 +174,24 @@ class RemoteIDEServerReadinessTest {
         val refresh = mockk<() -> Unit>()
         every { refresh() } returns Unit
 
+        val backoff = ExponentialBackoff()
+
         val readiness = RemoteIDEServerReadiness(
             targetDescription = { "test" },
             isReady = isReady,
             refresh = refresh,
+            backoff = backoff,
         )
 
         val result = readiness.waitFor(isReadyState = true, timeout = 3)
         assertThat(result).isFalse
 
-        assertThat(probeTimes).hasSize(6)
+        assertThat(probeTimes).hasSize(3)
         val gaps = probeTimes.zipWithNext { a, b -> (b - a) / 1_000_000 }
-        // constant 500ms polling rate
-        gaps.forEach { gap ->
-            assertThat(gap).isBetween(400L, 900L)
-        }
+        // refresh success must NOT reset the backoff: 500ms then 1000ms,
+        // not a constant 500ms polling rate
+        assertThat(gaps[0]).isBetween(400L, 900L)
+        assertThat(gaps[1]).isBetween(800L, 1900L)
         Unit
     }
 
@@ -212,10 +216,10 @@ class RemoteIDEServerReadinessTest {
             refresh = refresh,
         )
 
-        val result = readiness.waitFor(isReadyState = true, timeout = 3)
+        val result = readiness.waitFor(isReadyState = true, timeout = 20)
         assertThat(result).isTrue
         // 2 fail + 1 success + 2 fail + 1 success, then isReady exits.
-        // timeout must cover the polling delays (0.5s x 5 = 2.5s).
+        // timeout must cover the growing backoff delays (0.5+1+2+4+5 = 12.5s).
         assertThat(refreshCalls).isEqualTo(6)
         Unit
     }
