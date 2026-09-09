@@ -36,6 +36,27 @@ data class WorkspaceEditorInfo(
     val tooltip: String,
 )
 
+internal data class NamespaceWatchDecision(
+    val namespace: String,
+    val resourceVersion: String,
+    val jetbrainsWorkspaceCount: Int,
+)
+
+fun WorkspaceEditorKind.isJetBrainsFamily(): Boolean = when (this) {
+    WorkspaceEditorKind.INTELLIJ_IDEA,
+    WorkspaceEditorKind.PYCHARM,
+    WorkspaceEditorKind.CLION,
+    WorkspaceEditorKind.GOLAND,
+    WorkspaceEditorKind.PHPSTORM,
+    WorkspaceEditorKind.RIDER,
+    WorkspaceEditorKind.RUBYMINE,
+    WorkspaceEditorKind.WEBSTORM,
+    WorkspaceEditorKind.HERDR,
+    WorkspaceEditorKind.KIRO,
+    WorkspaceEditorKind.JETBRAINS -> true
+    else -> false
+}
+
 private val CHE_EDITOR_ID_REGEX = Regex("che-.*-server", RegexOption.IGNORE_CASE)
 
 object WorkspaceEditorInfoProvider {
@@ -44,63 +65,131 @@ object WorkspaceEditorInfoProvider {
         devWorkspace: DevWorkspace,
         templateMap: Map<String, List<DevWorkspaceTemplate>>
     ): WorkspaceEditorInfo {
-        val cheEditor = Utils.getValue(devWorkspace.annotations, arrayOf("che.eclipse.org/che-editor")) as? String
-        if (!cheEditor.isNullOrBlank()) {
-            return createFromAnnotation(cheEditor)
+        val editorTemplateAnnotation = Utils.getValue(
+            devWorkspace.annotations,
+            arrayOf("che.eclipse.org/che-editor-template")) as? String
+        if (!editorTemplateAnnotation.isNullOrBlank()) {
+            createFromEditorTemplateAnnotation(editorTemplateAnnotation, devWorkspace, templateMap)?.let { return it }
         }
-        if (isJetBrainsEditor(devWorkspace, templateMap)) {
+        val editorAnnotation = Utils.getValue(
+            devWorkspace.annotations,
+            arrayOf("che.eclipse.org/che-editor")) as? String
+        if (!editorAnnotation.isNullOrBlank()) {
+            createFromEditorAnnotation(editorAnnotation).let { return it }
+        }
+        if (editorTemplateAnnotation.isNullOrBlank() && isJetBrainsEditor(devWorkspace, templateMap)) {
             return WorkspaceEditorInfo(WorkspaceEditorKind.JETBRAINS, "JetBrains")
         }
         return WorkspaceEditorInfo(WorkspaceEditorKind.UNKNOWN, "Unknown Editor")
     }
 
-    fun isJetBrainsEditor(
+    fun isJetBrainsWorkspace(
         devWorkspace: DevWorkspace,
         templateMap: Map<String, List<DevWorkspaceTemplate>>
     ): Boolean {
-        // DevWorkspace Template check
-        val templates = templateMap[devWorkspace.uid] ?: return false
+        return create(devWorkspace, templateMap).kind.isJetBrainsFamily()
+    }
+
+    internal fun namespaceWatchResourceVersion(
+        namespace: String,
+        items: List<DevWorkspaceListItem>,
+        templates: Map<String, List<DevWorkspaceTemplate>>,
+        resourceVersion: String?
+    ): NamespaceWatchDecision? {
+        val jetbrainsCount = items.count { isJetBrainsWorkspace(it.workspace, templates) }
+        return if (jetbrainsCount > 0 && resourceVersion != null)
+            NamespaceWatchDecision(namespace, resourceVersion, jetbrainsCount)
+        else null
+    }
+
+    internal fun isJetBrainsEditor(
+        devWorkspace: DevWorkspace,
+        templateMap: Map<String, List<DevWorkspaceTemplate>>
+    ): Boolean {
+        val templates = templateMap[devWorkspace.uid]
+            ?: return false
         return templates.any { template ->
-            @Suppress("UNCHECKED_CAST")
-            val components = template.components as? List<Any> ?: return@any false
-            components.any { component: Any ->
-                val map = component as? Map<*, *> ?: return@any false
-                val volume = map["volume"] as? Map<*, *>
-                // Check 'volume.name' first (v1alpha1), fallback to top-level 'name' (v1alpha2)
-                val name = volume?.get("name") as? String ?: map["name"] as? String
-                name.equals("idea-server", ignoreCase = true)
-            }
+            hasIdeaServerComponent(template)
         }
     }
 
-    private fun createFromAnnotation(cheEditor: String): WorkspaceEditorInfo {
-        val editorName = extractEditorName(cheEditor)
+    private fun hasIdeaServerComponent(template: DevWorkspaceTemplate): Boolean {
+        @Suppress("UNCHECKED_CAST")
+        val components = template.components as? List<Any>
+            ?: return false
+        return components.any { component: Any ->
+            val map = component as? Map<*, *>
+                ?: return@any false
+            val volume = map["volume"] as? Map<*, *>
+            // Check 'volume.name' first (v1alpha1)
+            val name = volume?.get("name") as? String
+            // fallback to top-level 'name' (v1alpha2)
+                ?: map["name"] as? String
+            name.equals("idea-server", ignoreCase = true)
+        }
+    }
+
+    /**
+     * Resolves the editor from the workspace's editor template annotation.
+     *
+     * Only JetBrains editors are resolved here, via an `idea-server` component check on the
+     * annotated template. Returns `null` when the template is not found or lacks `idea-server`,
+     * in which case the caller falls through to the `che-editor` annotation only; the
+     * `isJetBrainsEditor` template scan is skipped, so unrelated templates carrying an
+     * `idea-server` component cannot override the annotated template choice.
+     * This is intentionally scoped to the JetBrains namespace-watch use case.
+     *
+     * @param editorTemplateAnnotation the value of the editor template annotation
+     * @param devWorkspace the workspace owning the annotation
+     * @param templateMap map of owner UID to templates for the workspace
+     * @return a JetBrains [WorkspaceEditorInfo], or `null` so the caller falls through
+     */
+    private fun createFromEditorTemplateAnnotation(
+        editorTemplateAnnotation: String,
+        devWorkspace: DevWorkspace,
+        templateMap: Map<String, List<DevWorkspaceTemplate>>
+    ): WorkspaceEditorInfo? {
+        val annotatedTemplate = templateMap[devWorkspace.uid]?.firstOrNull {
+            it.name.equals(editorTemplateAnnotation, ignoreCase = true)
+        }
+        if (annotatedTemplate != null
+            && hasIdeaServerComponent(annotatedTemplate)) {
+            return WorkspaceEditorInfo(WorkspaceEditorKind.JETBRAINS, "JetBrains")
+        }
+        return null
+    }
+
+    private fun createFromEditorAnnotation(cheEditor: String): WorkspaceEditorInfo {
+        val cheEditorSegments = cheEditor.split("/")
+        val editorName = extractEditorName(cheEditorSegments)
         if (editorName != null) {
             createFromEditorName(editorName)?.let { return it }
         }
-        if (cheEditor.split("/").any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+        if (cheEditorSegments.any { CHE_EDITOR_ID_REGEX.matches(it) }) {
             return WorkspaceEditorInfo(WorkspaceEditorKind.JETBRAINS, "JetBrains")
         }
-        val fallbackSegment = cheEditor.split("/").lastOrNull { it.isNotBlank() }
+        val fallbackSegment = cheEditorSegments.lastOrNull { it.isNotBlank() }
         return WorkspaceEditorInfo(WorkspaceEditorKind.UNKNOWN, fallbackSegment ?: "Unknown Editor")
     }
 
-    private fun extractEditorName(cheEditor: String): String? {
-        val parts = cheEditor.split("/").filter { it.isNotBlank() }
+    private fun extractEditorName(cheEditorSegments: List<String>): String? {
+        val parts = cheEditorSegments.filter { it.isNotBlank() }
         if (parts.size >= 3) {
             return parts[1]
         }
-        return parts.firstOrNull { CHE_EDITOR_ID_REGEX.matches(it) || it.startsWith("che-", ignoreCase = true) }
+        return parts.firstOrNull {
+            CHE_EDITOR_ID_REGEX.matches(it)
+                || it.startsWith("che-", ignoreCase = true)
+        }
     }
 
     private fun createFromEditorName(editorName: String): WorkspaceEditorInfo? {
         val lowercase = editorName.lowercase()
         return when {
-            lowercase.contains("che-code") -> WorkspaceEditorInfo(WorkspaceEditorKind.VSCODE, "VS Code - Open Source")
-            lowercase.contains("che-idea") -> WorkspaceEditorInfo(
-                WorkspaceEditorKind.INTELLIJ_IDEA,
-                "IntelliJ IDEA Ultimate (desktop)"
-            )
+            lowercase.contains("che-code") ->
+                WorkspaceEditorInfo(WorkspaceEditorKind.VSCODE, "VS Code - Open Source")
+            lowercase.contains("che-idea") ->
+                WorkspaceEditorInfo(WorkspaceEditorKind.INTELLIJ_IDEA, "IntelliJ IDEA Ultimate (desktop)")
             lowercase.contains("che-pycharm") ->
                 WorkspaceEditorInfo(WorkspaceEditorKind.PYCHARM, "PyCharm")
             lowercase.contains("che-clion") ->

@@ -204,13 +204,207 @@ class WorkspaceEditorInfoProviderTest {
         assertThat(info.tooltip).isEqualTo("partial")
     }
 
-    private fun createDevWorkspaceWithEditor(cheEditor: String): DevWorkspace {
+    @Test
+    fun `#isJetBrainsWorkspace returns true for che-idea annotation`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea-server/latest")
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false for che-code annotation`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())).isFalse()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns true for template with idea-server volume`() {
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "uid1" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("uid1")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false for che-code annotation with idea-server template`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isFalse()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns true for che-editor-template annotation with idea-server template`() {
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf("che.eclipse.org/che-editor-template" to "jetbrains-template"),
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isTrue()
+    }
+
+    @Test
+    fun `#create resolves che-editor-template annotation over che-editor annotation`() {
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf(
+                    "che.eclipse.org/che-editor-template" to "jetbrains-template",
+                    "che.eclipse.org/che-editor" to "eclipse/che-code/latest"
+                ),
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false when templates unavailable (empty map)`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())).isFalse()
+    }
+
+    @Test
+    fun `#create finds che editor id in first segment for 2-part path`() {
+        val dw = createDevWorkspaceWithEditor("che-idea-server/latest")
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
+        assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
+    }
+
+    @Test
+    fun `#create matches che-* prefix for 2-part path without -server suffix`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea")
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
+        assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
+    }
+
+    @Test
+    fun `#create template annotation present but template missing does not fall back to idea-server scan`() {
+        val dw = createDevWorkspaceWithEditor(
+            "eclipse/che-code/latest",
+            mapOf("che.eclipse.org/che-editor-template" to "missing-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+    }
+
+    @Test
+    fun `#create template annotation found without idea-server defers to che editor`() {
+        val dw = createDevWorkspaceWithEditor(
+            "eclipse/che-code/latest",
+            mapOf("che.eclipse.org/che-editor-template" to "my-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "my-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "vscode-server"))))
+                ),
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+    }
+
+    @Test
+    fun `#create template annotation without che editor does not classify as JetBrains via scan`() {
+        val dw = createDevWorkspaceWithoutEditor(
+            mapOf("che.eclipse.org/che-editor-template" to "missing-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        assertThat(info.kind.isJetBrainsFamily()).isFalse()
+    }
+
+    private fun createDevWorkspaceWithoutEditor(annotations: Map<String, String>): DevWorkspace {
         return DevWorkspace(
             DevWorkspaceObjectMeta(
                 name = "test-workspace",
                 namespace = "test-namespace",
                 uid = "test-uid",
-                annotations = mapOf("che.eclipse.org/che-editor" to cheEditor),
+                annotations = annotations,
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+    }
+
+    private fun createDevWorkspaceWithEditor(
+        cheEditor: String,
+        additionalAnnotations: Map<String, String> = emptyMap()
+    ): DevWorkspace {
+        return DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf("che.eclipse.org/che-editor" to cheEditor) + additionalAnnotations,
                 labels = emptyMap()
             ),
             DevWorkspaceSpec(started = true),
