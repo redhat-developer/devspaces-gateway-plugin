@@ -60,7 +60,8 @@ class RemoteIDEServerReadiness(
             logWaitingForState(isReadyState, timeout)
             val refreshFailures = intArrayOf(0)
             var pollCount = 0
-            var elapsedMillis = 0L
+            val startNanos = System.nanoTime()
+            val elapsedMillis = { (System.nanoTime() - startNanos) / 1_000_000L }
             while (true) {
                 checkCancelled?.invoke()
                 // On a transient refresh failure the probe is skipped for this
@@ -75,16 +76,15 @@ class RemoteIDEServerReadiness(
                         false
                     }
                     if (stateReached) {
-                        logStateReached(isReadyState, elapsedMillis)
+                        logStateReached(isReadyState, elapsedMillis())
                         return@withTimeoutOrNull true
                     }
                 }
 
                 pollCount++
-                logStillWaiting(pollCount, elapsedMillis, timeout)
+                logStillWaiting(pollCount, elapsedMillis(), timeout)
                 yield()
                 val delayMillis = backoff.nextDelayMillis()
-                elapsedMillis += delayMillis
                 delay(delayMillis)
             }
 

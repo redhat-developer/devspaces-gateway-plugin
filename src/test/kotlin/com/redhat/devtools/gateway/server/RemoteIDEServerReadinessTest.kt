@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.server
 import com.redhat.devtools.gateway.util.ExponentialBackoff
 import io.mockk.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -301,6 +302,29 @@ class RemoteIDEServerReadinessTest {
         assertThat(result).isTrue
         assertThat(refreshCalls).isGreaterThanOrEqualTo(3)
         coVerify(atLeast = 1) { isReady(any()) }
+        Unit
+    }
+
+    @Test
+    fun `#waitFor elapsed time includes probe duration not just backoff delays`() = runBlocking {
+        val isReady = mockk<suspend ((() -> Unit)?) -> Boolean>()
+        coEvery { isReady(any()) } coAnswers {
+            delay(200)
+            true
+        }
+
+        val readiness = RemoteIDEServerReadiness(
+            targetDescription = { "test" },
+            isReady = isReady,
+            backoff = ExponentialBackoff(initialMillis = 100),
+        )
+
+        val start = System.currentTimeMillis()
+        val result = readiness.waitFor(isReadyState = true, timeout = 5)
+        val elapsed = System.currentTimeMillis() - start
+
+        assertThat(result).isTrue
+        assertThat(elapsed).isGreaterThanOrEqualTo(180L)
         Unit
     }
 }
