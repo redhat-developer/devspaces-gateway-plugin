@@ -99,7 +99,7 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         }
 
                         runBlocking {
-                            withTimeoutOrNull(60_000L) { ready.await() } ?: run {
+                            withTimeoutOrNull(DevSpacesConnection.CONNECT_TIMEOUT) { ready.await() } ?: run {
                                 if (ready.isActive) {
                                     indicator.text = "Workspace IDE did not report readiness in time."
                                     ready.completeExceptionally(
