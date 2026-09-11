@@ -315,7 +315,8 @@ class DevWorkspaces(private val client: ApiClient) {
         )
     }
 
-/** Returns `true` if the given exception is ignorable when listing templates.
+    /**
+     * Returns `true` if the given exception is ignorable when listing templates.
      * Returns `false` otherwise.
      * Template list failures with 401, 403, or 404 are silently degraded to an empty
      * map with [Templates.unavailable] set to true.

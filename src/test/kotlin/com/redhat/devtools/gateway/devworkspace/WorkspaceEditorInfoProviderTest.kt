@@ -18,6 +18,7 @@ class WorkspaceEditorInfoProviderTest {
 
     @Test
     fun `#isJetBrainsEditor returns true for template with idea-server volume`() {
+        // given
         val dw = DevWorkspace(
             DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
             DevWorkspaceSpec(started = true),
@@ -31,11 +32,15 @@ class WorkspaceEditorInfoProviderTest {
                 )
             )
         )
-        assertThat(WorkspaceEditorInfoProvider.isJetBrainsEditor(dw, templateMap)).isTrue()
+        // when
+        val isJetBrainsEditor = WorkspaceEditorInfoProvider.isJetBrainsEditor(dw, templateMap)
+        // then
+        assertThat(isJetBrainsEditor).isTrue()
     }
 
     @Test
     fun `#isJetBrainsEditor returns false for template without idea-server volume`() {
+        // given
         val dw = DevWorkspace(
             DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
             DevWorkspaceSpec(started = true),
@@ -49,11 +54,15 @@ class WorkspaceEditorInfoProviderTest {
                 )
             )
         )
-        assertThat(WorkspaceEditorInfoProvider.isJetBrainsEditor(dw, templateMap)).isFalse()
+        // when
+        val isJetBrainsEditor = WorkspaceEditorInfoProvider.isJetBrainsEditor(dw, templateMap)
+        // then
+        assertThat(isJetBrainsEditor).isFalse()
     }
 
     @Test
     fun `#create resolves template-based JetBrains editor to JETBRAINS`() {
+        // when
         val dw = DevWorkspace(
             DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
             DevWorkspaceSpec(started = true),
@@ -67,150 +76,424 @@ class WorkspaceEditorInfoProviderTest {
                 )
             )
         )
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
         assertThat(info.tooltip).isEqualTo("JetBrains")
     }
 
     @Test
     fun `#create maps webstorm editor to WEBSTORM`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-webstorm-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.WEBSTORM)
         assertThat(info.tooltip).isEqualTo("JetBrains WebStorm (desktop)")
     }
 
     @Test
     fun `#create maps pycharm editor to PYCHARM`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-pycharm-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.PYCHARM)
         assertThat(info.tooltip).isEqualTo("PyCharm")
     }
 
     @Test
     fun `#create maps unknown che-server editor to JETBRAINS`() {
+        // given
         val dw = createDevWorkspaceWithEditor("che-foo-server")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
         assertThat(info.tooltip).isEqualTo("JetBrains")
     }
 
     @Test
     fun `#create maps vscode editor to VSCODE`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
         assertThat(info.tooltip).isEqualTo("VS Code - Open Source")
     }
 
     @Test
     fun `#create maps intellij editor to INTELLIJ_IDEA`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-idea-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
         assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
     }
 
     @Test
     fun `#create maps clion editor to CLION`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-clion-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.CLION)
         assertThat(info.tooltip).isEqualTo("JetBrains CLion (desktop)")
     }
 
     @Test
     fun `#create maps goland editor to GOLAND`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-goland-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.GOLAND)
         assertThat(info.tooltip).isEqualTo("JetBrains GoLand (desktop)")
     }
 
     @Test
     fun `#create maps phpstorm editor to PHPSTORM`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-phpstorm-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.PHPSTORM)
         assertThat(info.tooltip).isEqualTo("JetBrains PhpStorm (desktop)")
     }
 
     @Test
     fun `#create maps rider editor to RIDER`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-rider-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.RIDER)
         assertThat(info.tooltip).isEqualTo("JetBrains Rider (desktop)")
     }
 
     @Test
     fun `#create maps rubymine editor to RUBYMINE`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-rubymine-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.RUBYMINE)
         assertThat(info.tooltip).isEqualTo("JetBrains RubyMine (desktop)")
     }
 
     @Test
     fun `#create maps chemuxer editor to CHEMUXER`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-chemuxer-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.CHEMUXER)
         assertThat(info.tooltip).isEqualTo("Chemuxer")
     }
 
     @Test
     fun `#create maps herdr editor to HERDR`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-herdr-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.HERDR)
         assertThat(info.tooltip).isEqualTo("Herdr")
     }
 
     @Test
     fun `#create maps kiro editor to KIRO`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-kiro-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.KIRO)
         assertThat(info.tooltip).isEqualTo("Kiro (desktop)")
     }
 
     @Test
     fun `#create maps web terminal editor to WEB_TERMINAL`() {
+        // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-web-terminal-server/latest")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.WEB_TERMINAL)
         assertThat(info.tooltip).isEqualTo("Web Terminal")
     }
 
     @Test
     fun `#create returns UNKNOWN for empty annotation`() {
+        // given
         val dw = DevWorkspace(
             DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
             DevWorkspaceSpec(started = true),
             DevWorkspaceStatus(phase = "Running")
         )
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.UNKNOWN)
         assertThat(info.tooltip).isEqualTo("Unknown Editor")
     }
 
     @Test
     fun `#create returns UNKNOWN with fallback segment for partial path`() {
+        // given
         val dw = createDevWorkspaceWithEditor("some/partial")
+        // when
         val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
         assertThat(info.kind).isEqualTo(WorkspaceEditorKind.UNKNOWN)
         assertThat(info.tooltip).isEqualTo("partial")
     }
 
-    private fun createDevWorkspaceWithEditor(cheEditor: String): DevWorkspace {
+    @Test
+    fun `#isJetBrainsWorkspace returns true for che-idea annotation`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea-server/latest")
+        // when
+        val isJetBrainsWorkspace = WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())
+        // then
+        assertThat(isJetBrainsWorkspace).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false for che-code annotation`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        // when
+        val isJetBrainsWorkspace = WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())
+        // then
+        assertThat(isJetBrainsWorkspace).isFalse()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns true for template with idea-server volume`() {
+        // given
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(name = "test", namespace = "ns", uid = "uid1", emptyMap(), emptyMap()),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "uid1" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("uid1")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when
+        val isJetBrainsWorkspace = WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)
+        // then
+        assertThat(isJetBrainsWorkspace).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false for che-code annotation with idea-server template`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when, then
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isFalse()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns true for che-editor-template annotation with idea-server template`() {
+        // given
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf("che.eclipse.org/che-editor-template" to "jetbrains-template"),
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when, then
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isTrue()
+    }
+
+    @Test
+    fun `#create resolves che-editor-template annotation over che-editor annotation`() {
+        // given
+        val dw = DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf(
+                    "che.eclipse.org/che-editor-template" to "jetbrains-template",
+                    "che.eclipse.org/che-editor" to "eclipse/che-code/latest"
+                ),
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when, then
+        assertThat(WorkspaceEditorInfoProvider.create(dw, templateMap).kind).isEqualTo(WorkspaceEditorKind.JETBRAINS)
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)).isTrue()
+    }
+
+    @Test
+    fun `#isJetBrainsWorkspace returns false when templates unavailable (empty map)`() {
+        val dw = createDevWorkspaceWithEditor("eclipse/che-code/latest")
+        assertThat(WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, emptyMap())).isFalse()
+    }
+
+    @Test
+    fun `#create finds che editor id in first segment for 2-part path`() {
+        val dw = createDevWorkspaceWithEditor("che-idea-server/latest")
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
+        assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
+    }
+
+    @Test
+    fun `#create matches che-* prefix for 2-part path without -server suffix`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("eclipse/che-idea")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
+        assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
+    }
+
+    @Test
+    fun `#create template annotation present but template missing does not fall back to idea-server scan`() {
+        // given
+        val dw = createDevWorkspaceWithEditor(
+            "eclipse/che-code/latest",
+            mapOf("che.eclipse.org/che-editor-template" to "missing-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+    }
+
+    @Test
+    fun `#create template annotation found without idea-server defers to che editor`() {
+        // given
+        val dw = createDevWorkspaceWithEditor(
+            "eclipse/che-code/latest",
+            mapOf("che.eclipse.org/che-editor-template" to "my-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "my-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "vscode-server"))))
+                ),
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+    }
+
+    @Test
+    fun `#create template annotation without che editor does not classify as JetBrains via scan`() {
+        // given
+        val dw = createDevWorkspaceWithoutEditor(
+            mapOf("che.eclipse.org/che-editor-template" to "missing-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
+                )
+            )
+        )
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.UNKNOWN)
+    }
+
+    private fun createDevWorkspaceWithoutEditor(annotations: Map<String, String>): DevWorkspace {
         return DevWorkspace(
             DevWorkspaceObjectMeta(
                 name = "test-workspace",
                 namespace = "test-namespace",
                 uid = "test-uid",
-                annotations = mapOf("che.eclipse.org/che-editor" to cheEditor),
+                annotations = annotations,
+                labels = emptyMap()
+            ),
+            DevWorkspaceSpec(started = true),
+            DevWorkspaceStatus(phase = "Running")
+        )
+    }
+
+    private fun createDevWorkspaceWithEditor(
+        cheEditor: String,
+        additionalAnnotations: Map<String, String> = emptyMap()
+    ): DevWorkspace {
+        return DevWorkspace(
+            DevWorkspaceObjectMeta(
+                name = "test-workspace",
+                namespace = "test-namespace",
+                uid = "test-uid",
+                annotations = mapOf("che.eclipse.org/che-editor" to cheEditor) + additionalAnnotations,
                 labels = emptyMap()
             ),
             DevWorkspaceSpec(started = true),

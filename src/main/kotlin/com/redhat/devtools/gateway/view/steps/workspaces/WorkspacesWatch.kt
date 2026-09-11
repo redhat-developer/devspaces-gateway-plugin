@@ -17,6 +17,7 @@ import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListItem
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceTemplate
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceWatchManager
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
+import com.redhat.devtools.gateway.devworkspace.WorkspaceEditorInfoProvider
 import com.redhat.devtools.gateway.devworkspace.WorkspaceEditorResolver
 import io.kubernetes.client.openapi.ApiClient
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +37,7 @@ internal class WorkspacesWatch(
     }
 ) {
     private val devWorkspaces = DevWorkspaces(client)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val editorResolver = WorkspaceEditorResolver(
         devWorkspaces = devWorkspaces,
@@ -55,13 +56,17 @@ internal class WorkspacesWatch(
     )
 
     private val watchManager = DevWorkspaceWatchManager(
-        createWatcher = { ns, latestResourceVersion ->
+        createWatch = { ns, latestResourceVersion ->
             devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
         },
-        createFilter = { _ ->
-            { true }
+        createFilter = { namespace ->
+            { dw ->
+                val templateMap = editorResolver.templateMapsByNamespace[namespace] ?: emptyMap()
+                WorkspaceEditorInfoProvider.isJetBrainsWorkspace(dw, templateMap)
+            }
         },
-        listener = DevWorkspaceTableUpdater(workspacesTableModel, editorResolver)
+        listener = DevWorkspaceTableUpdater(workspacesTableModel, editorResolver),
+        scope = scope
     )
 
     fun seedTemplateCache(
