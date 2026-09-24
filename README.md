@@ -66,6 +66,14 @@ sudo lsof -i -P | grep LISTEN | grep 5990
 2. The Gateway application and the Dev Spaces plugin logs are stored in
 `/Users/<USER_NAME>/Library/Logs/JetBrains/JetBrainsGateway<VERSION>/idea.log`
 
+3. Port-forward transport (Java WebSocket):
+   - On connect, logs should include:
+     `Starting port forward on local port … (transport=java-websocket, copyBuffer=65536, dispatcher=devspaces-port-forward)`
+   - If the UI feels sluggish or you see “IntelliJ IDEA has encountered a slowdown”, collect:
+     - Gateway/IDEA logs (`…/Library/Logs/JetBrains/JetBrainsGateway*/idea.log` or IDEA equivalent)
+     - Any `PerformanceWatcherImpl` / `Dispatchers.IO` / thread-dump lines
+     - Whether the banner appears during idle editing vs only while `Analyzing...`
+
 
 ## Release
 - Find a draft release on the [Releases](https://github.com/redhat-developer/devspaces-gateway-plugin/releases) page. The draft is created and updated automatically on each push to the `main` branch.
