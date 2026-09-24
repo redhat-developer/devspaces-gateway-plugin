@@ -158,7 +158,7 @@ class DevWorkspaces(private val client: ApiClient) {
         }
     }
 
-@Throws(ApiException::class)
+    @Throws(ApiException::class)
     fun start(namespace: String, name: String) {
         DevWorkspacePatch(namespace, name, client) {
             get(namespace, name)

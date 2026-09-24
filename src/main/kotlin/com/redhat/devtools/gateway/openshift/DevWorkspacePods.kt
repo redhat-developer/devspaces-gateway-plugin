@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -30,6 +30,7 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
         const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
+        private const val COPY_BUFFER_SIZE = 64 * 1024
         private const val CONNECT_ATTEMPTS = 5
         private const val RECONNECT_DELAY: Long = 1000
     }
@@ -73,8 +74,8 @@ class DevWorkspacePods(private val client: ApiClient) {
     fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
         val scope = CoroutineScope(
-            // dont cancel if child coroutine fails + use blocking I/O scope
-            SupervisorJob() + Dispatchers.IO
+            // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
+            SupervisorJob() + PortForwardDispatcher.dispatcher
         )
         scope.acceptConnections(serverSocket, pod, localPort, remotePort)
         return Closeable {
@@ -90,10 +91,14 @@ class DevWorkspacePods(private val client: ApiClient) {
         remotePort: Int
     ) {
         launch {
-            logger.info("Starting port forward on local port $localPort...")
+            logger.info(
+                "Starting port forward on local port $localPort " +
+                    "(transport=java-websocket, copyBuffer=$COPY_BUFFER_SIZE, dispatcher=devspaces-port-forward)"
+            )
 
             while (isActive) {
                 val clientSocket = createClientSocket(serverSocket) ?: break
+                applyClientSocketOptions(clientSocket)
 
                 launch {
                     handleConnection(
@@ -170,7 +175,7 @@ class DevWorkspacePods(private val client: ApiClient) {
             ensureActive()
             launch {
                 try {
-                    clientSocket.getInputStream().copyToAndFlush(forwardResult.getOutboundStream(remotePort))
+                    clientSocket.getInputStream().copyToWebSocketOutbound(forwardResult.getOutboundStream(remotePort))
                 } catch (e: Exception) {
                     closeStreams(remotePort, forwardResult)
                     throw e
@@ -178,7 +183,7 @@ class DevWorkspacePods(private val client: ApiClient) {
             }
             launch {
                 try {
-                    forwardResult.getInputStream(remotePort).copyToAndFlush(clientSocket.getOutputStream())
+                    forwardResult.getInputStream(remotePort).copyToLocalSocket(clientSocket.getOutputStream())
                 } catch (e: Exception) {
                     closeStreams(remotePort, forwardResult)
                     throw e
@@ -197,14 +202,29 @@ class DevWorkspacePods(private val client: ApiClient) {
           .onFailure { logger.debug("Could not get outbound stream for port $port while closing port-forward", it) }
     }
 
-    private fun InputStream.copyToAndFlush(destination: OutputStream) {
-        try {
-            copyTo(destination)
-            destination.flush()
-        } catch (e: IOException) {
-            logger.info("IOException during stream copy.", e)
-            throw e
+    private fun applyClientSocketOptions(socket: Socket) {
+        socket.tcpNoDelay = true
+    }
+
+    private fun InputStream.copyToLocalSocket(destination: OutputStream) {
+        val buffer = ByteArray(COPY_BUFFER_SIZE)
+        while (true) {
+            val n = read(buffer)
+            if (n < 0) break
+            destination.write(buffer, 0, n)
+            destination.flush() // local socket ONLY
         }
+    }
+
+    private fun InputStream.copyToWebSocketOutbound(destination: OutputStream) {
+        val buffer = ByteArray(COPY_BUFFER_SIZE)
+        while (true) {
+            val n = read(buffer)
+            if (n < 0) break
+            destination.write(buffer, 0, n)
+            // do NOT flush per chunk — client-java 24 WebSocketOutputStream.flush() sleeps 100ms
+        }
+        runCatching { destination.flush() }
     }
 
     @Throws(IOException::class)
