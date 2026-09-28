@@ -19,8 +19,9 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Resolves [WorkspaceEditorInfo] for watched DevWorkspaces, caching templates per namespace
- * and coalescing background template fetches (one in-flight fetch per namespace).
+ * Resolves [WorkspaceEditorInfo] for watched DevWorkspaces, caches templates per namespace
+ * and coalesces background template fetches (one in-flight fetch per namespace).
+ *
  * After a successful fetch, [onEditorResolved] is invoked with the freshly resolved editor
  * of the triggering workspace plus all other workspaces that still resolve to UNKNOWN in
  * that namespace, so coalesced/pending workspaces are not left stale.
@@ -35,7 +36,19 @@ internal class WorkspaceEditorResolver(
 ) {
     @Volatile
     var templateMapsByNamespace: Map<String, Map<String, List<DevWorkspaceTemplate>>> = emptyMap()
+    /**
+     * Namespaces where template loading failed or don't exist
+     *
+     * @see [backgroundFetchTemplatesAndPatch]
+     * @see [templatesUnavailable]
+     */
     private val templatesUnavailableNamespaces: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /**
+     * Ensures at most one in-flight fetch per namespace; different namespaces fetch in parallel.
+     *
+     * @see [acquireFetchSlot]
+     * @see [releaseFetchSlot]
+     */
     private val templateFetchInFlight: ConcurrentHashMap<String, Job> = ConcurrentHashMap()
     private val trackedWorkspaces: ConcurrentHashMap<String, DevWorkspace> = ConcurrentHashMap()
 
@@ -50,6 +63,13 @@ internal class WorkspaceEditorResolver(
         templatesUnavailableNamespaces.addAll(unavailableNamespaces)
     }
 
+    /**
+     * Returns `true` if templates for the given namespace are unavailable. Returns `false` otherwise.
+     * Allows callers skip pointless re-fetches and editor patches for workspaces in that namespace.
+     *
+     * @param namespace for the templates
+     * @return true if templates for the given namespace are unavailable.
+     */
     fun templatesUnavailable(namespace: String): Boolean = namespace in templatesUnavailableNamespaces
 
     fun resolve(dw: DevWorkspace): WorkspaceEditorInfo {

@@ -22,7 +22,8 @@ import com.redhat.devtools.gateway.devworkspace.WorkspaceEditorResolver
  * Applies DevWorkspace watch events to the [DevWorkspaceTableModel], resolving editor info
  * via [WorkspaceEditorResolver] and keeping the model sorted.
  *
- * Note: listener callbacks are already invoked on the EDT by [DevWorkspaceWatchManager],
+ * Note:
+ * listener callbacks are already invoked on the EDT by [com.redhat.devtools.gateway.devworkspace.DevWorkspaceWatchManager],
  * so no additional EDT dispatch is done here.
  */
 internal class DevWorkspaceTableUpdater(
