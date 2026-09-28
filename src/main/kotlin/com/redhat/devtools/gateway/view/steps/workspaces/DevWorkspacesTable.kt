@@ -44,6 +44,12 @@ internal class DevWorkspacesTable(
         configureColumns()
     }
 
+    val selectedItem: DevWorkspaceListItem?
+        get() {
+            val row = selectedRow
+            return if (row in 0 until devWorkspaceModel.rowCount) devWorkspaceModel[row] else null
+        }
+
     override fun getToolTipText(event: MouseEvent): String? {
         val row = rowAtPoint(event.point)
         val column = columnAtPoint(event.point)
@@ -55,12 +61,6 @@ internal class DevWorkspacesTable(
             else -> null
         }
     }
-
-    val selectedItem: DevWorkspaceListItem?
-        get() {
-            val row = selectedRow
-            return if (row in 0 until devWorkspaceModel.rowCount) devWorkspaceModel[row] else null
-        }
 
     fun updateColumnWidths() {
         val fm = getFontMetrics(JBFont.h4().asPlain())
@@ -76,6 +76,26 @@ internal class DevWorkspacesTable(
         columnModel.getColumn(PROJECT_COLUMN).preferredWidth =
             JBUI.scale(maxProjectWidth + PROJECT_COLUMN_PADDING)
     }
+
+    fun replaceItems(items: List<DevWorkspaceListItem>) {
+        val selectedRow = selectedRow
+        devWorkspaceModel.apply {
+            clear()
+            addAll(items)
+        }
+        updateColumnWidths()
+        val newSelection = validSelectedIndex(selectedRow)
+        if (newSelection >= 0) {
+            setRowSelectionInterval(newSelection, newSelection)
+        }
+    }
+
+    private fun validSelectedIndex(selectedIndex: Int): Int =
+        when {
+            selectedIndex in 0 until devWorkspaceModel.rowCount -> selectedIndex
+            devWorkspaceModel.rowCount > 0 -> 0
+            else -> -1
+        }
 
     private fun configureColumns() {
         columnModel.getColumn(STATUS_COLUMN).cellRenderer = StatusCellRenderer()

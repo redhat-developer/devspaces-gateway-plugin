@@ -315,7 +315,8 @@ class DevWorkspaces(private val client: ApiClient) {
         )
     }
 
-/** Returns `true` if the given exception is ignorable when listing templates.
+    /**
+     * Returns `true` if the given exception is ignorable when listing templates.
      * Returns `false` otherwise.
      * Template list failures with 401, 403, or 404 are silently degraded to an empty
      * map with [Templates.unavailable] set to true.
@@ -327,7 +328,8 @@ class DevWorkspaces(private val client: ApiClient) {
     private fun ApiException.isIgnorableTemplateListError(): Boolean =
         isUnauthorized() || isForbidden() || isNotFound()
 
-    /** Returns `true` if the given exception is skippable when listing devworkspaces
+    /**
+     * Returns `true` if the given exception is skippable when listing devworkspaces
      * for a specific namespace during multi-namespace scanning.
      * Returns `false` otherwise.
      * Skippable errors: CRD missing (404 with CRD-not-found response body),
