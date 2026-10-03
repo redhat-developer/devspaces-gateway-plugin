@@ -19,6 +19,7 @@ import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.persister.ConfigPersister
 import io.kubernetes.client.util.KubeConfig
 import java.io.File
+import kotlin.io.path.createDirectories
 import java.nio.file.Path
 
 abstract class KubeConfigUpdate private constructor(
@@ -104,11 +105,15 @@ abstract class KubeConfigUpdate private constructor(
         users: ArrayList<Any?>?,
         preferences: Any?,
         currentContext: String?,
-        path: Path?
+        path: Path
     ) {
-        val file = path?.toFile() ?: run {
-            thisLogger().info("Could not write kubeconfig file. Path missing.")
-            return
+        val file = path.toFile()
+        path.parent?.let { parent ->
+            try {
+                parent.createDirectories()
+            } catch (e: java.io.IOException) {
+                thisLogger().warn("Could not create parent directory for ${path}", e)
+            }
         }
         val persister = persisterFactory(file)
         persister.save(
@@ -254,15 +259,16 @@ abstract class KubeConfigUpdate private constructor(
     ) : KubeConfigUpdate(clusterName, clusterUrl, authToken, allConfigs, persisterFactory) {
 
         override fun apply() {
-            val config = allConfigs.firstOrNull() ?: return
+            val configFile = allConfigs.firstOrNull()
+                ?: KubeConfigUtils.newEmptyConfig(KubeConfigUtils.getWritableConfig())
             val user = KubeConfigNamedUser(
                 KubeConfigUser.tokenOnly(authToken),
                 uniqueUserName(allConfigs)
             )
-            val entries = createContext(user, config.config.users, config.config.clusters, config.config.contexts)
-            config.config.setContext(entries.currentContextName)
+            val entries = createContext(user, configFile.config.users, configFile.config.clusters, configFile.config.contexts)
+            configFile.config.setContext(entries.currentContextName)
 
-            saveConfig(config, entries.users, entries.clusters, entries.contexts, entries.currentContextName)
+            saveConfig(configFile, entries.users, entries.clusters, entries.contexts, entries.currentContextName)
         }
     }
 
@@ -305,7 +311,8 @@ abstract class KubeConfigUpdate private constructor(
     ) : KubeConfigUpdate(clusterName, clusterUrl, "", allConfigs, persisterFactory) {
 
         override fun apply() {
-            val config = allConfigs.firstOrNull() ?: return
+            val configFile = allConfigs.firstOrNull()
+                ?: KubeConfigUtils.newEmptyConfig(KubeConfigUtils.getWritableConfig())
             val user = KubeConfigNamedUser(
                 KubeConfigUser.clientCertOnly(
                     CertificateSource.fromData(clientCertPem),
@@ -313,10 +320,10 @@ abstract class KubeConfigUpdate private constructor(
                 ),
                 uniqueUserName(allConfigs)
             )
-            val contextEntries = createContext(user, config.config.users, config.config.clusters, config.config.contexts)
-            config.config.setContext(contextEntries.currentContextName)
+            val contextEntries = createContext(user, configFile.config.users, configFile.config.clusters, configFile.config.contexts)
+            configFile.config.setContext(contextEntries.currentContextName)
 
-            saveConfig(config, contextEntries.users, contextEntries.clusters, contextEntries.contexts, contextEntries.currentContextName)
+            saveConfig(configFile, contextEntries.users, contextEntries.clusters, contextEntries.contexts, contextEntries.currentContextName)
         }
     }
 }

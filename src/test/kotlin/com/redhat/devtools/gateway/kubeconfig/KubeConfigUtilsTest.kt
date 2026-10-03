@@ -1612,6 +1612,69 @@ class KubeConfigUtilsTest {
         assertThat(clusterNames).containsExactly("tatooine-cluster", "dagobah-cluster", "hoth-cluster")
     }
 
+    @Test
+    fun `#getDefaultConfig returns user home kube config path`() {
+        // given
+        val originalUserHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", tempDir.toString())
+
+            // when
+            val defaultConfigPath = KubeConfigUtils.getDefaultConfig()
+
+            // then
+            assertThat(defaultConfigPath).isEqualTo(tempDir.resolve(".kube").resolve("config"))
+        } finally {
+            System.setProperty("user.home", originalUserHome)
+        }
+    }
+
+    @Test
+    fun `#getWritableConfig returns default when env blank`() {
+        // given
+        val originalUserHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", tempDir.toString())
+
+            // when
+            val resolvedFromEmpty = KubeConfigUtils.getWritableConfig("")
+
+            // then
+            assertThat(resolvedFromEmpty).isEqualTo(KubeConfigUtils.getDefaultConfig())
+        } finally {
+            System.setProperty("user.home", originalUserHome)
+        }
+    }
+
+    @Test
+    fun `#getWritableConfig returns first KUBECONFIG path even if missing`() {
+        // given
+        val missingFirst = tempDir.resolve("missing-a")
+        val missingSecond = tempDir.resolve("missing-b")
+        val kubeconfigEnv = "${missingFirst}${File.pathSeparator}${missingSecond}"
+
+        // when
+        val resolved = KubeConfigUtils.getWritableConfig(kubeconfigEnv)
+
+        // then
+        assertThat(resolved).isEqualTo(missingFirst)
+    }
+
+    @Test
+    fun `#newEmptyConfig sets path and has empty lists`() {
+        // given
+        val path = tempDir.resolve("new-empty-config")
+
+        // when
+        val config = KubeConfigUtils.newEmptyConfig(path)
+
+        // then
+        assertThat(config.path).isEqualTo(path)
+        assertThat(config.config.clusters).isEmpty()
+        assertThat(config.config.users).isEmpty()
+        assertThat(config.config.contexts).isEmpty()
+    }
+
     private fun createKubeConfig(yaml: String): KubeConfig {
         return KubeConfig.loadKubeConfig(java.io.StringReader(yaml))
     }
