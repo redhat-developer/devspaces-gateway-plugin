@@ -15,7 +15,6 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.text.UniqueNameGenerator
 import com.redhat.devtools.gateway.auth.tls.CertificateSource
 import com.redhat.devtools.gateway.auth.tls.PemUtils
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.persister.ConfigPersister
 import io.kubernetes.client.util.KubeConfig
@@ -26,7 +25,7 @@ abstract class KubeConfigUpdate private constructor(
     protected val clusterName: String,
     protected val clusterUrl: String,
     protected val token: String,
-    protected val allConfigs: List<KubeConfig>,
+    protected val allConfigs: List<KubeConfigFile>,
     private val persisterFactory: (File) -> ConfigPersister,
 ) {
 
@@ -39,7 +38,7 @@ abstract class KubeConfigUpdate private constructor(
         private val USER_CLIENT_KEY_DATA = USER + "client-key-data"
         fun create(clusterName: String, clusterUrl: String, token: String): KubeConfigUpdate {
             val allConfigs = KubeConfigUtils.getAllConfigs(KubeConfigUtils.getAllConfigFiles())
-            val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs)
+            val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs.map { it.config })
             return if (context == null) {
                 CreateContext(clusterName, clusterUrl, token, allConfigs)
             } else {
@@ -49,7 +48,7 @@ abstract class KubeConfigUpdate private constructor(
 
         fun create(clusterName: String, clusterUrl: String, clientCertPem: String, clientKeyPem: String): KubeConfigUpdate {
             val allConfigs = KubeConfigUtils.getAllConfigs(KubeConfigUtils.getAllConfigFiles())
-            val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs)
+            val context = KubeConfigNamedContext.getByClusterName(clusterName, allConfigs.map { it.config })
             return if (context == null) {
                 CreateContextWithClientCert(clusterName, clusterUrl, clientCertPem, clientKeyPem, allConfigs)
             } else {
@@ -62,41 +61,41 @@ abstract class KubeConfigUpdate private constructor(
     abstract fun apply()
 
     protected fun saveConfigs(
-        primaryConfig: KubeConfig,
-        currentContextConfig: KubeConfig?,
+        primaryConfig: KubeConfigFile,
+        currentContextConfig: KubeConfigFile?,
         currentContextName: String?
     ) {
         when {
             currentContextConfig == null ->
                 saveConfig(primaryConfig)
             primaryConfig.path == currentContextConfig.path ->
-                saveConfig(primaryConfig, currentContextName ?: primaryConfig.currentContext)
+                saveConfig(primaryConfig, currentContextName ?: primaryConfig.config.currentContext)
             else -> {
                 saveConfig(primaryConfig)
-                saveConfig(currentContextConfig, currentContextName ?: currentContextConfig.currentContext)
+                saveConfig(currentContextConfig, currentContextName ?: currentContextConfig.config.currentContext)
             }
         }
     }
 
-    protected fun saveConfig(config: KubeConfig, currentContext: String? = config.currentContext) {
+    protected fun saveConfig(configFile: KubeConfigFile, currentContext: String? = configFile.config.currentContext) {
         saveConfig(
-            config.contexts,
-            config.clusters,
-            config.users,
-            config.preferences,
+            configFile.config.contexts,
+            configFile.config.clusters,
+            configFile.config.users,
+            configFile.config.preferences,
             currentContext,
-            config.path
+            configFile.path
         )
     }
 
     protected fun saveConfig(
-        config: KubeConfig,
+        configFile: KubeConfigFile,
         users: ArrayList<Any?>,
         clusters: ArrayList<Any?>,
         contexts: ArrayList<Any?>,
         currentContext: String
     ) {
-        saveConfig(contexts, clusters, users, config.preferences, currentContext, config.path)
+        saveConfig(contexts, clusters, users, configFile.config.preferences, currentContext, configFile.path)
     }
 
     private fun saveConfig(
@@ -174,13 +173,13 @@ abstract class KubeConfigUpdate private constructor(
         return ContextEntries(updatedUsers, updatedClusters, updatedContexts, context.name)
     }
 
-    protected fun uniqueUserName(allConfigs: List<KubeConfig>): String {
-        val existingUserNames = getAllExistingNames(allConfigs) { it.users }
+    protected fun uniqueUserName(allConfigs: List<KubeConfigFile>): String {
+        val existingUserNames = getAllExistingNames(allConfigs) { it.config.users }
         return UniqueNameGenerator.generateUniqueName(clusterName, existingUserNames)
     }
 
-    private fun createCluster(allConfigs: List<KubeConfig>): KubeConfigNamedCluster {
-        val existingClusterNames = getAllExistingNames(allConfigs) { it.clusters }
+    private fun createCluster(allConfigs: List<KubeConfigFile>): KubeConfigNamedCluster {
+        val existingClusterNames = getAllExistingNames(allConfigs) { it.config.clusters }
         val uniqueClusterName = UniqueNameGenerator.generateUniqueName(clusterName, existingClusterNames)
 
         return KubeConfigNamedCluster(
@@ -192,9 +191,9 @@ abstract class KubeConfigUpdate private constructor(
     private fun createContext(
         user: KubeConfigNamedUser,
         cluster: KubeConfigNamedCluster,
-        allConfigs: List<KubeConfig>
+        allConfigs: List<KubeConfigFile>
     ): KubeConfigNamedContext {
-        val existingContextNames = getAllExistingNames(allConfigs) { it.contexts }
+        val existingContextNames = getAllExistingNames(allConfigs) { it.config.contexts }
         val defaultContextName = KubeConfigNamedContext.toName(user.name, cluster.name)
         val uniqueContextName = UniqueNameGenerator.generateUniqueName(defaultContextName, existingContextNames)
 
@@ -205,8 +204,8 @@ abstract class KubeConfigUpdate private constructor(
     }
 
     private fun getAllExistingNames(
-        allConfigs: List<KubeConfig>,
-        extractList: (KubeConfig) -> List<*>?
+        allConfigs: List<KubeConfigFile>,
+        extractList: (KubeConfigFile) -> List<*>?
     ): Set<String> {
         return allConfigs
             .flatMap { config -> extractList(config) ?: emptyList() }
@@ -222,18 +221,18 @@ abstract class KubeConfigUpdate private constructor(
         clusterUrl: String,
         token: String,
         private val context: KubeConfigNamedContext,
-        allConfigs: List<KubeConfig>,
+        allConfigs: List<KubeConfigFile>,
         persisterFactory: (File) -> ConfigPersister = { BlockStyleFilePersister(it) },
     ) : KubeConfigUpdate(clusterName, clusterUrl, token, allConfigs, persisterFactory) {
 
         override fun apply() {
-            val config = KubeConfigUtils.getConfigByUser(context, allConfigs) ?: return
-            setTokenFor(context.context.user, config)
+            val configFile = KubeConfigUtils.getConfigByUser(context, allConfigs) ?: return
+            setTokenFor(context.context.user, configFile.config)
 
-            val currentContextConfig = KubeConfigUtils.getConfigWithCurrentContext(allConfigs) ?: config
-            currentContextConfig.setContext(context.name)
+            val currentContextConfig = KubeConfigUtils.getConfigWithCurrentContext(allConfigs) ?: configFile
+            currentContextConfig.config.setContext(context.name)
 
-            saveConfigs(config, currentContextConfig, context.name)
+            saveConfigs(configFile, currentContextConfig, context.name)
         }
 
         private fun setTokenFor(username: String, config: KubeConfig) {
@@ -250,7 +249,7 @@ abstract class KubeConfigUpdate private constructor(
         clusterName: String,
         clusterUrl: String,
         private val authToken: String,
-        allConfigs: List<KubeConfig>,
+        allConfigs: List<KubeConfigFile>,
         persisterFactory: (File) -> ConfigPersister = { BlockStyleFilePersister(it) },
     ) : KubeConfigUpdate(clusterName, clusterUrl, authToken, allConfigs, persisterFactory) {
 
@@ -260,8 +259,8 @@ abstract class KubeConfigUpdate private constructor(
                 KubeConfigUser.tokenOnly(authToken),
                 uniqueUserName(allConfigs)
             )
-            val entries = createContext(user, config.users, config.clusters, config.contexts)
-            config.setContext(entries.currentContextName)
+            val entries = createContext(user, config.config.users, config.config.clusters, config.config.contexts)
+            config.config.setContext(entries.currentContextName)
 
             saveConfig(config, entries.users, entries.clusters, entries.contexts, entries.currentContextName)
         }
@@ -273,18 +272,18 @@ abstract class KubeConfigUpdate private constructor(
         private val clientCertPem: String,
         private val clientKeyPem: String,
         private val context: KubeConfigNamedContext,
-        allConfigs: List<KubeConfig>,
+        allConfigs: List<KubeConfigFile>,
         persisterFactory: (File) -> ConfigPersister = { BlockStyleFilePersister(it) },
     ) : KubeConfigUpdate(clusterName, clusterUrl, "", allConfigs, persisterFactory) {
 
         override fun apply() {
-            val config = KubeConfigUtils.getConfigByUser(context, allConfigs) ?: return
-            setClientCert(config, context.context.user)
+            val configFile = KubeConfigUtils.getConfigByUser(context, allConfigs) ?: return
+            setClientCert(configFile.config, context.context.user)
 
-            val currentContextConfig = KubeConfigUtils.getConfigWithCurrentContext(allConfigs) ?: config
-            currentContextConfig.setContext(context.name)
+            val currentContextConfig = KubeConfigUtils.getConfigWithCurrentContext(allConfigs) ?: configFile
+            currentContextConfig.config.setContext(context.name)
 
-            saveConfigs(config, currentContextConfig, context.name)
+            saveConfigs(configFile, currentContextConfig, context.name)
         }
 
         private fun setClientCert(config: KubeConfig, username: String) {
@@ -301,7 +300,7 @@ abstract class KubeConfigUpdate private constructor(
         clusterUrl: String,
         private val clientCertPem: String,
         private val clientKeyPem: String,
-        allConfigs: List<KubeConfig>,
+        allConfigs: List<KubeConfigFile>,
         persisterFactory: (File) -> ConfigPersister = { BlockStyleFilePersister(it) },
     ) : KubeConfigUpdate(clusterName, clusterUrl, "", allConfigs, persisterFactory) {
 
@@ -314,8 +313,8 @@ abstract class KubeConfigUpdate private constructor(
                 ),
                 uniqueUserName(allConfigs)
             )
-            val contextEntries = createContext(user, config.users, config.clusters, config.contexts)
-            config.setContext(contextEntries.currentContextName)
+            val contextEntries = createContext(user, config.config.users, config.config.clusters, config.config.contexts)
+            config.config.setContext(contextEntries.currentContextName)
 
             saveConfig(config, contextEntries.users, contextEntries.clusters, contextEntries.contexts, contextEntries.currentContextName)
         }

@@ -14,7 +14,6 @@ package com.redhat.devtools.gateway.auth.tls
 import com.redhat.devtools.gateway.kubeconfig.BlockStyleFilePersister
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigNamedCluster
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
 import java.security.cert.X509Certificate
 
@@ -33,14 +32,14 @@ object KubeConfigTlsWriter {
         )
 
         // Find the kubeconfig that actually contains this cluster
-        val config = allConfigs.firstOrNull { kubeConfig ->
-            kubeConfig.clusters?.any { entry ->
+        val configFile = allConfigs.firstOrNull { configFile ->
+            configFile.config.clusters?.any { entry ->
                 val map = entry as? Map<*, *> ?: return@any false
                 map["name"] == namedCluster.name
             } == true
         } ?: return
 
-        val clusterEntry = config.clusters
+        val clusterEntry = configFile.config.clusters
             ?.firstOrNull { entry ->
                 val map = entry as? Map<*, *> ?: return@firstOrNull false
                 map["name"] == namedCluster.name
@@ -59,14 +58,14 @@ object KubeConfigTlsWriter {
         removeInsecureSkipTlsVerify(clusterEntry)
 
         // Persist
-        val file = config.path?.toFile() ?: return
+        val file = configFile.path.toFile()
         val persister = BlockStyleFilePersister(file)
         persister.save(
-            config.contexts,
-            config.clusters,
-            config.users,
-            config.preferences,
-            config.currentContext
+            configFile.config.contexts,
+            configFile.config.clusters,
+            configFile.config.users,
+            configFile.config.preferences,
+            configFile.config.currentContext
         )
     }
 

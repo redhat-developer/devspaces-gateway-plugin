@@ -19,7 +19,6 @@ import io.kubernetes.client.util.KubeConfig
 import java.io.File
 import java.net.URI
 import java.nio.file.Path
-import java.util.*
 import java.util.Locale.getDefault
 import kotlin.io.path.Path
 import kotlin.io.path.exists
@@ -55,7 +54,8 @@ object KubeConfigUtils {
         logger.info("Loaded ${kubeConfigs.size} kubeconfig files from paths: $kubeconfigPaths")
 
         val clusters = kubeConfigs
-            .flatMap { kubeConfig ->
+            .flatMap { kubeConfigFile ->
+                val kubeConfig = kubeConfigFile.config
                 kubeConfig.clusters?.mapNotNull { cluster ->
                     val namedCluster = KubeConfigNamedCluster.fromMap(cluster as Map<*, *>) ?: return@mapNotNull null
                     val kubeUser = KubeConfigNamedUser.getUserForCluster(namedCluster.name, kubeConfig)
@@ -70,7 +70,7 @@ object KubeConfigUtils {
         return clusters
     }
 
-    private fun toKubeConfigs(kubeconfigPaths: List<Path>): List<KubeConfig> {
+    private fun toKubeConfigs(kubeconfigPaths: List<Path>): List<KubeConfigFile> {
         return kubeconfigPaths
             .filter { path ->
                 val valid = isValid(path)
@@ -88,7 +88,8 @@ object KubeConfigUtils {
 
                     val kubeConfig = KubeConfig.loadKubeConfig(content.reader())
                     logger.info("loaded kubeconfig from: $path")
-                    kubeConfig
+                    kubeConfig.setFile(path.toFile())
+                    KubeConfigFile(kubeConfig, path)
                 } catch (t: Throwable) {
                     logger.debug("Error loading kubeconfig file '$path': ${t.message}", t)
                     null
@@ -145,14 +146,13 @@ object KubeConfigUtils {
                 && paths.isRegularFile()
     }
 
-    fun getAllConfigs(files: List<Path>): List<KubeConfig> {
+    fun getAllConfigs(files: List<Path>): List<KubeConfigFile> {
         return files.mapNotNull { file ->
             try {
                 val document = file.toFile().readText()
-                val kubeConfig = KubeConfig.loadKubeConfig(document.reader())
-                kubeConfig?.apply {
-                    path = file
-                }
+                val kubeConfig = KubeConfig.loadKubeConfig(document.reader()) ?: return@mapNotNull null
+                kubeConfig.setFile(file.toFile())
+                KubeConfigFile(kubeConfig, file)
             } catch (e: Throwable) {
                 logger.debug("Could not parse kubeconfig document", e)
                 null
@@ -205,22 +205,22 @@ object KubeConfigUtils {
         }
     }
 
-    fun getConfigByUser(context: KubeConfigNamedContext, allConfigs: List<KubeConfig>): KubeConfig? {
+    fun getConfigByUser(context: KubeConfigNamedContext, allConfigs: List<KubeConfigFile>): KubeConfigFile? {
         val contextUser = context.context.user
         return getConfigByUser(contextUser, allConfigs)
     }
 
-    private fun getConfigByUser(userName: String, allConfigs: List<KubeConfig>): KubeConfig? {
+    private fun getConfigByUser(userName: String, allConfigs: List<KubeConfigFile>): KubeConfigFile? {
         return allConfigs
-            .firstOrNull { config ->
-                KubeConfigNamedUser.getByName(userName, config) != null
+            .firstOrNull { configFile ->
+                KubeConfigNamedUser.getByName(userName, configFile.config) != null
             }
     }
 
-    fun getConfigWithCurrentContext(allConfigs: List<KubeConfig>): KubeConfig? {
+    fun getConfigWithCurrentContext(allConfigs: List<KubeConfigFile>): KubeConfigFile? {
         return allConfigs
-            .firstOrNull { config ->
-                !config.currentContext.isNullOrBlank()
+            .firstOrNull { configFile ->
+                !configFile.config.currentContext.isNullOrBlank()
             }
     }
 
@@ -293,17 +293,4 @@ object KubeConfigUtils {
 
         return mergedConfig
     }
-
-    private val kubeConfigFiles = WeakHashMap<KubeConfig, Path>()
-
-    var KubeConfig.path: Path?
-        get() = kubeConfigFiles[this]
-        set(value) {
-            if (value != null) {
-                kubeConfigFiles[this] = value
-                this.setFile(value.toFile())
-            } else {
-                kubeConfigFiles.remove(this)
-            }
-        }
 }

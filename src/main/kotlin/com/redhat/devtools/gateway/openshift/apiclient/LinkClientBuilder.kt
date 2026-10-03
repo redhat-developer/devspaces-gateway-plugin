@@ -38,7 +38,7 @@ class LinkClientBuilder(
                 return defaultClient()
             }
 
-            val kubeConfig = configUtils.mergeConfigs(allConfigs)
+            val kubeConfig = configUtils.mergeConfigs(allConfigs.map { it.config })
             val client = ClientBuilder.kubeconfig(kubeConfig).build()
             client.httpClient = IdeHttpProxy.configure(client.httpClient.newBuilder()).build()
             applyReadTimeout(client)

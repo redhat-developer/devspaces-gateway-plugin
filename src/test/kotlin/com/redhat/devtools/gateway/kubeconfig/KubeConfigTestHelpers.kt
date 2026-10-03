@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.kubeconfig
 
 import com.redhat.devtools.gateway.auth.tls.PemUtils
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import io.kubernetes.client.util.KubeConfig
 import io.mockk.every
 import io.mockk.mockk
@@ -50,7 +49,7 @@ object KubeConfigTestHelpers {
         clusterMap: MutableMap<String, Any>,
         contextMap: MutableMap<String, Any>,
         currentContext: String? = null
-    ): KubeConfig {
+    ): KubeConfigFile {
         val config = mockk<KubeConfig>(relaxed = true)
         // Stub currentContext FIRST to prevent MockK from trying to set the backing field
         // Use answers instead of returns to avoid MockK trying to set the Map backing field
@@ -62,9 +61,8 @@ object KubeConfigTestHelpers {
         every { config.contexts } returns ArrayList(listOf(contextMap))
         every { config.clusters } returns ArrayList(listOf(clusterMap))
         every { config.users } returns ArrayList(listOf(userMap))
-        every { config.path } returns path
         every { config.preferences } returns mockk()
-        return config
+        return KubeConfigFile(config, path)
     }
 
     /**
@@ -77,7 +75,7 @@ object KubeConfigTestHelpers {
         clusters: List<MutableMap<String, Any>> = emptyList(),
         users: List<MutableMap<String, Any>> = emptyList(),
         setupContextCapture: ((KubeConfig) -> Unit)? = null
-    ): KubeConfig {
+    ): KubeConfigFile {
         val config = mockk<KubeConfig>(relaxed = true)
         // Stub currentContext FIRST to prevent MockK from trying to set the backing field
         // Use answers instead of returns to avoid MockK trying to set the Map backing field
@@ -85,10 +83,9 @@ object KubeConfigTestHelpers {
         every { config.contexts } returns ArrayList(contexts)
         every { config.clusters } returns ArrayList(clusters)
         every { config.users } returns ArrayList(users)
-        every { config.path } returns path
         every { config.preferences } returns mockk()
         setupContextCapture?.invoke(config)
-        return config
+        return KubeConfigFile(config, path)
     }
 
     /**
