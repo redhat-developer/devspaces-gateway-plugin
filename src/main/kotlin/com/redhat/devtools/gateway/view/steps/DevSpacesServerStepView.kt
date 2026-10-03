@@ -265,7 +265,7 @@ class DevSpacesServerStepView(
             withContext(Dispatchers.IO) {
                 KubeConfigUtils.getAllConfigs(
                     KubeConfigUtils.getAllConfigFiles()
-                )
+                ).map { it.config }
             }
         },
         kubeConfigWriter = { namedCluster, certs ->

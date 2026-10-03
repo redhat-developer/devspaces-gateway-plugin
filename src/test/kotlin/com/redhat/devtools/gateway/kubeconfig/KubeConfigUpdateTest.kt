@@ -12,7 +12,6 @@
 package com.redhat.devtools.gateway.kubeconfig
 
 import com.redhat.devtools.gateway.auth.tls.PemUtils
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Utils
 import io.kubernetes.client.persister.ConfigPersister
 import io.kubernetes.client.util.KubeConfig
@@ -927,11 +926,10 @@ class KubeConfigUpdateTest {
         every { config.clusters } returns null
         every { config.contexts } returns null
         every { config.currentContext } answers { "" }
-        every { config.path } returns kubeConfigPath
         every { config.preferences } returns mockk()
         every { config.setContext(any()) } returns true
 
-        val allConfigs = listOf(config)
+        val allConfigs = listOf(KubeConfigFile(config, kubeConfigPath))
         setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
 
         val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
@@ -970,7 +968,7 @@ class KubeConfigUpdateTest {
         // given
         val data = CreateContextTestData()
         val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath)
-        every { config.preferences } returns null
+        every { config.config.preferences } returns null
         
         val allConfigs = listOf(config)
         setupCreateContextMocks(data.clusterName, allConfigs, kubeConfigPath)
@@ -998,7 +996,7 @@ class KubeConfigUpdateTest {
         val data = UpdateTokenTestData()
         val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateTokenTestMaps(data)
         val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
-        every { config.preferences } returns null
+        every { config.config.preferences } returns null
         
         val allConfigs = listOf(config)
         val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
@@ -1026,7 +1024,7 @@ class KubeConfigUpdateTest {
         val data = UpdateClientCertTestData()
         val (existingUserMap, existingClusterMap, existingContextMap) = createUpdateClientCertTestMaps(data)
         val config = KubeConfigTestHelpers.createMockKubeConfig(kubeConfigPath, existingUserMap, existingClusterMap, existingContextMap)
-        every { config.preferences } returns null
+        every { config.config.preferences } returns null
 
         val allConfigs = listOf(config)
         val mockContext = setupUpdateExistingContextMocks(data.clusterName, data.userName, data.contextName, allConfigs, config, null)
@@ -1218,17 +1216,17 @@ class KubeConfigUpdateTest {
         clusterName: String,
         userName: String,
         contextName: String,
-        allConfigs: List<KubeConfig>,
-        configForUser: KubeConfig,
-        configForCurrentContext: KubeConfig?
+        allConfigs: List<KubeConfigFile>,
+        configForUser: KubeConfigFile,
+        configForCurrentContext: KubeConfigFile?
     ): KubeConfigNamedContext {
         mockkObject(KubeConfigNamedContext)
         val mockContext = mockk<KubeConfigNamedContext>(relaxed = true)
         every { mockContext.context } returns KubeConfigContext(userName, clusterName)
         every { mockContext.name } returns contextName
-        every { KubeConfigNamedContext.getByClusterName(clusterName, allConfigs) } returns mockContext
+        every { KubeConfigNamedContext.getByClusterName(clusterName, allConfigs.map { it.config }) } returns mockContext
         every { KubeConfigUtils.getAllConfigs(any()) } returns allConfigs
-        val configFiles = allConfigs.mapNotNull { it.path }.distinct()
+        val configFiles = allConfigs.map { it.path }.distinct()
         every { KubeConfigUtils.getAllConfigFiles() } returns configFiles
         every { KubeConfigUtils.getConfigByUser(mockContext, allConfigs) } returns configForUser
         every { KubeConfigUtils.getConfigWithCurrentContext(allConfigs) } returns configForCurrentContext
@@ -1238,11 +1236,11 @@ class KubeConfigUpdateTest {
 
     private fun setupCreateContextMocks(
         clusterName: String,
-        allConfigs: List<KubeConfig>,
+        allConfigs: List<KubeConfigFile>,
         path: Path
     ) {
         mockkObject(KubeConfigNamedContext)
-        every { KubeConfigNamedContext.getByClusterName(clusterName, allConfigs) } returns null
+        every { KubeConfigNamedContext.getByClusterName(clusterName, allConfigs.map { it.config }) } returns null
         every { KubeConfigUtils.getAllConfigs(any()) } returns allConfigs
         every { KubeConfigUtils.getAllConfigFiles() } returns listOf(path)
     }

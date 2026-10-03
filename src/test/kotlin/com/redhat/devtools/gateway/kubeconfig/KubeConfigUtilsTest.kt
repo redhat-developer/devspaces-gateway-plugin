@@ -11,7 +11,6 @@
  */
 package com.redhat.devtools.gateway.kubeconfig
 
-import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils.path
 import com.redhat.devtools.gateway.openshift.Cluster
 import io.kubernetes.client.util.KubeConfig
 import org.assertj.core.api.Assertions.assertThat
@@ -622,7 +621,7 @@ class KubeConfigUtilsTest {
         // then
         assertThat(config).isNotNull
         assertThat(config).isEqualTo(configs[0])
-        assertThat(config?.currentContext).isEqualTo("tatooine-context")
+        assertThat(config?.config?.currentContext).isEqualTo("tatooine-context")
     }
 
     @Test
@@ -791,13 +790,13 @@ class KubeConfigUtilsTest {
         // then
         assertThat(config).isNotNull
         assertThat(config).isEqualTo(configs[0])
-        assertThat(config?.currentContext).isEqualTo("tatooine-context")
+        assertThat(config?.config?.currentContext).isEqualTo("tatooine-context")
     }
 
     @Test
     fun `#getConfigWithCurrentContext returns null when configs list is empty`() {
         // given
-        val configs = emptyList<KubeConfig>()
+        val configs = emptyList<KubeConfigFile>()
 
         // when
         val config = KubeConfigUtils.getConfigWithCurrentContext(configs)
@@ -995,7 +994,7 @@ class KubeConfigUtilsTest {
     }
 
     @Test
-    fun `#path extension property sets and gets path correctly`() {
+    fun `#KubeConfigFile retains path and config reference`() {
         // given
         val kubeConfigFile = createTempKubeConfigFile(
             "config", """
@@ -1006,47 +1005,11 @@ class KubeConfigUtilsTest {
         val kubeConfig = KubeConfig.loadKubeConfig(kubeConfigFile.toFile().reader())
 
         // when
-        kubeConfig.path = kubeConfigFile
+        val file = KubeConfigFile(kubeConfig, kubeConfigFile)
 
         // then
-        assertThat(kubeConfig.path).isEqualTo(kubeConfigFile)
-    }
-
-    @Test
-    fun `#path extension property returns null when not set`() {
-        // given
-        val kubeConfigFile = createTempKubeConfigFile(
-            "config", """
-            apiVersion: v1
-            kind: Config
-        """.trimIndent()
-        )
-        val kubeConfig = KubeConfig.loadKubeConfig(kubeConfigFile.toFile().reader())
-
-        // when
-        val path = kubeConfig.path
-
-        // then
-        assertThat(path).isNull()
-    }
-
-    @Test
-    fun `#path extension property removes path when set to null`() {
-        // given
-        val kubeConfigFile = createTempKubeConfigFile(
-            "config", """
-            apiVersion: v1
-            kind: Config
-        """.trimIndent()
-        )
-        val kubeConfig = KubeConfig.loadKubeConfig(kubeConfigFile.toFile().reader())
-        kubeConfig.path = kubeConfigFile
-
-        // when
-        kubeConfig.path = null
-
-        // then
-        assertThat(kubeConfig.path).isNull()
+        assertThat(file.path).isEqualTo(kubeConfigFile)
+        assertThat(file.config).isSameAs(kubeConfig)
     }
 
     @Test

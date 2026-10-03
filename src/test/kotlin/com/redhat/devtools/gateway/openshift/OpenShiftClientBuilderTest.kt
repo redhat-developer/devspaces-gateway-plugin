@@ -14,6 +14,7 @@ import com.redhat.devtools.gateway.openshift.apiclient.ClientCertClientBuilder
 import com.redhat.devtools.gateway.openshift.apiclient.LinkClientBuilder
 import com.redhat.devtools.gateway.openshift.apiclient.TokenClientBuilder
 import com.redhat.devtools.gateway.auth.tls.SslContextFactory
+import com.redhat.devtools.gateway.kubeconfig.KubeConfigFile
 import com.redhat.devtools.gateway.kubeconfig.KubeConfigUtils
 import io.kubernetes.client.util.KubeConfig
 import io.mockk.every
@@ -149,8 +150,9 @@ class OpenShiftClientBuilderTest {
         )
         kubeConfig.setContext("test-context")
 
+        val configFile = KubeConfigFile(kubeConfig, configPath)
         every { configUtils.getAllConfigFiles() } returns listOf(configPath)
-        every { configUtils.getAllConfigs(listOf(configPath)) } returns listOf(kubeConfig)
+        every { configUtils.getAllConfigs(listOf(configPath)) } returns listOf(configFile)
         every { configUtils.mergeConfigs(listOf(kubeConfig)) } returns kubeConfig
 
         val client = LinkClientBuilder(configUtils).build()
