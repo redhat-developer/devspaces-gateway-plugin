@@ -125,11 +125,18 @@ object KubeConfigUtils {
             .map { Path(it) }
     }
 
-    private fun getDefaultConfigs(): List<Path> {
-        return listOfNotNull(
-            Path(System.getProperty("user.home"), ".kube", "config")
-                .takeIf { isValid(it) }
-        )
+    fun getDefaultConfig(): Path =
+        Path(System.getProperty("user.home"), ".kube", "config")
+
+    fun getWritableConfig(kubeconfigEnv: String? = null): Path {
+        val envPaths = getEnvConfigs(kubeconfigEnv)
+        return if (envPaths.isNotEmpty()) envPaths.first() else getDefaultConfig()
+    }
+
+    fun newEmptyConfig(path: Path): KubeConfigFile {
+        val config = KubeConfig(ArrayList(), ArrayList(), ArrayList())
+        config.setFile(path.toFile())
+        return KubeConfigFile(config, path)
     }
 
     fun getAllConfigFiles(kubeconfigEnv: String? = null): List<Path> {
@@ -137,7 +144,7 @@ object KubeConfigUtils {
         return if (envPaths.isNotEmpty()) {
             envPaths.filter { isValid(it) }
         } else {
-            getDefaultConfigs()
+            listOf(getDefaultConfig())
         }
     }
 

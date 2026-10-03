@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.nio.file.Path
+import kotlin.io.path.exists
 
 class KubeConfigUpdateTest {
 
@@ -130,6 +131,120 @@ class KubeConfigUpdateTest {
                 any(),
             )
         }
+    }
+
+    @Test
+    fun `#apply CreateContext creates kubeconfig when allConfigs is empty`() {
+        // given
+        val data = CreateContextTestData()
+        val targetPath = Path.of("/test/new-kubeconfig")
+        val allConfigs = emptyList<KubeConfigFile>()
+        every { KubeConfigUtils.getWritableConfig() } returns targetPath
+        every { KubeConfigUtils.newEmptyConfig(targetPath) } answers {
+            KubeConfigTestHelpers.createMockKubeConfig(targetPath)
+        }
+
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(targetPath).save(
+                match { contexts ->
+                    assertThat(contexts).hasSize(1)
+                    verifyContext(contexts[0] as Map<*, *>, "${data.clusterName}/${data.clusterName}", data.clusterName, data.clusterName)
+                },
+                match { clusters ->
+                    assertThat(clusters).hasSize(1)
+                    verifyCluster(clusters[0] as Map<*, *>, data.clusterName, data.clusterUrl)
+                },
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUser(users[0] as Map<*, *>, data.clusterName, data.token)
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply CreateContextWithClientCert creates kubeconfig when allConfigs is empty`() {
+        // given
+        val data = CreateContextWithClientCertTestData()
+        val targetPath = Path.of("/test/new-kubeconfig")
+        val allConfigs = emptyList<KubeConfigFile>()
+        every { KubeConfigUtils.getWritableConfig() } returns targetPath
+        every { KubeConfigUtils.newEmptyConfig(targetPath) } answers {
+            KubeConfigTestHelpers.createMockKubeConfig(targetPath)
+        }
+
+        val update = KubeConfigUpdate.CreateContextWithClientCert(
+            data.clusterName,
+            data.clusterUrl,
+            data.clientCertPem,
+            data.clientKeyPem,
+            allConfigs,
+            testPersisterFactory,
+        )
+
+        // when
+        update.apply()
+
+        // then
+        verify {
+            persisterFor(targetPath).save(
+                match { contexts ->
+                    assertThat(contexts).hasSize(1)
+                    verifyContext(
+                        contexts[0] as Map<*, *>,
+                        "${data.clusterName}/${data.clusterName}",
+                        data.clusterName,
+                        data.clusterName
+                    )
+                },
+                match { clusters ->
+                    assertThat(clusters).hasSize(1)
+                    verifyCluster(clusters[0] as Map<*, *>, data.clusterName, data.clusterUrl)
+                },
+                match { users ->
+                    assertThat(users).hasSize(1)
+                    verifyUserWithClientCert(
+                        users[0] as Map<*, *>,
+                        data.clusterName,
+                        data.clientCertPem,
+                        data.clientKeyPem
+                    )
+                },
+                any(),
+                any(),
+            )
+        }
+    }
+
+    @Test
+    fun `#apply CreateContext creates parent directories when missing`() {
+        // given
+        val data = CreateContextTestData()
+        val targetPath = Path.of(System.getProperty("java.io.tmpdir"))
+            .resolve("kube-parent-missing-${System.nanoTime()}")
+            .resolve("subdir")
+            .resolve("config")
+        val allConfigs = emptyList<KubeConfigFile>()
+        every { KubeConfigUtils.getWritableConfig() } returns targetPath
+        every { KubeConfigUtils.newEmptyConfig(targetPath) } answers {
+            KubeConfigTestHelpers.createMockKubeConfig(targetPath)
+        }
+
+        val update = KubeConfigUpdate.CreateContext(data.clusterName, data.clusterUrl, data.token, allConfigs, testPersisterFactory)
+
+        // when
+        update.apply()
+
+        // then - saveConfig should create the missing parent directories
+        assertThat(targetPath.parent!!.exists()).isTrue()
     }
 
     @Test
