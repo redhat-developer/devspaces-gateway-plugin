@@ -85,6 +85,37 @@ class FileWatcherTest {
     }
 
     @Test
+    fun `#addFile() tracks a file when its parent directory does not exist`() = runTest {
+        var onFileChangedCount = 0
+        watcher.onFileChanged { onFileChangedCount++ }
+        val missingParent = tempDir.resolve("missing-kube")
+        val path = missingParent.resolve("config")
+
+        watcher.addFile(path)
+        advanceUntilIdle()
+
+        assertThat(watcher.getMonitoredFiles()).contains(path)
+        assertThat(watcher.getWatchedDirectories()).doesNotContain(missingParent)
+        assertThat(onFileChangedCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `#addFile() registers the parent once it becomes a directory`() = runTest {
+        var onFileChangedCount = 0
+        watcher.onFileChanged { onFileChangedCount++ }
+        val missingParent = tempDir.resolve("missing-kube")
+        val path = missingParent.resolve("config")
+
+        watcher.addFile(path)
+        java.nio.file.Files.createDirectories(missingParent)
+        watcher.addFile(path)
+        advanceUntilIdle()
+
+        assertThat(watcher.getWatchedDirectories()).contains(missingParent)
+        assertThat(onFileChangedCount).isEqualTo(1)
+    }
+
+    @Test
     fun `#addFile() invokes callback for each file when multiple are added`() = runTest {
         var onFileChangedCount = 0
         watcher.onFileChanged { onFileChangedCount++ }
@@ -247,31 +278,68 @@ class FileWatcherTest {
     }
 
     @Test
-    fun `#onFileChanged() is invoked when a watched file is deleted`() = runBlocking {
-        val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val ioWatcher = FileWatcher(ioScope, Dispatchers.IO)
-        try {
-            val callbackReceived = CompletableDeferred<Path>()
-            var notifyCount = 0
-            ioWatcher.onFileChanged { path ->
-                notifyCount++
-                if (notifyCount > 1) {
-                    callbackReceived.complete(path)
+    fun `#onFileChanged() is invoked when a watched file is deleted`() {
+        runBlocking {
+            val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val ioWatcher = FileWatcher(ioScope, Dispatchers.IO)
+            try {
+                val callbackReceived = CompletableDeferred<Path>()
+                var notifyCount = 0
+                ioWatcher.onFileChanged { path ->
+                    notifyCount++
+                    if (notifyCount > 1) {
+                        callbackReceived.complete(path)
+                    }
                 }
-            }
-            ioWatcher.start()
-            ioWatcher.addFile(testFile)
-            delay(200)
+                ioWatcher.start()
+                ioWatcher.addFile(testFile)
+                delay(200)
 
-            testFile.deleteExisting()
+                testFile.deleteExisting()
 
-            @Suppress("ConvertLongToDuration")
-            withTimeout(5_000) {
-                assertThat(callbackReceived.await()).isEqualTo(testFile)
+                @Suppress("ConvertLongToDuration")
+                withTimeout(5_000) {
+                    assertThat(callbackReceived.await()).isEqualTo(testFile)
+                }
+            } finally {
+                ioWatcher.stop()
+                ioScope.cancel()
             }
-        } finally {
-            ioWatcher.stop()
-            ioScope.cancel()
+        }
+    }
+
+    @Test
+    fun `#onFileChanged() is invoked when a missing parent directory appears after start`() {
+        runBlocking {
+            val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val ioWatcher = FileWatcher(ioScope, Dispatchers.IO)
+            try {
+                val callbackReceived = CompletableDeferred<Path>()
+                var notifyCount = 0
+                val path = tempDir.resolve("missing-kube").resolve("config")
+                ioWatcher.onFileChanged { p ->
+                    notifyCount++
+                    // First notify is from addFile; complete on a subsequent notify.
+                    if (notifyCount > 1) {
+                        callbackReceived.complete(p)
+                    }
+                }
+                ioWatcher.start()
+                ioWatcher.addFile(path)
+                delay(200)
+
+                java.nio.file.Files.createDirectories(path.parent)
+                path.writeText("new content")
+
+                @Suppress("ConvertLongToDuration")
+                withTimeout(5_000) {
+                    assertThat(callbackReceived.await()).isEqualTo(path)
+                }
+                assertThat(ioWatcher.getWatchedDirectories()).contains(path.parent)
+            } finally {
+                ioWatcher.stop()
+                ioScope.cancel()
+            }
         }
     }
 
