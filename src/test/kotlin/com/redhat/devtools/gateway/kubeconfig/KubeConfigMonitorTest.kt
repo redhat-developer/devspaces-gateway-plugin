@@ -30,6 +30,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createFile
 
@@ -193,6 +194,31 @@ class KubeConfigMonitorTest {
         assertThat(fileWatcher.getMonitoredFiles()).containsExactly(kubeconfigPath2)
         verify(exactly = 1) { mockKubeConfigUtils.getClusters(listOf(kubeconfigPath2)) }
     }
+
+    @Test
+    fun `#updateMonitoredPaths registers parent after it is created`() = runTest(testDispatcher) {
+        val path = tempDir.resolve("missing-kube").resolve("config")
+        every { mockKubeConfigUtils.getAllConfigFiles(any()) } returns listOf(path)
+        every { mockKubeConfigUtils.getClusters(any()) } returns emptyList()
+
+        val emissions = collectClusterEmissions()
+        advanceUntilIdle()
+
+        kubeconfigMonitor.start()
+        advanceUntilIdle()
+
+        assertThat(fileWatcher.getMonitoredFiles()).contains(path)
+        assertThat(fileWatcher.getWatchedDirectories()).doesNotContain(path.parent)
+        assertThat(emissions).containsExactly(emptyList())
+
+        Files.createDirectories(path.parent)
+
+        kubeconfigMonitor.updateMonitoredPaths()
+        advanceUntilIdle()
+
+        assertThat(fileWatcher.getWatchedDirectories()).contains(path.parent)
+    }
+
     @Test
     fun `#stop should not cancel the provided scope`() = runTest(testDispatcher) {
         val mockScope = mockk<TestScope>(relaxed = true)

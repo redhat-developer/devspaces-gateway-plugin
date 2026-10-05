@@ -41,6 +41,7 @@ class FileWatcher(
             while (isActive) {
                 val key = watchService.poll(100, TimeUnit.MILLISECONDS)
                 if (key == null) {
+                    retryUnregisteredParents()
                     @Suppress("ConvertLongToDuration")
                     delay(100)
                     continue
@@ -78,11 +79,9 @@ class FileWatcher(
      * @return this instance for chaining.
      */
     fun addFile(path: Path): FileWatcher {
-        val parentDir = path.parent
-        if (parentDir != null
-            && !monitoredFiles.contains(path)) {
-            registerDirectory(parentDir)
-            monitoredFiles.add(path)
+        val parentDir = path.parent ?: return this
+        registerDirectory(parentDir)
+        if (monitoredFiles.add(path)) {
             invokeOnFileChanged(path)
         }
         return this
@@ -113,8 +112,31 @@ class FileWatcher(
         }
     }
 
+    /**
+     * Re-registers parent directories of monitored files that were missing when [addFile]
+     * was called. Once such a directory exists, it is registered for watching and the
+     * [onFileChanged] callback is invoked for each monitored file in it, so listeners are
+     * notified without the caller having to re-add the files.
+     */
+    private fun retryUnregisteredParents() {
+        monitoredFiles
+            .mapNotNull { it.parent }
+            .distinct()
+            .filter { it !in registeredDirectories.values }
+            .filter { Files.isDirectory(it) }
+            .forEach { directory ->
+                registerDirectory(directory)
+                monitoredFiles
+                    .filter { it.parent == directory }
+                    .forEach { file -> invokeOnFileChanged(file) }
+            }
+    }
+
     private fun registerDirectory(directory: Path) {
         if (registeredDirectories.values.any { it == directory }) {
+            return
+        }
+        if (!Files.isDirectory(directory)) {
             return
         }
         val watchKey = directory.register(

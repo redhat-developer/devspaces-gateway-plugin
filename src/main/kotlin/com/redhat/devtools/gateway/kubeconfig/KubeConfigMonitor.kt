@@ -85,9 +85,12 @@ class KubeConfigMonitor(
     }
 
     private fun startWatchingNew(newPaths: Set<Path>) {
-        (newPaths - fileWatcher.getMonitoredFiles()).forEach { path ->
+        newPaths.forEach { path ->
+            val alreadyMonitored = fileWatcher.getMonitoredFiles().contains(path)
             fileWatcher.addFile(path)
-            logger.info("Started monitoring kubeconfig file: $path")
+            if (!alreadyMonitored) {
+                logger.info("Started monitoring kubeconfig file: $path")
+            }
         }
     }
 
