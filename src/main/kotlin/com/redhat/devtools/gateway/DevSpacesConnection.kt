@@ -43,9 +43,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Thin-client connection lifecycle.
  *
- * Thin-client close always ends the connect wait; [tearDownConnection] runs only if the
- * connection is already live ([connectionLive]). Failures during connect are cleaned up by
- * [connect]'s catch path.
+ * Thin-client close or failed-to-open sets connectFailed (ending the connect wait);
+ * [tearDownConnection] runs only if the connection is already live ([connectionLive]).
+ * Failures during connect are cleaned up by [connect]'s catch path.
  *
  * Connect enablement in the wizard is based on workspace Running state (not
  * [DevSpacesContext.activeWorkspaces]), because IDEA often keeps the connector view
@@ -54,7 +54,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Still clear [DevSpacesContext.activeWorkspaces] when the connection ends (before optional
  * remote stop) for tooltips / bookkeeping.
  */
+class ThinClientNotReadyException(message: String) : IllegalStateException(message)
+
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
+
+    companion object {
+        private const val CONNECT_POLL: Long = 200 // millis
+    }
+
     /** Ensures [tearDownConnection] runs at most once for this connect attempt. */
     private val tearDownStarted = AtomicBoolean(false)
 
@@ -87,21 +94,21 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
             checkCancelled?.invoke()
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                message = "Waiting for the workspace IDE client to start..."))
+                message = "Waiting for the workspace IDE client to start (first-time download may take several minutes)..."))
 
             val (fwd, localPort) = setupPortForwarding(remoteIdeServer.pod)
             forwarder = fwd
 
             val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
-            val connectWaitDone = AtomicBoolean(false)
+            val connectFailed = AtomicBoolean(false)
 
             checkCancelled?.invoke()
             client = startThinClient(
                 URI(effectiveJoinLink), workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
-                remoteIdeServer, forwarder, connectWaitDone, connectionLive
+                remoteIdeServer, forwarder, connectFailed, connectionLive
             )
 
-            waitForThinClientConnect(client, connectWaitDone, checkCancelled)
+            waitForThinClientConnect(client, connectFailed, checkCancelled)
 
             if (registerRestartWatcher == true) {
                 watchRestartAnnotation(
@@ -116,7 +123,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             onConnected()
             client
         } catch (e: Exception) {
-            runCatching { client?.close() }
+            if (e !is ThinClientNotReadyException || connectionLive.get()) {
+                runCatching { client?.close() }
+            }
             tearDownConnection(
                 client, workspace, onConnectionEnded, onDevWorkspaceStopped, remoteIdeServer, forwarder
             )
@@ -130,8 +139,8 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
      * already live; failures during connect are cleaned up by [connect]'s catch.
      */
     @Suppress("UnstableApiUsage")
-    private fun onThinClientClosed(
-        connectWaitDone: AtomicBoolean,
+    internal fun onThinClientClosed(
+        connectFailed: AtomicBoolean,
         connectionLive: AtomicBoolean,
         thinClient: ThinClientHandle,
         workspace: DevWorkspace,
@@ -140,7 +149,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         remoteIdeServer: RemoteIDEServer?,
         forwarder: Closeable?,
     ) {
-        connectWaitDone.set(true)
+        connectFailed.set(true)
         if (connectionLive.get()) {
             tearDownConnection(
                 thinClient,
@@ -215,11 +224,10 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             val workspacePatch = DevWorkspacePatch(
                 workspace.namespace,
                 workspace.name,
-                devSpacesContext.client,
-                {
-                    DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
-                }
-            )
+                devSpacesContext.client
+            ) {
+                DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
+            }
             try {
                 if (workspacePatch.hasRestartAnnotation()) {
                     closeAllProjects()
@@ -339,7 +347,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onDevWorkspaceStopped: () -> Unit,
         remoteIdeServer: RemoteIDEServer?,
         forwarder: Closeable?,
-        connectWaitDone: AtomicBoolean,
+        connectFailed: AtomicBoolean,
         connectionLive: AtomicBoolean,
     ): ThinClientHandle {
         val thinClient = LinkedClientManager
@@ -352,11 +360,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
                 false
             )
 
-        thinClient.onClientPresenceChanged.advise(thinClient.lifetime) { connectWaitDone.set(true) }
-
         fun notifyThinClientClosed() {
             onThinClientClosed(
-                connectWaitDone,
+                connectFailed,
                 connectionLive,
                 thinClient,
                 workspace,
@@ -372,22 +378,29 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         return thinClient
     }
 
-    private suspend fun waitForThinClientConnect(
+    /**
+     * Waits for the JetBrains Thin Client to become available.
+     *
+     * The first-time JetBrains Client download may take several minutes. This phase waits
+     * until [thinClient.clientPresent] is true, or for a permanent failure signalled via
+     * [connectFailed] (clientClosed / clientFailedToOpenProject). There is no wall-clock
+     * timeout on this wait.
+     */
+    @Suppress("UnstableApiUsage")
+    internal suspend fun waitForThinClientConnect(
         thinClient: ThinClientHandle,
-        connectWaitDone: AtomicBoolean,
+        connectFailed: AtomicBoolean,
         checkCancelled: (() -> Unit)?
     ) {
-        @Suppress("ConvertLongToDuration")
-        val success = withTimeoutOrNull(60_000L) {
-            while (!connectWaitDone.get()) {
-                checkCancelled?.invoke()
-                delay(200L)
-            }
-            true
-        } ?: false
+        while (!thinClient.clientPresent && !connectFailed.get()) {
+            checkCancelled?.invoke()
+            delay(CONNECT_POLL)
+        }
 
-        check(success && thinClient.clientPresent) {
-            "Could not connect, workspace IDE is not ready."
+        if (!thinClient.clientPresent || connectFailed.get()) {
+            throw ThinClientNotReadyException(
+                "Could not connect, workspace IDE is not ready."
+            )
         }
     }
 }

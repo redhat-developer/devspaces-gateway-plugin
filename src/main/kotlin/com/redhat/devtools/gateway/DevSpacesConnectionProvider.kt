@@ -11,9 +11,7 @@
  */
 package com.redhat.devtools.gateway
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.ui.dsl.builder.Align.Companion.CENTER
 import com.intellij.ui.dsl.builder.panel
@@ -66,48 +64,13 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                         indicator.text = "Connecting to DevSpace..."
 
                         val handle = doConnect(parameters, ctx, indicator)
-                        val thinClient = handle.clientHandle
-                            ?: throw RuntimeException("Failed to obtain ThinClientHandle")
 
-                        if (thinClient.clientPresent) {
-                            indicator.text = "Workspace IDE has started successfully"
-                            indicator.text2 = "Opening project window…"
-                            runDelayed(1000) { if (indicator.isRunning) indicator.stop() }
-                            cont.resume(handle)
-                            return@runProcessWithProgressSynchronously
-                        }
+                        indicator.text = "Workspace IDE has started successfully"
+                        indicator.text2 = "Opening project window…"
+                        runDelayed(1000) { if (indicator.isRunning) indicator.stop() }
 
-                        indicator.text = "Waiting for workspace IDE to start..."
-
-                        val ready = CompletableDeferred<GatewayConnectionHandle?>()
-
-                        thinClient.onClientPresenceChanged.advise(thinClient.lifetime,
-                            onClientPresenceChanged(ready, indicator, handle)
-                        )
-                        thinClient.clientFailedToOpenProject.advise(thinClient.lifetime,
-                            onClientFailedToOpenProject(ready, indicator)
-                        )
-                        thinClient.clientClosed.advise(thinClient.lifetime,
-                            onClientClosed(ready, indicator)
-                        )
-                        ready.invokeOnCompletion { error ->
-                            if (error == null) {
-                                cont.resume(ready.getCompleted())
-                            } else {
-                                cont.resumeWith(Result.failure(error))
-                            }
-                        }
-
-                        runBlocking {
-                            withTimeoutOrNull(60_000L) { ready.await() } ?: run {
-                                if (ready.isActive) {
-                                    indicator.text = "Workspace IDE did not report readiness in time."
-                                    ready.completeExceptionally(
-                                        RuntimeException("Workspace IDE did not report readiness in time.")
-                                    )
-                                }
-                            }
-                        }
+                        cont.resume(handle)
+                        return@runProcessWithProgressSynchronously
                     } catch (e: Exception) {
                         DevSpacesConnectionProviderErrors.showDialog(e, ctx, indicator)
                         runDelayed(2000) { if (indicator.isRunning) indicator.stop() }
@@ -120,53 +83,6 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 true,
                 null
             )
-        }
-    }
-
-    private fun onClientPresenceChanged(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator,
-        handle: GatewayConnectionHandle
-    ): (Unit) -> Unit = {
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Workspace IDE has started successfully"
-                indicator.text2 = "Opening project window…"
-                runDelayed(3000) {
-                    if (indicator.isRunning) indicator.stop()
-                    if (ready.isActive) ready.complete(handle)
-                }
-            }
-        }
-    }
-
-    private fun onClientFailedToOpenProject(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator
-    ): (Int) -> Unit = { errorCode ->
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Failed to open remote project (code: $errorCode)"
-                runDelayed(2000) {
-                    if (indicator.isRunning) indicator.stop()
-                    if (ready.isActive) ready.complete(null)
-                }
-            }
-        }
-    }
-
-    private fun onClientClosed(
-        ready: CompletableDeferred<GatewayConnectionHandle?>,
-        indicator: ProgressIndicator
-    ): (Unit) -> Unit = {
-        ApplicationManager.getApplication().invokeLater {
-            if (!ready.isCompleted) {
-                indicator.text = "Workspace IDE closed unexpectedly."
-                runDelayed(2000) {
-                    if (indicator.isRunning) indicator.stop()
-                    if (ready.isActive) ready.complete(null)
-                }
-            }
         }
     }
 

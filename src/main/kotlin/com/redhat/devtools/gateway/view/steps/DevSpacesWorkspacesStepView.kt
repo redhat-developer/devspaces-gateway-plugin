@@ -338,7 +338,7 @@ class DevSpacesWorkspacesStepView(
                             // Progress text stays visible for the whole wait; update so a long poll
                             // does not look frozen while RemoteIDEServer probes status.
                             progressIndicator.text =
-                                "Waiting for workspace IDE to become ready (up to ${RemoteIDEServer.readyTimeout}s)..."
+                                "Waiting for workspace IDE to become ready..."
                             remoteIdeServer.waitServerReady(checkCancelled)
                             progressIndicator.text = "Reading workspace IDE status..."
                             remoteIdeServer.getStatus(checkCancelled)
