@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.view.steps.workspaces
 
+import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListener
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListItem
@@ -43,6 +44,14 @@ internal class DevWorkspaceTableUpdater(
     override fun onUpdated(dw: DevWorkspace) {
         val idx = workspacesDataModel.indexOfFirst { it.workspace == dw }
         if (idx != -1) {
+            val existing = workspacesDataModel[idx].workspace
+            if (isStale(dw, existing)) {
+                thisLogger().debug(
+                    "Ignoring stale update for ${dw.namespace}/${dw.name}: " +
+                            "resourceVersion ${dw.resourceVersion} <= ${existing.resourceVersion}"
+                )
+                return
+            }
             editorResolver.refreshTracked(dw)
             // Phase/status updates do not change the editor. Keep the previously
             // resolved editor info so template-based JetBrains does not flip (CRW-11897).
@@ -54,12 +63,41 @@ internal class DevWorkspaceTableUpdater(
         }
     }
 
+    /**
+     * Whether [incoming] is an out-of-order/stale redelivery of [existing] — same
+     * workspace, but a resourceVersion that is numerically no newer than what's already
+     * displayed (e.g. a relist served from an apiserver replica whose watch cache lags
+     * the latest write, see CRW-12992). Fails open (never stale) when either
+     * resourceVersion is missing or not a plain integer, so callers that don't populate
+     * it behave exactly as before.
+     */
+    private fun isStale(incoming: DevWorkspace, existing: DevWorkspace): Boolean {
+        val incomingVersion = incoming.resourceVersion?.toLongOrNull() ?: return false
+        val existingVersion = existing.resourceVersion?.toLongOrNull() ?: return false
+        return incomingVersion <= existingVersion
+    }
+
     override fun onDeleted(dw: DevWorkspace) {
         val idx = workspacesDataModel.indexOfFirst { it.workspace == dw }
         if (idx >= 0) {
             workspacesDataModel.remove(idx)
         }
         editorResolver.untrack(dw)
+    }
+
+    override fun onReset(namespace: String, items: List<DevWorkspace>) {
+        val fresh = items.toSet() // DevWorkspace.equals/hashCode is name+namespace only
+        // Remove rows for this namespace no longer present upstream. Iterate
+        // highest-index-first so removals don't shift earlier indices.
+        for (i in workspacesDataModel.rowCount - 1 downTo 0) {
+            val existing = workspacesDataModel[i].workspace
+            if (existing.namespace == namespace && existing !in fresh) {
+                workspacesDataModel.remove(i)
+                editorResolver.untrack(existing)
+            }
+        }
+        // Upsert everything currently reported.
+        items.forEach { dw -> onUpdated(dw) }
     }
 
     private fun insertOrUpdate(dw: DevWorkspace, editor: WorkspaceEditorInfo) {

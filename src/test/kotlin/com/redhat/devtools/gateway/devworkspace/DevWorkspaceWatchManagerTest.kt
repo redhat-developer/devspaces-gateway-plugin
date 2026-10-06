@@ -14,6 +14,8 @@ package com.redhat.devtools.gateway.devworkspace
 import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspaceTableModel
 import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspaceTableController
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.models.V1Status
 import io.kubernetes.client.util.Watch
 import io.mockk.*
 import kotlinx.coroutines.CoroutineScope
@@ -39,13 +41,19 @@ class DevWorkspaceWatchManagerTest {
 
     private fun newListener() = mockk<DevWorkspaceListener>(relaxed = true)
 
+    private fun failingRelist(): (String) -> DevWorkspaceRelistResult =
+        { error("relist should not be called in this test") }
+
     private fun newWatcher(
         scope: CoroutineScope,
+        relist: (String) -> DevWorkspaceRelistResult = failingRelist(),
+        listener: DevWorkspaceListener = newListener(),
         createWatcher: (String, String?) -> Watch<Any>,
     ) = DevWorkspaceWatch(
         namespace = "test-namespace",
         createWatcher = createWatcher,
-        listener = newListener(),
+        relist = relist,
+        listener = listener,
         scope = scope,
     )
 
@@ -111,6 +119,134 @@ class DevWorkspaceWatchManagerTest {
     }
 
     @Test
+    fun `403 ApiException stops watch permanently without relisting`() = runTest(testScheduler) {
+        val scope = CoroutineScope(SupervisorJob() + testDispatcher)
+        val createWatcherCalls = AtomicInteger(0)
+        val relistCalls = AtomicInteger(0)
+
+        val watch = newWatcher(
+            scope,
+            createWatcher = { _, _ ->
+                createWatcherCalls.incrementAndGet()
+                throw ApiException(403, "Forbidden")
+            },
+            relist = { relistCalls.incrementAndGet(); error("relist must not be called on 403") },
+        )
+
+        watch.start("1")
+        testScheduler.advanceTimeBy(1_000)
+
+        assertThat(createWatcherCalls.get()).isEqualTo(1)
+        assertThat(relistCalls.get()).isEqualTo(0)
+    }
+
+    @Test
+    fun `410 ApiException triggers relist and resumes from fresh resourceVersion`() = runTest(testScheduler) {
+        val scope = CoroutineScope(SupervisorJob() + testDispatcher)
+        val createWatcherCalls = mutableListOf<String?>()
+        val relistCalls = AtomicInteger(0)
+        val listener = newListener()
+
+        val fakeDw = DevWorkspace.from(
+            mapOf(
+                "metadata" to mapOf("name" to "ws1", "namespace" to "test-namespace", "uid" to "uid1"),
+                "spec" to mapOf("started" to true),
+                "status" to mapOf("phase" to "Running")
+            )
+        )
+
+        val idleWatcher = mockk<Watch<Any>>(relaxed = true)
+        var firstCall = true
+        val watch = newWatcher(
+            scope,
+            createWatcher = { _, rv ->
+                createWatcherCalls += rv
+                if (firstCall) {
+                    firstCall = false
+                    throw ApiException(410, "Gone")
+                }
+                idleWatcher
+            },
+            relist = { _ ->
+                relistCalls.incrementAndGet()
+                DevWorkspaceRelistResult(listOf(fakeDw), "200")
+            },
+            listener = listener,
+        )
+
+        watch.start("1")
+        // Just enough virtual time for: fail with 410 -> relist -> reconnect once.
+        testScheduler.advanceTimeBy(150)
+        watch.stop()
+
+        assertThat(relistCalls.get()).isEqualTo(1)
+        assertThat(createWatcherCalls.first()).isEqualTo("1")
+        assertThat(createWatcherCalls.drop(1)).isNotEmpty().allMatch { it == "200" }
+        // Note: onReset is dispatched via Dispatchers.EDT, which needs a running IntelliJ
+        // Application and isn't available in this plain-JUnit harness (the same reason no
+        // other test in this suite exercises the ADDED/MODIFIED/DELETED dispatch path
+        // either) — the dispatch silently fails here and is logged, not asserted. The
+        // onReset reconciliation logic itself is covered directly in DevWorkspaceTableUpdaterTest.
+    }
+
+    @Test
+    fun `in-stream ERROR event with 410 status triggers relist and resumes`() = runTest(testScheduler) {
+        val scope = CoroutineScope(SupervisorJob() + testDispatcher)
+        val createWatcherCalls = mutableListOf<String?>()
+        val relistCalls = AtomicInteger(0)
+        val listener = newListener()
+
+        val fakeDw = DevWorkspace.from(
+            mapOf(
+                "metadata" to mapOf("name" to "ws1", "namespace" to "test-namespace", "uid" to "uid1"),
+                "spec" to mapOf("started" to true),
+                "status" to mapOf("phase" to "Running")
+            )
+        )
+
+        val errorEvent = Watch.Response<Any>().apply {
+            type = "ERROR"
+            status = V1Status().code(410).reason("Expired")
+        }
+        val firstWatcher = mockk<Watch<Any>>(relaxed = true)
+        every { firstWatcher.iterator() } returns mutableListOf(errorEvent).iterator()
+        val idleWatcher = mockk<Watch<Any>>(relaxed = true)
+
+        var firstCall = true
+        val watch = newWatcher(
+            scope,
+            createWatcher = { _, rv ->
+                createWatcherCalls += rv
+                if (firstCall) {
+                    firstCall = false
+                    firstWatcher
+                } else {
+                    idleWatcher
+                }
+            },
+            relist = { _ ->
+                relistCalls.incrementAndGet()
+                DevWorkspaceRelistResult(listOf(fakeDw), "200")
+            },
+            listener = listener,
+        )
+
+        watch.start("1")
+        // Just enough virtual time for: ERROR/410 event -> relist -> reconnect once.
+        testScheduler.advanceTimeBy(150)
+        watch.stop()
+
+        assertThat(relistCalls.get()).isEqualTo(1)
+        assertThat(createWatcherCalls.first()).isEqualTo("1")
+        assertThat(createWatcherCalls.drop(1)).isNotEmpty().allMatch { it == "200" }
+        // Note: onReset is dispatched via Dispatchers.EDT, which needs a running IntelliJ
+        // Application and isn't available in this plain-JUnit harness (the same reason no
+        // other test in this suite exercises the ADDED/MODIFIED/DELETED dispatch path
+        // either) — the dispatch silently fails here and is logged, not asserted. The
+        // onReset reconciliation logic itself is covered directly in DevWorkspaceTableUpdaterTest.
+    }
+
+    @Test
     fun `double start on DevWorkspaceWatchManager does not duplicate watchers`() = runTest(testScheduler) {
         val scope = CoroutineScope(SupervisorJob() + testDispatcher)
         var createWatcherCalls = 0
@@ -119,6 +255,7 @@ class DevWorkspaceWatchManagerTest {
                 createWatcherCalls++
                 mockk<Watch<Any>>(relaxed = true)
             },
+            relist = failingRelist(),
             listener = newListener(),
             scope = scope,
         )
