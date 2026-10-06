@@ -32,6 +32,10 @@ fun ApiException.isForbidden(): Boolean {
     return code == 403 || getStatus()?.code == 403
 }
 
+fun ApiException.isGone(): Boolean {
+    return code == 410 || getStatus()?.code == 410
+}
+
 fun ApiException.isDevWorkspaceCrdMissing(): Boolean {
     val status = getStatus() ?: return false
     val message = status.message.orEmpty()

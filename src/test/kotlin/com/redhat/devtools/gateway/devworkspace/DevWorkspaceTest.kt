@@ -232,6 +232,39 @@ class DevWorkspaceTest {
         assertThat(result.labels).isEmpty()
     }
 
+    @Test
+    fun `DevWorkspaceObjectMeta from map populates resourceVersion when present`() {
+        // given
+        val map = mapOf(
+            "name" to "test-workspace",
+            "namespace" to "test-ns",
+            "uid" to "test-uid",
+            "resourceVersion" to "12345"
+        )
+
+        // when
+        val result = DevWorkspaceObjectMeta.from(map)
+
+        // then
+        assertThat(result.resourceVersion).isEqualTo("12345")
+    }
+
+    @Test
+    fun `DevWorkspaceObjectMeta from map leaves resourceVersion null when absent`() {
+        // given
+        val map = mapOf(
+            "name" to "test-workspace",
+            "namespace" to "test-ns",
+            "uid" to "test-uid"
+        )
+
+        // when
+        val result = DevWorkspaceObjectMeta.from(map)
+
+        // then
+        assertThat(result.resourceVersion).isNull()
+    }
+
     private fun createDevWorkspace(
         name: String = "test-workspace",
         namespace: String = "test-namespace",

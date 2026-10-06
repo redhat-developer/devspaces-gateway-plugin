@@ -34,6 +34,17 @@ data class DevWorkspace(
             return metadata.uid
         }
 
+    /**
+     * The object's `metadata.resourceVersion`, or `null` if unknown. Used to detect and
+     * discard out-of-order/stale redeliveries of this workspace (e.g. a relist that read
+     * from an apiserver replica whose watch cache lags the latest write) — never used for
+     * row identity (see [equals]).
+     */
+    val resourceVersion: String?
+        get() {
+            return metadata.resourceVersion
+        }
+
     val started: Boolean
         get() {
             return spec.started
@@ -95,7 +106,8 @@ data class DevWorkspaceObjectMeta(
     val namespace: String,
     val uid: String,
     val annotations: Map<String, String>,
-    val labels: Map<String, String>
+    val labels: Map<String, String>,
+    val resourceVersion: String? = null
 ) {
     companion object {
         fun from(map: Any) = object {
@@ -108,13 +120,15 @@ data class DevWorkspaceObjectMeta(
             @Suppress("UNCHECKED_CAST")
             val labels = (Utils.getValue(map, arrayOf("labels")) as? Map<String, String>)
                 ?: emptyMap<String, String>()
+            val resourceVersion = Utils.getValue(map, arrayOf("resourceVersion")) as? String
 
             val data = DevWorkspaceObjectMeta(
                 name as String,
                 namespace as String,
                 uid as String,
                 annotations,
-                labels
+                labels,
+                resourceVersion
             )
         }.data
     }
