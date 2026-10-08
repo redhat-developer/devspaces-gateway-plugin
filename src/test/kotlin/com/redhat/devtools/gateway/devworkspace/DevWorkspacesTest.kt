@@ -307,6 +307,39 @@ class DevWorkspacesTest {
     }
 
     @Test
+    fun `#listForWatchResume returns items and resourceVersion`() {
+        mockListDevWorkspaces(
+            listOf(createDevWorkspaceItem("ws1", "eclipse/che-idea-server/latest"))
+        )
+
+        val result = devWorkspaces.listForWatchResume(namespace)
+
+        assertThat(result.items).hasSize(1)
+        assertThat(result.items[0].name).isEqualTo("ws1")
+        assertThat(result.resourceVersion).isEqualTo("1")
+    }
+
+    @Test
+    fun `#listForWatchResume throws on 403 instead of returning empty`() {
+        mockListDevWorkspacesThrows(ApiException(403, "Forbidden"))
+
+        assertThatThrownBy { devWorkspaces.listForWatchResume(namespace) }
+            .isInstanceOf(ApiException::class.java)
+            .extracting("code")
+            .isEqualTo(403)
+    }
+
+    @Test
+    fun `#listForWatchResume throws on 404 instead of returning empty`() {
+        mockListDevWorkspacesThrows(ApiException(404, "Not Found"))
+
+        assertThatThrownBy { devWorkspaces.listForWatchResume(namespace) }
+            .isInstanceOf(ApiException::class.java)
+            .extracting("code")
+            .isEqualTo(404)
+    }
+
+    @Test
     fun `#listWithResult throws ApiException on devworkspaces list 401`() {
         mockkStatic(Logger::class)
         every { Logger.getInstance(DevWorkspaces::class.java) } returns mockk(relaxed = true)

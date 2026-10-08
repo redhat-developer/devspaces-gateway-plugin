@@ -25,7 +25,9 @@ import kotlinx.coroutines.*
 
 /**
  * Result of a fresh LIST performed to resume a watch after its resource version
- * expired (HTTP 410 Gone).
+ * expired (HTTP 410 Gone). Produced by a throwing list ([DevWorkspaces.listForWatchResume]);
+ * failures never reach here — [DevWorkspaceWatch.relistAndReconcile] catches them and
+ * skips [DevWorkspaceListener.onReset].
  */
 internal data class DevWorkspaceRelistResult(
     val items: List<DevWorkspace>,
@@ -80,9 +82,11 @@ interface DevWorkspaceListener {
     fun onDeleted(dw: DevWorkspace)
 
     /**
-     * Called after a watch's resource version expired and the namespace was relisted.
-     * [items] is the authoritative, current set of DevWorkspaces for [namespace];
-     * the listener must reconcile its view against it (add/update/remove as needed).
+     * Called after a watch's resource version expired and the namespace was relisted
+     * successfully. [items] is the authoritative, current set of DevWorkspaces for
+     * [namespace]; the listener must reconcile its view against it (add/update/remove
+     * as needed). Not called when the relist itself failed, so listeners can safely
+     * treat [items] as ground truth.
      */
     fun onReset(namespace: String, items: List<DevWorkspace>)
 }
@@ -219,7 +223,9 @@ internal class DevWorkspaceWatch(
      * [DevWorkspaceListener.onReset], and returns the resource version to resume
      * watching from (or `null` if the LIST itself failed, so the next loop iteration
      * retries). A failure while notifying the listener does not discard the fresh
-     * resource version — the watch must still resume from it.
+     * resource version — the watch must still resume from it. Callers must supply a
+     * throwing list (see [DevWorkspaces.listForWatchResume]); swallowed empty results
+     * must not be passed in, or [onReset] would wipe the table.
      */
     private suspend fun relistAndReconcile(): String? {
         val result = try {
