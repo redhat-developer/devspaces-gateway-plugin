@@ -140,70 +140,17 @@ internal class DevWorkspaceWatch(
                 watcher.use { watcher ->
                     for (event in watcher) {
                         if (!scope.isActive || stopped) break
-
-                        if (event.type == "ERROR") {
-                            // Watch.parseLine() deserializes ERROR events into a V1Status and
-                            // resolves the more specific Response(String, V1Status) constructor,
-                            // which sets `object` to null and the payload lands in `status` instead.
-                            val status = event.status
-                            if (status.isResourceVersionExpired()) {
-                                thisLogger().info(
-                                    "DevWorkspace watch for namespace '$namespace' received 410/Expired " +
-                                            "(resourceVersion=$currentResourceVersion); relisting to resume."
-                                )
-                                currentResourceVersion = relistAndReconcile()
-                            } else {
-                                thisLogger().warn(
-                                    "DevWorkspace watch for namespace '$namespace' received ERROR event: " +
-                                            "code=${status?.code} reason=${status?.reason} message=${status?.message}"
-                                )
-                            }
-                            break // stream is ending/unusable after an ERROR event — reconnect
-                        }
-
-                        val dw = DevWorkspace.from(event.`object`)
-                        thisLogger().debug(
-                            "DevWorkspace watch for namespace '$namespace': ${event.type} " +
-                                    "${dw.name} phase=${dw.phase} resourceVersion=${dw.resourceVersion}"
-                        )
-                        // Track progress through the stream independently of whether dispatching
-                        // to the listener succeeds, so a transient UI-dispatch failure can't make
-                        // the next reconnect resume from a stale resource version.
-                        dispatchToListener {
-                            when (event.type) {
-                                "ADDED"    -> listener.onAdded(dw)
-                                "MODIFIED" -> listener.onUpdated(dw)
-                                "DELETED"  -> listener.onDeleted(dw)
-                            }
-                        }
-                        dw.resourceVersion?.let { currentResourceVersion = it }
+                        val outcome = handleEvent(event, currentResourceVersion)
+                        currentResourceVersion = outcome.resourceVersion
+                        if (!outcome.streamUsable) break
                     }
                     // connection dropped or closed — reconnect from currentResourceVersion
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
-                if (e.isForbidden() || e.isNotFound()) {
-                    // don't retry, user cannot watch this namespace/resource.
-                    thisLogger().warn(
-                        "DevWorkspace watch for namespace '$namespace' stopped permanently: " +
-                                "${e.code} ${e.message}"
-                    )
-                    stopped = true
-                    return
-                }
-                if (e.isGone()) {
-                    thisLogger().info(
-                        "DevWorkspace watch for namespace '$namespace' got 410 Gone on reconnect " +
-                                "(resourceVersion=$currentResourceVersion); relisting to resume."
-                    )
-                    currentResourceVersion = relistAndReconcile()
-                } else {
-                    thisLogger().warn(
-                        "DevWorkspace watch for namespace '$namespace' Kubernetes API error ${e.code}; retrying.",
-                        e
-                    )
-                }
+                currentResourceVersion = handleApiException(e, currentResourceVersion)
+                if (stopped) return
             } catch (e: Exception) {
                 thisLogger().debug(
                     "DevWorkspace watch for namespace '$namespace' connection dropped; reconnecting.",
@@ -216,6 +163,92 @@ internal class DevWorkspaceWatch(
             @Suppress("ConvertLongToDuration")
             delay(100)
         }
+    }
+
+    /**
+     * Outcome of handling one watch event. [resourceVersion] is the version to resume from
+     * once the event is consumed; [streamUsable] is `false` after an ERROR event (the stream
+     * is ending/unusable), which makes the loop break out and reconnect.
+     */
+    private data class EventOutcome(
+        val resourceVersion: String?,
+        val streamUsable: Boolean
+    )
+
+    /**
+     * Handles a single watch [event] and returns the resulting [EventOutcome]. An ERROR
+     * event carrying an expired resource version triggers a relist-and-resume; any other
+     * ERROR event is logged and ends the stream. ADDED/MODIFIED/DELETED events are
+     * dispatched to the listener and advance the tracked resource version.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun handleEvent(event: Watch.Response<Any>, currentResourceVersion: String?): EventOutcome {
+        if (event.type == "ERROR") {
+            // Watch.parseLine() deserializes ERROR events into a V1Status and
+            // resolves the more specific Response(String, V1Status) constructor,
+            // which sets `object` to null and the payload lands in `status` instead.
+            val status = event.status
+            if (status.isResourceVersionExpired()) {
+                thisLogger().info(
+                    "DevWorkspace watch for namespace '$namespace' received 410/Expired " +
+                            "(resourceVersion=$currentResourceVersion); relisting to resume."
+                )
+                return EventOutcome(relistAndReconcile(), streamUsable = false)
+            }
+            thisLogger().warn(
+                "DevWorkspace watch for namespace '$namespace' received ERROR event: " +
+                        "code=${status?.code} reason=${status?.reason} message=${status?.message}"
+            )
+            return EventOutcome(currentResourceVersion, streamUsable = false)
+        }
+
+        val dw = DevWorkspace.from(event.`object`)
+        thisLogger().debug(
+            "DevWorkspace watch for namespace '$namespace': ${event.type} " +
+                    "${dw.name} phase=${dw.phase} resourceVersion=${dw.resourceVersion}"
+        )
+        // Track progress through the stream independently of whether dispatching
+        // to the listener succeeds, so a transient UI-dispatch failure can't make
+        // the next reconnect resume from a stale resource version.
+        dispatchToListener {
+            when (event.type) {
+                "ADDED"    -> listener.onAdded(dw)
+                "MODIFIED" -> listener.onUpdated(dw)
+                "DELETED"  -> listener.onDeleted(dw)
+            }
+        }
+        return EventOutcome(dw.resourceVersion ?: currentResourceVersion, streamUsable = true)
+    }
+
+    /**
+     * Handles a Kubernetes API [e] thrown while (re)connecting the watch. 403/404 stop the
+     * watch permanently (the user cannot watch this namespace/resource); a 410 Gone means
+     * the resource version expired, so it relists and resumes from the fresh version;
+     * anything else is retried. Returns the [currentResourceVersion] to resume from.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun handleApiException(e: ApiException, currentResourceVersion: String?): String? {
+        if (e.isForbidden() || e.isNotFound()) {
+            // don't retry, user cannot watch this namespace/resource.
+            thisLogger().warn(
+                "DevWorkspace watch for namespace '$namespace' stopped permanently: " +
+                        "${e.code} ${e.message}"
+            )
+            stopped = true
+            return currentResourceVersion
+        }
+        if (e.isGone()) {
+            thisLogger().info(
+                "DevWorkspace watch for namespace '$namespace' got 410 Gone on reconnect " +
+                        "(resourceVersion=$currentResourceVersion); relisting to resume."
+            )
+            return relistAndReconcile()
+        }
+        thisLogger().warn(
+            "DevWorkspace watch for namespace '$namespace' Kubernetes API error ${e.code}; retrying.",
+            e
+        )
+        return currentResourceVersion
     }
 
     /**
