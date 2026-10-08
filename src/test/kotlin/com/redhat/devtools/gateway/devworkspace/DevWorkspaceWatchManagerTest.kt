@@ -247,6 +247,45 @@ class DevWorkspaceWatchManagerTest {
     }
 
     @Test
+    fun `relist that throws does not reset the listener and resumes from latest`() = runTest(testScheduler) {
+        val scope = CoroutineScope(SupervisorJob() + testDispatcher)
+        val createWatcherCalls = mutableListOf<String?>()
+        val relistCalls = AtomicInteger(0)
+        val listener = newListener()
+
+        val idleWatcher = mockk<Watch<Any>>(relaxed = true)
+        var firstCall = true
+        val watch = newWatcher(
+            scope,
+            createWatcher = { _, rv ->
+                createWatcherCalls += rv
+                if (firstCall) {
+                    firstCall = false
+                    throw ApiException(410, "Gone")
+                }
+                idleWatcher
+            },
+            relist = { _ ->
+                relistCalls.incrementAndGet()
+                // Throwing list (listForWatchResume) — catch in relistAndReconcile skips onReset.
+                throw ApiException(403, "Forbidden")
+            },
+            listener = listener,
+        )
+
+        watch.start("1")
+        // Just enough virtual time for: fail with 410 -> relist throws -> reconnect once.
+        testScheduler.advanceTimeBy(150)
+        watch.stop()
+
+        assertThat(relistCalls.get()).isEqualTo(1)
+        assertThat(createWatcherCalls.first()).isEqualTo("1")
+        // Failed relist returns null — the watch resumes from the latest.
+        assertThat(createWatcherCalls.drop(1)).isNotEmpty().allMatch { it == null }
+        verify(exactly = 0) { listener.onReset(any(), any()) }
+    }
+
+    @Test
     fun `double start on DevWorkspaceWatchManager does not duplicate watchers`() = runTest(testScheduler) {
         val scope = CoroutineScope(SupervisorJob() + testDispatcher)
         var createWatcherCalls = 0

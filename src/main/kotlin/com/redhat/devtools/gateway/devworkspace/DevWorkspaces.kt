@@ -100,6 +100,25 @@ class DevWorkspaces(private val client: ApiClient) {
         )
     }
 
+    /**
+     * LIST for watch 410 recovery — never swallows; callers must catch.
+     * Unlike [listWithResult], 403/404/CRD-missing propagate so the watch path
+     * can keep existing table rows instead of treating a failed list as empty.
+     */
+    @Throws(ApiException::class)
+    internal fun listForWatchResume(namespace: String): DevWorkspaceRelistResult {
+        val response = customApi.listNamespacedCustomObject(
+            "workspace.devfile.io",
+            "v1alpha2",
+            namespace,
+            "devworkspaces"
+        ).execute()
+        val items = (Utils.getValue(response, arrayOf("items")) as List<*>)
+            .map { DevWorkspace.from(it) }
+        val rv = Utils.getValue(response, arrayOf("metadata", "resourceVersion")) as String?
+        return DevWorkspaceRelistResult(items, rv)
+    }
+
     @Throws(ApiException::class)
     fun list(namespace: String): List<DevWorkspace> {
        return listWithResult(namespace).items.map { it.workspace }

@@ -14,7 +14,6 @@ package com.redhat.devtools.gateway.view.steps.workspaces
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.invokeLater
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceListItem
-import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRelistResult
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceTemplate
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceWatchManager
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
@@ -59,10 +58,7 @@ internal class DevWorkspaceTableController(
         createWatch = { ns, latestResourceVersion ->
             devWorkspaces.createWatcher(ns, latestResourceVersion = latestResourceVersion)
         },
-        relist = { ns ->
-            val result = devWorkspaces.listWithResult(ns)
-            DevWorkspaceRelistResult(result.items.map { it.workspace }, result.resourceVersion)
-        },
+        relist = { ns -> devWorkspaces.listForWatchResume(ns) },
         listener = DevWorkspaceTableUpdater(workspacesTableModel, editorResolver),
         scope = scope
     )
