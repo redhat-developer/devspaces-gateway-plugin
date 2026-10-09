@@ -1,0 +1,17 @@
+---
+description: Guardrails for using OpenCode as the implementation worker
+alwaysApply: true
+---
+
+# OpenCode Delegation
+
+When OpenCode is being used as the implementation worker:
+
+- Do not implement delegated tasks yourself.
+- Review OpenCode's reported diff before considering a task complete.
+- Delegate identified corrections back to OpenCode rather than fixing them yourself.
+- Do not interrupt OpenCode merely because it is taking a long time.
+- OpenCode uses a slow local model; substantial execution time, reasoning, testing, and context compaction are normal.
+- Do not start implementing a delegated task yourself while OpenCode is still working on it.
+- Do not send OpenCode a replacement implementation and tell it to stop merely because it has taken longer than expected.
+- A long execution time by itself is not evidence that OpenCode is stuck.
