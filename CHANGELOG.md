@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-10-09
+
+### ✨ New Features and Enhancements
+
+- enhancement: remote IDE is not responsive enough, feels sluggish, slow (CRW-13358)  by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/378
+- enhancement: list all DevWorkspaces, handle inaccessible templates gracefully (CRW-11897) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/359
+
+### 🐛 Bug Fixes
+
+- fix: Gateway: wizard page with workspaces has flickering workspace status icons and buttons (CRW-13522) by @vrubezhny in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/382
+- fix: thin client connection error during slow download by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/366
+- fix(clipboard): catch clipboard open failures on Windows (CRW-12883) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/370
+- fix(kubeconfig): create new kubeconfig file when none exists (CRW-12054) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/381
+- fix: thread pool gets exhausted if connecting to workspace is blocked (CRW-12992) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/377
+- fix: add ExponentialBackoff when waiting for the server to be ready & refactored RemoteIDEServer by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/375
+- fix: DevWorkspacePods.exec to fail on non-zero exit, timeout, and cancel cleanly (CRW-12138) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/356
+- fix: DevWorkspace watcher handling for forbidden namespaces (crw-12318) by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/365
+- fix: do not rethrow handled exec errors into parent scope (CRW-12908) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/369
+
+### ⬆️ Dependency Updates
+
+- build(deps): Bump gradle/actions from 6 to 6.2.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/360
+- build(deps): Bump com.nimbusds:nimbus-jose-jwt from 10.9 to 10.9.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/354
+- build(deps): Bump JetBrains/qodana-action from 2026.1 to 2026.1.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/355
+- build(deps): Bump actions/setup-java from 5 to 6 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/367
+- build(deps): Bump gradle/actions from 6.2.0 to 6.3.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/368
+- build(deps): Bump org.jetbrains.qodana from 2026.1.0 to 2026.2.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/351
+- build(deps): Bump com.nimbusds:oauth2-oidc-sdk from 11.38 to 11.38.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/347
+
 ## [0.0.19] - 2026-08-13
 
 ### 🐛 Bug Fixes
@@ -331,7 +360,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.19...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.20...HEAD
+[0.0.20]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.19...0.0.20
 [0.0.19]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.18...0.0.19
 [0.0.18]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...0.0.18
 [0.0.17]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.16...0.0.17
