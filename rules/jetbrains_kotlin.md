@@ -1,8 +1,3 @@
----
-description: Kotlin and JetBrains plugin coding standards
-globs: "**/*.kt"
-alwaysApply: false
----
 # Kotlin & JetBrains Plugin Development Standards
 
 Write elegant, clean, performant, thread-safe code. No draft or incomplete implementations unless explicitly requested.
