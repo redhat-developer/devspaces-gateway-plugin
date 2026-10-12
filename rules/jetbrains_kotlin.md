@@ -137,6 +137,19 @@ Write elegant, clean, performant, thread-safe code. No draft or incomplete imple
 
 ---
 
+## 7. Verification Commands
+
+**Lint (full source set):**
+- `./gradlew detekt`
+
+**Lint (single file, fast feedback):**
+- `detekt --input <path/to/file.kt>`
+
+**Type-check:**
+- `./gradlew compileKotlin`
+
+---
+
 ## Output Format
 
 **Code Changes:**
