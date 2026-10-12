@@ -11,6 +11,21 @@ Plugin for JetBrains Gateway enables local desktop development experience with t
 
 ![image](https://github.com/user-attachments/assets/0fd641e6-880a-44af-8f64-581d81f03276)
 
+## Usage
+The plugin adds a **Dev Spaces** connector to the JetBrains Gateway.
+
+1. Open the Gateway and select the **Dev Spaces** connector.
+2. Enter the Dev Spaces server URL and authenticate (Token, OpenShift OAuth, client certificate, or username/password).
+3. Select a running DevWorkspace and connect.
+
+The IDE runs on the local desktop while the workspace IDE server connects over a port-forwarded tunnel.
+
+A `jetbrains-gateway://connect` link with the workspace's `dwNamespace` and `dwName` parameters connects directly, skipping the wizard:
+
+```console
+jetbrains-gateway://connect#type=devspaces&dwNamespace=john-che&dwName=my-ws
+```
+
 ## Feedback
 We love to hear from users and developers.
 
