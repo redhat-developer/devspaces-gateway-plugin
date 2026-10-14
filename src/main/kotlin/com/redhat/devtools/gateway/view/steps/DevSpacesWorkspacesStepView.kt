@@ -25,11 +25,13 @@ import com.intellij.util.ui.JBUI
 import com.redhat.devtools.gateway.DevSpacesBundle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.ThinClientConnectException
 import com.redhat.devtools.gateway.devworkspace.*
 import com.redhat.devtools.gateway.openshift.Projects
 import com.redhat.devtools.gateway.openshift.Utils
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
+import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
@@ -380,6 +382,11 @@ class DevSpacesWorkspacesStepView(
                 try {
                     watchManager?.stop()
                     try {
+                        val progressIndicator =
+                            ProgressCountdown(ProgressManager.getInstance().progressIndicator)
+                        val checkCancelled = {
+                            if (progressIndicator.isCanceled) throw CancellationException()
+                        }
                         runBlocking(Dispatchers.IO) {
                             DevSpacesConnection(devSpacesContext).connect(
                                 { refreshSelectedAndButtons() },
@@ -388,19 +395,37 @@ class DevSpacesWorkspacesStepView(
                                     if (waitDevWorkspaceStopped(devSpacesContext.devWorkspace)) {
                                         refreshSelectedAndButtons()
                                     }
-                                }
+                                },
+                                onProgress = { progressEvent ->
+                                    progressIndicator.update(
+                                        progressEvent.title,
+                                        progressEvent.message,
+                                        progressEvent.countdownSeconds
+                                    )
+                                },
+                                checkCancelled = checkCancelled
                             )
                         }
                     } finally {
                         watchManager?.start(cachedWatchResourceVersions)
                     }
                 } catch (e: Exception) {
+                    if (e.isCancellationException()) {
+                        return@runProcessWithProgressSynchronously
+                    }
                     refreshSelectedAndButtons()
                     thisLogger().error("Workspace IDE connection failed.", e)
-                    if (e.isServerContainerNotFound()) {
-                        Dialogs.error(NO_JETBRAINS_IDE_CONTAINER_MESSAGE, "Cannot Connect to Workspace IDE")
-                    } else {
-                        Dialogs.error(
+                    when {
+                        e.isServerContainerNotFound() -> Dialogs.error(
+                            NO_JETBRAINS_IDE_CONTAINER_MESSAGE,
+                            "Cannot Connect to Workspace IDE"
+                        )
+                        // classified thin-client failures carry their own dialog title
+                        e is ThinClientConnectException -> Dialogs.error(
+                            e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                            e.title
+                        )
+                        else -> Dialogs.error(
                             e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
                             "Connection Error"
                         )
