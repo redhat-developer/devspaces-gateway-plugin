@@ -38,10 +38,17 @@ object DevSpacesConnectionProviderErrors {
                     || indicator.isCanceled) {
                     indicator.text2 = "Cancelled..."
                 } else {
-                    Dialogs.error(
-                        e.message ?: "Could not connect to workspace.",
-                        "Connection Error"
-                    )
+                    when {
+                        // classified thin-client failures carry their own dialog title
+                        e is ThinClientConnectException -> Dialogs.error(
+                            e.message ?: "Could not connect to workspace.",
+                            e.title
+                        )
+                        else -> Dialogs.error(
+                            e.message ?: "Could not connect to workspace.",
+                            "Connection Error"
+                        )
+                    }
                 }
             }
         }

@@ -35,16 +35,22 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
             delegate.text2 = it
         }
 
-        if (countdownSeconds != null && countdownSeconds > 0) startCountdown(countdownSeconds)
-        else stopCountdown()
+        if (countdownSeconds != null && countdownSeconds > 0) {
+            startCountdown(countdownSeconds)
+        } else {
+            stopCountdown()
+        }
     }
 
     private fun startCountdown(seconds: Long) {
         job?.cancel()
         var remaining = seconds
         job = scope.launch {
-            while (remaining > 0 && isActive && !delegate.isCanceled) {
-                delegate.text2 = buildText2WithSuffix(remaining)
+            while (remaining > 0
+                && isActive
+                && !delegate.isCanceled
+            ) {
+                delegate.text2 = appendSecondsLeft(remaining)
                 @Suppress("ConvertLongToDuration")
                 delay(1000L)
                 remaining--
@@ -64,10 +70,14 @@ class ProgressCountdown(private val delegate: ProgressIndicator) : ProgressIndic
         scope.cancel()
     }
 
-    private fun buildText2WithSuffix(secondsLeft: Long): String =
+    private fun appendSecondsLeft(secondsLeft: Long): String =
         buildString {
-            baseText2?.let { append(it) }
-            append(" \t$EN_DASH $secondsLeft second${if (secondsLeft != 1L) "s" else ""} left")
+            val hasText = !baseText2.isNullOrBlank()
+            if (hasText) {
+                append(baseText2)
+                append(" \t$EN_DASH ")
+            }
+            append("$secondsLeft second${if (secondsLeft != 1L) "s" else ""} left")
         }
 
     data class ProgressEvent (
