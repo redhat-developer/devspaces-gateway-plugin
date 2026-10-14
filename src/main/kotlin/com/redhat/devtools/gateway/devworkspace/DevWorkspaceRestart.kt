@@ -20,6 +20,7 @@ import com.intellij.openapi.wm.WindowManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.ThinClientConnectException
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
@@ -70,7 +71,17 @@ class DevWorkspaceRestart(
                     } catch (e: Exception) {
                         thisLogger().error("Could not restart workspace $namespace/$workspaceName",e)
                         ApplicationManager.getApplication().invokeLater {
-                            Dialogs.error(e.messageWithoutPrefix()?: "Could not connect to workspace IDE","Connection Error")
+                            when {
+                                // classified thin-client failures carry their own dialog title
+                                e is ThinClientConnectException -> Dialogs.error(
+                                    e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                                    e.title
+                                )
+                                else -> Dialogs.error(
+                                    e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                                    "Connection Error"
+                                )
+                            }
                         }
                     } finally {
                         removeAnnotation()

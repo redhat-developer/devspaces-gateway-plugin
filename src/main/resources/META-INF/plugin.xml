@@ -13,4 +13,17 @@
         <gatewayConnector implementation="com.redhat.devtools.gateway.DevSpacesConnector"/>
         <gatewayConnectionProvider implementation="com.redhat.devtools.gateway.DevSpacesConnectionProvider"/>
     </extensions>
+
+    <!--
+      Serves the JetBrains Client download from the local Dev Spaces mirror while a
+      connection is being established, so that first-time client downloads survive
+      unstable networks (the platform downloader cannot resume interrupted transfers).
+      See com.redhat.devtools.gateway.download.DevSpacesClientMirror.
+    -->
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+                serviceInterface="com.intellij.remoteDev.downloader.JetBrainsClientDownloaderConfigurationProvider"
+                serviceImplementation="com.redhat.devtools.gateway.download.DevSpacesClientDownloaderConfigurationProvider"
+                overrides="true"/>
+    </extensions>
 </idea-plugin>
