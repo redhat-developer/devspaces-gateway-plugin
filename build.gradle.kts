@@ -90,7 +90,7 @@ dependencies {
 
     // RedHat Auth dependencies
     implementation("com.nimbusds:oauth2-oidc-sdk:11.38.2")
-    implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")   // JWT processing
+    implementation("com.nimbusds:nimbus-jose-jwt:10.10")   // JWT processing
 
     // JSON serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:${libs.versions.kotlinxSerialization.get()}")
