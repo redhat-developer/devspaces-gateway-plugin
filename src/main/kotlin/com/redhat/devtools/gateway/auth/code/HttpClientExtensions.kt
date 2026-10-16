@@ -63,6 +63,13 @@ suspend fun HttpClient.sendPostRequest(
     return json.decodeFromString(AccessTokenResponseJson.serializer(), response.body())
 }
 
+/** Returns the value of the `Content-Length` header, or null if there's no usable value. */
+fun HttpResponse<*>.contentLength(): Long? =
+    headers()
+        .firstValueAsLong("Content-Length")
+        .orElse(-1)
+        .takeIf { it >= 0 }
+
 private fun HttpResponse<String>.checkError(errorPrefix: String) {
     if (statusCode() !in 200..299) {
         val body = body()?.takeIf { it.isNotEmpty() }

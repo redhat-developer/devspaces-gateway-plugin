@@ -12,10 +12,11 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
-import com.redhat.devtools.gateway.ThinClientNotReadyException
+import com.redhat.devtools.gateway.ThinClientDownloadException
+import com.redhat.devtools.gateway.ThinClientLaunchException
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
-import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
+import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import io.mockk.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -24,6 +25,8 @@ import kotlinx.coroutines.yield
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 
 class DevSpacesConnectionTest {
@@ -63,7 +66,7 @@ class DevSpacesConnectionTest {
         val connectFailed = AtomicBoolean(false)
         every { thinClient.clientPresent } returns true
 
-        connection.waitForThinClientConnect(thinClient, connectFailed, null)
+        connection.waitForConnect(thinClient, connectFailed, null)
     }
 
     @Test
@@ -73,7 +76,7 @@ class DevSpacesConnectionTest {
             every { thinClient.clientPresent } returns false
 
             val job: Job = launch {
-                connection.waitForThinClientConnect(thinClient, connectFailed, null)
+                connection.waitForConnect(thinClient, connectFailed, null)
             }
 
             yield()
@@ -93,7 +96,7 @@ class DevSpacesConnectionTest {
             callCount > 3
         }
 
-        connection.waitForThinClientConnect(thinClient, connectFailed, null)
+        connection.waitForConnect(thinClient, connectFailed, null)
 
         assertThat(callCount).isGreaterThan(3)
     }
@@ -103,15 +106,25 @@ class DevSpacesConnectionTest {
         val connectFailed = AtomicBoolean(true)
         every { thinClient.clientPresent } returns false
 
-        var thrown: Throwable? = null
-        try {
-            connection.waitForThinClientConnect(thinClient, connectFailed, null)
-        } catch (e: Throwable) {
-            thrown = e
+        val thrown = assertThrows<ThinClientLaunchException> {
+            connection.waitForConnect(thinClient, connectFailed, null)
         }
 
-        assertThat(thrown).isInstanceOf(ThinClientNotReadyException::class.java)
-        assertThat(thrown?.message).contains("Could not connect")
+        assertThat(thrown.message).contains("Could not start the JetBrains Client")
+    }
+
+    @Test
+    fun `mirrorThinClient reports download failures as download exceptions`() = runTest {
+        val thrown = assertThrows<ThinClientDownloadException> {
+            connection.mirrorClient(
+                URI("tcp://127.0.0.1:5990#cb=not-a-build-number"),
+                DevSpacesClientConnectProgress(),
+                null,
+            )
+        }
+
+        assertThat(thrown.message).contains("Could not download the JetBrains Client")
+        assertThat(thrown.message).contains("Invalid client build number")
     }
 
     @Test

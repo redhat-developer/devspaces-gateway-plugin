@@ -24,6 +24,8 @@ import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.devworkspace.RestartDevWorkspaceAnnotationWatch
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
+import com.redhat.devtools.gateway.download.DevSpacesClientMirror
+import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
@@ -34,7 +36,6 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.Closeable
-import java.io.IOException
 import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -54,8 +55,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Still clear [DevSpacesContext.activeWorkspaces] when the connection ends (before optional
  * remote stop) for tooltips / bookkeeping.
  */
-class ThinClientNotReadyException(message: String) : IllegalStateException(message)
-
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
     companion object {
@@ -74,7 +73,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
         checkCancelled: (() -> Unit)? = null,
         modalityState: ModalityState? = null,
-        registerRestartWatcher: Boolean? = true
+        registerRestartWatcher: Boolean = true
     ): ThinClientHandle {
         val workspace = devSpacesContext.devWorkspace
         tearDownStarted.set(false)
@@ -83,34 +82,38 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         var remoteIdeServer: RemoteIDEServer? = null
         var forwarder: Closeable? = null
         var client: ThinClientHandle? = null
+        var clientMirror: AutoCloseable? = null
         val connectionLive = AtomicBoolean(false)
+        val progress = DevSpacesClientConnectProgress(onProgress)
 
         return try {
             remoteIdeServer = waitUntilServerReady(checkCancelled, onProgress, modalityState)
 
             checkCancelled?.invoke()
             val joinLink = remoteIdeServer.getStatus(checkCancelled).joinLink
-                ?: throw IOException("Could not connect, workspace IDE is not ready. No join link present.")
+                ?: throw ThinClientNotReadyException(
+                    "Could not connect, workspace IDE is not ready. No join link present.")
 
             checkCancelled?.invoke()
-            onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                message = "Waiting for the workspace IDE client to start (first-time download may take several minutes)..."))
+            progress.waitingForClientStart()
 
             val (fwd, localPort) = setupPortForwarding(remoteIdeServer.pod)
             forwarder = fwd
 
-            val effectiveJoinLink = joinLink.replace(":5990", ":$localPort")
+            val localJoinLink = joinLink.replace(":5990", ":$localPort")
             val connectFailed = AtomicBoolean(false)
 
             checkCancelled?.invoke()
-            client = startThinClient(
-                URI(effectiveJoinLink), workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
+            clientMirror = mirrorClient(URI(localJoinLink), progress, checkCancelled)
+            client = startClient(
+                URI(localJoinLink), workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
                 remoteIdeServer, forwarder, connectFailed, connectionLive
             )
 
-            waitForThinClientConnect(client, connectFailed, checkCancelled)
+            progress.startingClient()
+            waitForConnect(client, connectFailed, checkCancelled)
 
-            if (registerRestartWatcher == true) {
+            if (registerRestartWatcher) {
                 watchRestartAnnotation(
                     workspace.namespace,
                     workspace.name,
@@ -123,13 +126,15 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             onConnected()
             client
         } catch (e: Exception) {
-            if (e !is ThinClientNotReadyException || connectionLive.get()) {
+            if (e !is ThinClientLaunchException || connectionLive.get()) {
                 runCatching { client?.close() }
             }
             tearDownConnection(
                 client, workspace, onConnectionEnded, onDevWorkspaceStopped, remoteIdeServer, forwarder
             )
             throw e
+        } finally {
+            runCatching { clientMirror?.close() }
         }
     }
 
@@ -294,7 +299,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         while (!remoteIdeServerStatus.isReady) {
             checkCancelled?.invoke()
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                message = "Waiting for the workspace to get started...",
+                message = "",
                 countdownSeconds = DevWorkspaces.RUNNING_TIMEOUT))
 
             DevWorkspaces(devSpacesContext.client)
@@ -305,8 +310,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
             checkCancelled?.invoke()
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
-                message = "Waiting for the workspace to get ready...",
-                countdownSeconds = RemoteIDEServer.readyTimeout))
+                title = "Waiting for the workspace to get ready...",
+                countdownSeconds = RemoteIDEServer.readyTimeout)
+            )
 
             remoteIdeServer = RemoteIDEServer(devSpacesContext)
             remoteIdeServerStatus = runCatching {
@@ -338,9 +344,32 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         return forwarder to localPort
     }
 
+    /**
+     * Ensures the JetBrains Client referenced by the join link is available locally
+     * before the thin client is started, and activates the mirror for this connect.
+     *
+     * The platform thin-client launcher downloads the client without resume support: on
+     * unstable links (VPN, corporate proxies) a 700+ MB first-time download is regularly
+     * cut mid-transfer, and all its 5 attempts - each restarting from byte 0 - fail,
+     * which used to surface as "workspace IDE is not ready" although the download URL
+     * works fine in a browser. Mirroring the client with resume support first lets the
+     * platform copy it from local disk instead. Download failures are reported as
+     * [ThinClientDownloadException] so the wizard can state the actual cause.
+     */
+    internal suspend fun mirrorClient(
+        localJoinLink: URI,
+        progress: DevSpacesClientConnectProgress,
+        checkCancelled: (() -> Unit)?,
+    ): AutoCloseable = try {
+        DevSpacesClientMirror().ensureMirrored(localJoinLink, progress, checkCancelled)
+    } catch (e: Exception) {
+        if (e.isCancellationException()) throw e
+        throw ThinClientDownloadException("Could not download the JetBrains Client: ${e.message}", e)
+    }
+
     @Suppress("UnstableApiUsage")
-    private fun startThinClient(
-        effectiveJoinLink: URI,
+    private fun startClient(
+        localJoinLink: URI,
         workspace: DevWorkspace,
         onConnected: () -> Unit,
         onConnectionEnded: () -> Unit,
@@ -354,7 +383,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
-                effectiveJoinLink,
+                localJoinLink,
                 "",
                 onConnected,
                 false
@@ -382,24 +411,30 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
      * Waits for the JetBrains Thin Client to become available.
      *
      * The first-time JetBrains Client download may take several minutes. This phase waits
-     * until [thinClient.clientPresent] is true, or for a permanent failure signalled via
+     * until [client.clientPresent] is true, or for a permanent failure signalled via
      * [connectFailed] (clientClosed / clientFailedToOpenProject). There is no wall-clock
      * timeout on this wait.
+     *
+     * A permanent failure is reported as [ThinClientLaunchException] — the client was
+     * started but closed or failed to open the project, e.g. because the platform's own
+     * download or extraction failed (details are in the IDE log and the platform's error
+     * notification); the workspace IDE itself is not at fault.
      */
     @Suppress("UnstableApiUsage")
-    internal suspend fun waitForThinClientConnect(
-        thinClient: ThinClientHandle,
+    internal suspend fun waitForConnect(
+        client: ThinClientHandle,
         connectFailed: AtomicBoolean,
         checkCancelled: (() -> Unit)?
     ) {
-        while (!thinClient.clientPresent && !connectFailed.get()) {
+        while (!client.clientPresent && !connectFailed.get()) {
             checkCancelled?.invoke()
+            @Suppress("ConvertLongToDuration")
             delay(CONNECT_POLL)
         }
 
-        if (!thinClient.clientPresent || connectFailed.get()) {
-            throw ThinClientNotReadyException(
-                "Could not connect, workspace IDE is not ready."
+        if (!client.clientPresent || connectFailed.get()) {
+            throw ThinClientLaunchException(
+                "Could not start the JetBrains Client. See the IDE log for details."
             )
         }
     }
