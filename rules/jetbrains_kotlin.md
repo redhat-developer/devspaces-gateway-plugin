@@ -1,8 +1,3 @@
----
-description: Kotlin and JetBrains plugin coding standards
-globs: "**/*.kt"
-alwaysApply: false
----
 # Kotlin & JetBrains Plugin Development Standards
 
 Write elegant, clean, performant, thread-safe code. No draft or incomplete implementations unless explicitly requested.
@@ -139,6 +134,19 @@ Write elegant, clean, performant, thread-safe code. No draft or incomplete imple
 **Breaking Changes:**
 - Warn when changing public signatures/instantiation
 - List dependent files requiring updates
+
+---
+
+## 7. Verification Commands
+
+**Lint (full source set):**
+- `./gradlew detekt`
+
+**Lint (single file, fast feedback):**
+- `detekt --input <path/to/file.kt>`
+
+**Type-check:**
+- `./gradlew compileKotlin`
 
 ---
 

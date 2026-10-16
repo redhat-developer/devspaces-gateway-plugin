@@ -1,17 +1,22 @@
 # Dependabot configuration:
-# https://docs.github.com/en/free-pro-team@latest/github/administering-a-repository/configuration-options-for-dependency-updates
+# https://docs.github.com/en/code-security/dependabot/dependabot-updates/configuration-options-for-the-dependency-file
 
 version: 2
 updates:
-  # Maintain dependencies for Gradle dependencies
+  # Gradle dependencies (Kotlin ignored — IntelliJ Platform Gradle Plugin aligns it)
   - package-ecosystem: "gradle"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     ignore:
       - dependency-name: "org.jetbrains.kotlin*"
-  # Maintain dependencies for GitHub Actions
+
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

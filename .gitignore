@@ -6,5 +6,21 @@ build
 .intellijPlatform/
 .kotlin/
 .vscode/
-.opencode/
+
 .serena/
+
+# JVM / Gradle / IntelliJ
+out/
+*.class
+*.jar
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# Logs
+*.log
+
+# Editor swap & backup files
+*.swp
+*.swo
+*~
