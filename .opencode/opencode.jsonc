@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    
+  },
+  "lsp": {
+    "kotlin-lsp": {
+      "command": ["kotlin-lsp", "--stdio"],
+      "extensions": [".kt", ".kts"]
+    }
+  }
+}
