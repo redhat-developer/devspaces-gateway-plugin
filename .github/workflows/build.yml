@@ -94,6 +94,9 @@ jobs:
     name: Test
     needs: [ build ]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
 
       # Check out the current repository
@@ -129,6 +132,8 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           files: ${{ github.workspace }}/build/reports/kover/report.xml
+          flags: unit-tests
+          use_oidc: true
 
   # Run Qodana inspections and provide report
   inspectCode:
