@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.server
 
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
+import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
@@ -38,6 +39,7 @@ class RemoteIDEServerTest {
         devSpacesContext = mockk(relaxed = true)
 
         mockkConstructor(DevWorkspacePods::class)
+        mockkConstructor(PodExecSession::class)
         val mockPod = V1Pod().apply {
             metadata = V1ObjectMeta().apply {
                 name = "test-pod"
@@ -231,7 +233,7 @@ class RemoteIDEServerTest {
         // then — exec should never be called, preventing a long hang on stuck pod
         assertThat(result).isEqualTo(RemoteIDEServerStatus.empty())
         coVerify(exactly = 0) {
-            anyConstructed<DevWorkspacePods>().exec(any(), any(), any(), any(), any())
+            anyConstructed<PodExecSession>().execute()
         }
     }
 
@@ -254,7 +256,7 @@ class RemoteIDEServerTest {
             anyConstructed<DevWorkspacePods>().isPodRunning(any())
         }
         coVerify(exactly = 0) {
-            anyConstructed<DevWorkspacePods>().exec(any(), any(), any(), any(), any())
+            anyConstructed<PodExecSession>().execute()
         }
     }
 

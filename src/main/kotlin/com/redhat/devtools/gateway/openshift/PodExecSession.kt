@@ -15,6 +15,7 @@ import com.redhat.devtools.gateway.openshift.apiclient.ApiClientUtils
 import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.custom.IOTrio
 import io.kubernetes.client.openapi.ApiClient
+import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.io.InputStream
@@ -25,16 +26,19 @@ import kotlin.coroutines.resumeWithException
 
 internal class PodExecSession(
     private val client: ApiClient,
-    namespace: String?,
-    podName: String?,
+    pod: V1Pod,
     private val container: String,
     private val command: Array<String>,
-    private val timeout: Long,
-    private val checkCancelled: (() -> Unit)?
+    private val timeout: Long = DEFAULT_TIMEOUT_SECONDS,
+    private val checkCancelled: (() -> Unit)? = null
 ) {
-    private val namespace: String = namespace
+    companion object {
+        const val DEFAULT_TIMEOUT_SECONDS: Long = 60
+    }
+
+    private val namespace: String = pod.metadata?.namespace
         ?: throw IOException("Pod namespace is missing")
-    private val podName: String = podName
+    private val podName: String = pod.metadata?.name
         ?: throw IOException("Pod name is missing")
 
     suspend fun execute(): String = suspendCancellableCoroutine { cont ->
@@ -140,7 +144,7 @@ internal class PodExecSession(
                 closeQuietly(ctx.io?.stderr)
                 ctx.streamsReady.complete(Unit)
             },
-            timeoutMs = timeout * 1000,
+            timeoutMs = TimeUnit.SECONDS.toMillis(timeout),
             tty = false
         )
 
@@ -157,9 +161,10 @@ internal class PodExecSession(
                     @Suppress("ConvertLongToDuration")
                     delay(200)
                 }
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
                 closeQuietly(io.stdout)
                 closeQuietly(io.stderr)
+                if (e.isCancellationException()) throw e
             }
         }
     }
