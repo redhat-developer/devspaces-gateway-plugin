@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- fix: report lost backend connection immediately, fail fast on deleted workspace pods (CRW-13909)
+
 ## [0.0.20] - 2026-10-09
 
 ### ✨ New Features and Enhancements
