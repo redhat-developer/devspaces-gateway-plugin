@@ -6,6 +6,7 @@ mockk = "1.14.11"
 
 # plugins
 changelog = "2.5.0"
+detekt = "1.23.8"
 intelliJPlatform = "2.16.0"
 kotlin = "2.1.10"
 kotlinxSerialization = "1.8.1"
@@ -23,6 +24,7 @@ mockk-agent-jvm = { group = "io.mockk", name = "mockk-agent-jvm", version.ref = 
 
 [plugins]
 changelog = { id = "org.jetbrains.changelog", version.ref = "changelog" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 intelliJPlatform = { id = "org.jetbrains.intellij.platform", version.ref = "intelliJPlatform" }
 kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
