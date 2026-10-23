@@ -65,6 +65,14 @@ There're a couple of options to install the plugin:
   - choose the built plugin (zip) located at the `build/distributions` folder, or
   - download the plugin from the [latest release](https://github.com/redhat-developer/devspaces-gateway-plugin/releases/latest)
 
+### Linting
+```console
+./gradlew detekt         # all Kotlin sources
+./gradlew detektBranch   # only files changed on the current branch vs. main
+```
+
+`detekt` reports pre-existing violations in unchanged code; `detektBranch` limits findings to the current changes. Reports are written to `build/reports/detekt/`.
+
 ### IntelliJ Plugin Verifier
 To check the plugin compatibility against the Gateway versions defined in the [gradle.properties](./gradle.properties) file.
 

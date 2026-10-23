@@ -107,6 +107,23 @@ The packaged plugin (`.zip`) is written to `build/distributions/`.
   ```
 - Coverage is collected with **Kover** (`build/reports/kover/`).
 
+### Linting
+
+```bash
+# all Kotlin sources
+./gradlew detekt
+
+# only files changed on the current branch vs. main (committed + uncommitted, including untracked)
+./gradlew detektBranch
+
+# compare against another ref
+./gradlew detektBranch -PdetektBaseRef=origin/main
+```
+
+- Reports are written to `build/reports/detekt/`.
+- `check` does not run detekt.
+- The full run reports pre-existing violations in unchanged code; `detektBranch` limits findings to the current changes.
+
 ### Plugin Verification
 
 Check compatibility against the Gateway versions defined in `build.gradle.kts`:
