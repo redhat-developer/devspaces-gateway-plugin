@@ -5,12 +5,15 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestResult
 import org.gradle.kotlin.dsl.KotlinClosure2
+import io.gitlab.arturbosch.detekt.Detekt
+import org.gradle.api.tasks.TaskProvider
 
 plugins {
     id("java") // Java support
     alias(libs.plugins.kotlin) // Kotlin support
     alias(libs.plugins.intelliJPlatform) // IntelliJ Platform Gradle Plugin
     alias(libs.plugins.changelog) // Gradle Changelog Plugin
+    alias(libs.plugins.detekt) // Detekt static code analysis
     alias(libs.plugins.qodana) // Gradle Qodana Plugin
     alias(libs.plugins.kover) // Gradle Kover Plugin
     kotlin("plugin.serialization") version libs.versions.kotlin.get() // Serialization needed for RedHat Auth
@@ -177,6 +180,31 @@ kover {
     }
 }
 
+// Base ref compared by the 'detektBranch' task; override with -PdetektBaseRef=origin/main
+val detektBaseRef = providers.gradleProperty("detektBaseRef").getOrElse("main")
+
+// Configuration-cache compatible git reads:
+// committed changes since the branch diverged from the base ref, uncommitted tracked changes and untracked files
+val committedChanges = providers.exec {
+    commandLine("git", "diff", "--name-only", "-z", "--diff-filter=ACMR", "$detektBaseRef...HEAD", "--", "src")
+}.standardOutput.asText
+val uncommittedChanges = providers.exec {
+    commandLine("git", "diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD", "--", "src")
+}.standardOutput.asText
+val untrackedFiles = providers.exec {
+    commandLine("git", "ls-files", "--others", "--exclude-standard", "-z", "--", "src")
+}.standardOutput.asText
+
+val changedKotlinFiles = committedChanges
+    .zip(uncommittedChanges) { committed, uncommitted -> committed + uncommitted }
+    .zip(untrackedFiles) { tracked, untracked -> tracked + untracked }
+    .map { output ->
+        // NUL-separated paths from 'git diff -z' / 'git ls-files -z'
+        output.split('\u0000')
+            .filter { it.endsWith(".kt") }
+            .distinct()
+    }
+
 tasks {
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
@@ -184,6 +212,39 @@ tasks {
 
     publishPlugin {
         dependsOn(patchChangelog)
+    }
+
+    // The detekt plugin adds 'detekt' to 'check' by default, which would lint the whole codebase
+    // in CI. Lint runs are started explicitly via 'detekt' or 'detektBranch' instead.
+    named("check") {
+        setDependsOn(dependsOn.filterNot { it is TaskProvider<*> && it.name == "detekt" })
+    }
+
+    // Runs detekt on all Kotlin files changed on the current branch vs. 'detektBaseRef':
+    // committed branch changes, staged, unstaged and untracked files. 'detekt' runs on all files.
+    register<Detekt>("detektBranch") {
+        // local copy: keeps the onlyIf spec free of build script references for the configuration cache
+        val baseRef = detektBaseRef
+        group = "verification"
+        description =
+            "Runs detekt on Kotlin files changed on the current branch vs. '$detektBaseRef' (committed and uncommitted)."
+        notCompatibleWithConfigurationCache("reads git working tree state at execution time")
+        setSource(files(changedKotlinFiles))
+        onlyIf {
+            val hasChanges = source.files.isNotEmpty()
+            if (!hasChanges) {
+                logger.lifecycle("No Kotlin changes vs. '$baseRef' - skipping detektBranch.")
+            }
+            hasChanges
+        }
+        reports {
+            html.required.set(true)
+            html.outputLocation.set(layout.buildDirectory.file("reports/detekt/detektBranch.html"))
+            xml.required.set(false)
+            txt.required.set(false)
+            sarif.required.set(false)
+            md.required.set(false)
+        }
     }
 
     withType<Test> {
