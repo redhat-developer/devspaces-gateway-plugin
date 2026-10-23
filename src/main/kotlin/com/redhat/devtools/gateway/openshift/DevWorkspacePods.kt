@@ -11,306 +11,77 @@
  */
 package com.redhat.devtools.gateway.openshift
 
-import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
-import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
-import kotlinx.coroutines.*
-import java.io.Closeable
-import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
-import java.net.*
 
+/**
+ * Queries the Kubernetes API for the pods of a DevWorkspace.
+ */
 class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
         const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
-        private const val COPY_BUFFER_SIZE = 64 * 1024
-        private const val CONNECT_ATTEMPTS = 5
-        private const val RECONNECT_DELAY: Long = 1000
     }
 
-    private val logger = logger<DevWorkspacePods>()
-
-    // Bounded by OkHttp's default 10s connect/read/write timeouts on the shared client
+    /**
+     * Checks whether the given pod is still running and not terminating.
+     *
+     * The pod is queried on each call so that the answer reflects the current cluster state: a pod
+     * with a deletion timestamp is terminating and thus not running, even if its phase is still
+     * `Running` — the same semantics as the port-forward liveness check.
+     *
+     * The call is bounded by OkHttp's default 10s connect/read/write timeouts on the shared client,
+     * so a hanging API server cannot block the caller indefinitely.
+     *
+     * @param pod the pod to check.
+     * @return `true` if the current phase of the pod is `Running` and it is not terminating,
+     * `false` if it is not running, is terminating, or the query fails.
+     */
     fun isPodRunning(pod: V1Pod): Boolean {
         val name = pod.metadata?.name ?: return false
         val namespace = pod.metadata?.namespace ?: return false
         return try {
             val current = CoreV1Api(client).readNamespacedPod(name, namespace).execute()
-            current.status?.phase == "Running"
-        } catch (_: Exception) {
+            current.status?.phase == "Running" && current.metadata?.deletionTimestamp == null
+        } catch (e: Exception) {
+            if (e.isCancellationException()) throw e
             false
         }
     }
 
-    // Example:
-    // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-latest/src/main/java/io/kubernetes/client/examples/ExecExample.java
-    suspend fun exec(
-        pod: V1Pod,
-        command: Array<String>,
-        container: String,
-        timeout: Long = 60,
-        checkCancelled: (() -> Unit)? = null
-    ): String {
-        val metadata = pod.metadata ?: throw IOException("Pod metadata is missing")
-        return PodExecSession(
-            client = client,
-            namespace = metadata.namespace,
-            podName = metadata.name,
-            container = container,
-            command = command,
-            timeout = timeout,
-            checkCancelled = checkCancelled
-        ).execute()
-    }
-
-    @Throws(IOException::class)
-    fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
-        val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
-        val scope = CoroutineScope(
-            // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
-            SupervisorJob() + PortForwardDispatcher.dispatcher
-        )
-        scope.acceptConnections(serverSocket, pod, localPort, remotePort)
-        return Closeable {
-            closeQuietly(serverSocket)
-            scope.cancel()
-        }
-    }
-
-    private fun CoroutineScope.acceptConnections(
-        serverSocket: ServerSocket,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
-    ) {
-        launch {
-            logger.info(
-                "Starting port forward on local port $localPort " +
-                    "(transport=java-websocket, copyBuffer=$COPY_BUFFER_SIZE, dispatcher=devspaces-port-forward)"
-            )
-
-            while (isActive) {
-                val clientSocket = createClientSocket(serverSocket) ?: break
-                applyClientSocketOptions(clientSocket)
-
-                launch {
-                    handleConnection(
-                        clientSocket,
-                        pod,
-                        localPort,
-                        remotePort
-                    )
-                }
-            }
-        }
-    }
-
-    private suspend fun createClientSocket(serverSocket: ServerSocket): Socket? {
-        return try {
-            withContext(NonCancellable) {
-                // block until connection is accepted
-                serverSocket.accept()
-            }
-        } catch (_: Exception) {
-            logger.info("Server socket stopped accepting connections.")
-            null
-        }
-    }
-
-    private suspend fun CoroutineScope.handleConnection(
-        clientSocket: Socket,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
-    ) {
-        try {
-            repeat(CONNECT_ATTEMPTS) { attempt ->
-                if (!isActive) return@repeat
-
-                var forwardResult: PortForward.PortForwardResult? = null
-                try {
-                    logger.info("Attempt #${attempt + 1}: Connecting $localPort -> $remotePort...")
-                    val portForward = PortForward(client)
-                    forwardResult = portForward.forward(pod, listOf(remotePort))
-                    logger.info("forward successful: $localPort -> $remotePort...")
-                    copyStreams(clientSocket, forwardResult, remotePort)
-                    return
-                } catch (e: Exception) {
-                    if (e.isCancellationException()) throw e
-                    logger.info(
-                        "Could not port forward $localPort -> $remotePort: ${e.message}. Retrying in ${RECONNECT_DELAY}ms..."
-                    )
-                    if (isActive) {
-                        @Suppress("ConvertLongToDuration")
-                        delay(RECONNECT_DELAY)
-                    }
-                } finally {
-                  closeStreams(remotePort, forwardResult)
-                }
-            }
-        } catch(e: Exception) {
-            if (e.isCancellationException()) throw e
-            logger.warn(
-                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
-                e)
-        } finally {
-            closeQuietly(clientSocket)
-        }
-    }
-
-    @Throws(IOException::class)
-    private suspend fun copyStreams(
-        clientSocket: Socket,
-        forwardResult: PortForward.PortForwardResult,
-        remotePort: Int
-    ) {
-        coroutineScope {
-            ensureActive()
-            launch {
-                try {
-                    clientSocket.getInputStream().copyToWebSocketOutbound(forwardResult.getOutboundStream(remotePort))
-                } catch (e: Exception) {
-                    closeStreams(remotePort, forwardResult)
-                    throw e
-                }
-            }
-            launch {
-                try {
-                    forwardResult.getInputStream(remotePort).copyToLocalSocket(clientSocket.getOutputStream())
-                } catch (e: Exception) {
-                    closeStreams(remotePort, forwardResult)
-                    throw e
-                }
-            }
-        }
-    }
-
-    private fun closeStreams(port: Int, forwardResult: PortForward.PortForwardResult?) {
-      // getInputStream/getOutboundStream can throw; isolate so one failure does not skip the other close
-      runCatching { forwardResult?.getInputStream(port) }
-          .onSuccess { closeQuietly(it) }
-          .onFailure { logger.debug("Could not get input stream for port $port while closing port-forward", it) }
-      runCatching { forwardResult?.getOutboundStream(port) }
-          .onSuccess { closeQuietly(it) }
-          .onFailure { logger.debug("Could not get outbound stream for port $port while closing port-forward", it) }
-    }
-
-    private fun applyClientSocketOptions(socket: Socket) {
-        socket.tcpNoDelay = true
-    }
-
-    private fun InputStream.copyToLocalSocket(destination: OutputStream) {
-        val buffer = ByteArray(COPY_BUFFER_SIZE)
-        while (true) {
-            val n = read(buffer)
-            if (n < 0) break
-            destination.write(buffer, 0, n)
-            destination.flush() // local socket ONLY
-        }
-    }
-
-    private fun InputStream.copyToWebSocketOutbound(destination: OutputStream) {
-        val buffer = ByteArray(COPY_BUFFER_SIZE)
-        while (true) {
-            val n = read(buffer)
-            if (n < 0) break
-            destination.write(buffer, 0, n)
-            // do NOT flush per chunk — client-java 24 WebSocketOutputStream.flush() sleeps 100ms
-        }
-        runCatching { destination.flush() }
-    }
-
-    @Throws(IOException::class)
-    fun waitForForwardReady(port: Int) {
-        val maxRetries = 30
-        val retryDelay = 100L
-
-        repeat(maxRetries) { attempt ->
-            try {
-                val testSocket = ServerSocket()
-                testSocket.bind(InetSocketAddress("127.0.0.1", port))
-                testSocket.close()
-                // If we can bind to the port, it means port forwarding is not ready yet
-                Thread.sleep(retryDelay)
-            } catch (_: BindException) {
-                // Port is already in use, which means port forwarding is ready
-                return
-            } catch (e: Exception) {
-                if (attempt == maxRetries - 1) {
-                    throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms", e)
-                }
-                Thread.sleep(retryDelay)
-            }
-        }
-
-        throw IOException("Port forwarding to local port $port is not ready after ${maxRetries * retryDelay}ms")
-    }
-
+    /**
+     * Returns the first pod matching the given label selector.
+     *
+     * @param namespace the namespace to query.
+     * @param labelSelector the Kubernetes label selector, for example
+     * `controller.devfile.io/devworkspace_name=my-workspace`.
+     * @return the first matching pod, or `null` if no pod matches.
+     * @throws ApiException if the Kubernetes API call fails.
+     */
     @Throws(ApiException::class)
     fun findFirst(namespace: String, labelSelector: String): V1Pod? {
         val pods = list(namespace, labelSelector)
-        return pods.items[0]
+        return pods.items.firstOrNull()
     }
 
+    /**
+     * Lists the pods matching the given label selector.
+     *
+     * @param namespace the namespace to query.
+     * @param labelSelector the Kubernetes label selector; an empty selector lists all pods in the
+     * namespace.
+     * @return the matching pods.
+     * @throws ApiException if the Kubernetes API call fails.
+     */
     @Throws(ApiException::class)
     fun list(namespace: String, labelSelector: String = ""): V1PodList {
         return CoreV1Api(client)
             .listNamespacedPod(namespace)
             .labelSelector(labelSelector)
             .execute()
-    }
-
-    /**
-     * Waits for all pods associated with the given DevWorkspace to be deleted.
-     * Returns `true` if all pods are deleted within the timeout, false otherwise.
-     *
-     * @param namespace the name of the devWorkspace for the pods to be deleted
-     * @param workspaceName the name of the devWorkspace for the pods to be deleted
-     * @param timeout the max time to wait for the pods to be deleted
-     * @param isCancelled lambda to check whether the operation was canceled
-     *
-     */
-    @Throws(IOException::class, CancellationException::class)
-    suspend fun waitForPodsDeleted(
-        namespace: String,
-        workspaceName: String,
-        timeout: Long, // in seconds
-        isCancelled: (() -> Unit)? = null
-    ): Boolean {
-        val labelSelector = "$WORKSPACE_LABEL_KEY=$workspaceName"
-        @Suppress("ConvertLongToDuration")
-        return withTimeoutOrNull(timeout * 1000L) {
-            while (true) {
-                isCancelled?.invoke()
-
-                val pods = try {
-                    list(namespace, labelSelector)
-                } catch (e: Exception) {
-                    if (e.isCancellationException()) throw e
-                    logger.info("Error listing pods for $namespace/$workspaceName: ${e.message}")
-                    delay(1000L)
-                    continue
-                }
-
-                isCancelled?.invoke()
-                if (pods.items.isEmpty()) {
-                    logger.info("All pods for $namespace/$workspaceName have been deleted")
-                    return@withTimeoutOrNull true
-                }
-
-                logger.debug("Still waiting for ${pods.items.size} pod(s) to be deleted for $namespace/$workspaceName")
-                delay(1000L)
-            }
-
-            @Suppress("UNREACHABLE_CODE")
-            false
-        } ?: false
     }
 }

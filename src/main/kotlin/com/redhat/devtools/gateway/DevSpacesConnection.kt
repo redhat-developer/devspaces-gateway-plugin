@@ -23,9 +23,9 @@ import com.redhat.devtools.gateway.devworkspace.DevWorkspacePatch
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.devworkspace.RestartDevWorkspaceAnnotationWatch
-import com.redhat.devtools.gateway.openshift.DevWorkspacePods
-import com.redhat.devtools.gateway.download.DevSpacesClientMirror
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
+import com.redhat.devtools.gateway.download.DevSpacesClientMirror
+import com.redhat.devtools.gateway.openshift.PodPortForwarder
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
@@ -311,7 +311,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             checkCancelled?.invoke()
             onProgress?.invoke(ProgressCountdown.ProgressEvent(
                 title = "Waiting for the workspace to get ready...",
-                countdownSeconds = RemoteIDEServer.readyTimeout)
+                countdownSeconds = RemoteIDEServer.READY_TIMEOUT)
             )
 
             remoteIdeServer = RemoteIDEServer(devSpacesContext)
@@ -337,11 +337,11 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
     }
 
     private fun setupPortForwarding(pod: V1Pod): Pair<Closeable, Int> {
-        val pods = DevWorkspacePods(devSpacesContext.client)
+        val forwarder = PodPortForwarder(devSpacesContext.client)
         val localPort = findFreePort()
-        val forwarder = pods.forward(pod, localPort, 5990)
-        pods.waitForForwardReady(localPort)
-        return forwarder to localPort
+        val closeable = forwarder.forward(pod, localPort, 5990)
+        forwarder.waitForForwardReady(localPort)
+        return closeable to localPort
     }
 
     /**
