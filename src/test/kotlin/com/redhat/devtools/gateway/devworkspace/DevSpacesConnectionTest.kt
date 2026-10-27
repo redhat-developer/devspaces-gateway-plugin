@@ -20,6 +20,7 @@ import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import io.mockk.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.assertj.core.api.Assertions.assertThat
@@ -27,7 +28,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.net.URI
+import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class DevSpacesConnectionTest {
 
@@ -51,7 +54,8 @@ class DevSpacesConnectionTest {
             every { lifetime } returns mockk(relaxed = true)
         }
 
-        connection = DevSpacesConnection(devSpacesContext)
+        // these tests run without a platform application: run the focus request in place
+        connection = DevSpacesConnection(devSpacesContext) { action -> action() }
 
         mockkConstructor(DevWorkspaces::class)
         every {
@@ -171,5 +175,63 @@ class DevSpacesConnectionTest {
         verify(exactly = 0) {
             devSpacesContext.removeWorkspace(any())
         }
+    }
+
+    @Test
+    fun `focusClientWindow requests the Guest window focus`() {
+        connection.focusClientWindow(thinClient)
+
+        verify { thinClient.focusClientWindow() }
+    }
+
+    @Test
+    fun `focusClientWindow focuses at most once per interval`() {
+        connection.focusClientWindow(thinClient)
+        connection.focusClientWindow(thinClient)
+
+        verify(exactly = 1) { thinClient.focusClientWindow() }
+    }
+
+    @Test
+    fun `focusClientWindow ignores a client that can no longer be focused`() {
+        every { thinClient.focusClientWindow() } throws IllegalStateException("client closed")
+
+        connection.focusClientWindow(thinClient) // does not throw
+    }
+
+    @Test
+    fun `focusClientWindow dispatches the focus request to the UI thread`() {
+        val dispatches = AtomicInteger()
+        val dispatchingConnection = DevSpacesConnection(devSpacesContext) { action ->
+            dispatches.incrementAndGet()
+            action()
+        }
+
+        dispatchingConnection.focusClientWindow(thinClient)
+
+        assertThat(dispatches.get()).isEqualTo(1)
+        verify(exactly = 1) { thinClient.focusClientWindow() }
+    }
+
+    @Test
+    fun `connect resets the focus throttle`() {
+        // given - the previous session already used up the focus interval
+        connection.focusClientWindow(thinClient)
+
+        // when - a reconnect starts and is cancelled before it reaches the client
+        assertThrows<CancellationException> {
+            runBlocking {
+                connection.connect(
+                    onConnected = {},
+                    onConnectionEnded = {},
+                    onDevWorkspaceStopped = {},
+                    checkCancelled = { throw CancellationException("cancelled") }
+                )
+            }
+        }
+
+        // then - the new session may focus at once instead of waiting out the old throttle
+        connection.focusClientWindow(thinClient)
+        verify(exactly = 2) { thinClient.focusClientWindow() }
     }
 }

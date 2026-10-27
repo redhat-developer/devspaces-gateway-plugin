@@ -87,7 +87,7 @@ class DevWorkspacesTest {
             namespace,
             workspaceName,
             true,
-            mapOf(DevWorkspacePatch.RESTART_KEY to DevWorkspacePatch.RESTART_VALUE)
+            mapOf(DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE)
         )
 
         mockGetDevWorkspace(mockDevWorkspace)
@@ -120,7 +120,7 @@ class DevWorkspacesTest {
             namespace,
             workspaceName,
             true,
-            mapOf(DevWorkspacePatch.RESTART_KEY to "false")
+            mapOf(DevWorkspace.RESTART_KEY to "false")
         )
 
         mockGetDevWorkspace(mockDevWorkspace)
@@ -139,7 +139,7 @@ class DevWorkspacesTest {
             namespace,
             workspaceName,
             true,
-            mapOf(DevWorkspacePatch.RESTART_KEY to DevWorkspacePatch.RESTART_VALUE)
+            mapOf(DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE)
         )
         val callBuilder = mockk<okhttp3.Call>(relaxed = true)
 

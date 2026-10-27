@@ -15,6 +15,7 @@ import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
+import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.models.V1Container
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
@@ -37,13 +38,16 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     companion object {
         /** Overall wait for remote IDE readiness (wizard "Checking workspace IDE Status..."). */
-        var readyTimeout: Long = 120 // seconds
+        const val READY_TIMEOUT: Long = 120 // seconds
 
         /**
-         * Per-probe exec budget while polling. Must stay well below [readyTimeout] so a slow/hung
+         * Per-probe exec budget while polling. Must stay well below [READY_TIMEOUT] so a slow/hung
          * status exec cannot burn the entire wait (CRW-11119).
          */
         const val STATUS_EXEC_TIMEOUT: Long = 15 // seconds
+
+        /** Default wait for the IDE server to disappear before the workspace is stopped. */
+        const val TERMINATED_TIMEOUT: Long = 10 // seconds
     }
 
     init {
@@ -66,7 +70,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                 return@withContext RemoteIDEServerStatus.empty()
             }
             checkCancelled?.invoke()
-            val output = DevWorkspacePods(devSpacesContext.client).exec(
+            val output = PodExecSession(
+                client = devSpacesContext.client,
                 pod = pod,
                 container = container.name,
                 command = arrayOf(
@@ -80,8 +85,9 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
                     "-c",
                     "/idea-server/bin/remote-dev-server.sh status \$PROJECT_SOURCE | awk '/STATUS:/{p=1; next} p'"
                 ),
-                timeout = STATUS_EXEC_TIMEOUT
-            ).trim()
+                timeout = STATUS_EXEC_TIMEOUT,
+                checkCancelled = checkCancelled
+            ).execute().trim()
 
             checkCancelled?.invoke()
             output.takeIf { it.isNotEmpty() }
@@ -107,7 +113,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
      * @return True if the server is ready within the timeout, False otherwise.
      */
     @Throws(IOException::class)
-    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = readyTimeout): Boolean {
+    suspend fun waitServerReady(checkCancelled: (() -> Unit)? = null, timeout: Long = READY_TIMEOUT): Boolean {
         return waitForState(true, timeout, checkCancelled)
             .also {
                 if (!it) throw IOException(
@@ -117,7 +123,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    suspend fun waitServerTerminated(timeout: Long = 10L): Boolean {
+    suspend fun waitServerTerminated(timeout: Long = TERMINATED_TIMEOUT): Boolean {
         return waitForState(false, timeout)
     }
 

@@ -56,8 +56,12 @@ class DevWorkspaceRestart(
     private val namespace get() = devSpacesContext.devWorkspace.namespace
     private val workspaceName get() = devSpacesContext.devWorkspace.name
 
+    /**
+     * Submits the restart as a background task and returns without waiting for it: the task itself
+     * blocks on [restart] and shows an error dialog on failure.
+     */
     @Suppress("UnstableApiUsage")
-    suspend fun execute(thinClient: ThinClientHandle) {
+    fun execute(thinClient: ThinClientHandle) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             null, "Restart workspace", true
         ) {
