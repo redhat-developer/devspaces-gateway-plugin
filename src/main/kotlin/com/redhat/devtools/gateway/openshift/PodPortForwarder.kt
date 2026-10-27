@@ -31,8 +31,7 @@ private const val NANOS_PER_MILLI = 1_000_000L
  * A running port forward.
  *
  * [close] stops the listener and closes the established connections, so the client reads EOF at
- * once. The listener must not outlive the forward: the pod is pinned when the forward is created,
- * so a re-dial could only reach that same pod.
+ * once.
  */
 internal interface PortForwardSession : Closeable
 
@@ -85,11 +84,11 @@ private enum class RetryDecision {
 private data class PortMapping(val localPort: Int, val remotePort: Int)
 
 /**
- * Mutable state of one running forward: the pod and ports it bridges, the local sockets currently
- * bridged to it, and the notification for a connection the pod side ended.
+ * Mutable state of one running forward: the pod resolver and ports it bridges, the local sockets
+ * currently bridged to it, and the notification for a connection the pod side ended.
  */
 private class ForwardState(
-    val pod: V1Pod,
+    val resolvePod: suspend () -> V1Pod,
     val localPort: Int,
     val remotePort: Int,
     val onRemoteEnd: () -> Unit
@@ -125,13 +124,19 @@ internal class PodPortForwarder(
     private val logger = logger<PodPortForwarder>()
 
     /**
+     * Accepts local connections on [localPort] and forwards each to [remotePort] on the pod
+     * returned by [resolvePod].
+     *
+     * [resolvePod] is invoked once per accepted connection, so a pod that was recreated (new name
+     * or UID) is picked up without restarting the forwarder.
+     *
      * @param onRemoteEnd invoked when an established connection ends other than by a clean
      * client-side close: the pod side ended it (EOF or failure), or the copy failed while talking
      * to the pod. A client that closed itself does not invoke it: the client is already gone.
      */
     @Throws(IOException::class)
     fun forward(
-        pod: V1Pod,
+        resolvePod: suspend () -> V1Pod,
         localPort: Int,
         remotePort: Int,
         onRemoteEnd: () -> Unit = {}
@@ -141,7 +146,7 @@ internal class PodPortForwarder(
             // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
             SupervisorJob() + PortForwardDispatcher.dispatcher
         )
-        val state = ForwardState(pod, localPort, remotePort, onRemoteEnd)
+        val state = ForwardState(resolvePod, localPort, remotePort, onRemoteEnd)
         scope.acceptConnections(serverSocket, state)
         return object : PortForwardSession {
             override fun close() {
@@ -151,6 +156,16 @@ internal class PodPortForwarder(
             }
         }
     }
+
+    /** Forwards to [pod] pinned at forward creation; see [forward] for the remaining parameters. */
+    @Throws(IOException::class)
+    fun forward(
+        pod: V1Pod,
+        localPort: Int,
+        remotePort: Int,
+        onRemoteEnd: () -> Unit = {}
+    ): PortForwardSession =
+        forward(resolvePod = { pod }, localPort, remotePort, onRemoteEnd)
 
     /**
      * Closes every socket accepted so far so the connected clients read EOF.
@@ -204,12 +219,16 @@ internal class PodPortForwarder(
 
     private suspend fun CoroutineScope.handleConnection(clientSocket: Socket, state: ForwardState) {
         val acceptedAtNanos = System.nanoTime()
+        var pod: V1Pod? = null
         try {
-            forwardWithRetries(clientSocket, state, acceptedAtNanos)
+            // resolve once per connection: retries stay on the pod this client connected to
+            val resolvedPod = state.resolvePod()
+            pod = resolvedPod
+            forwardWithRetries(clientSocket, resolvedPod, state, acceptedAtNanos)
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             logger.warn(
-                "Could not port forward to pod ${state.pod.metadata?.name} " +
+                "Could not port forward to ${describePod(pod)} " +
                     "using port ${state.localPort} -> ${state.remotePort}",
                 e)
         } finally {
@@ -218,8 +237,17 @@ internal class PodPortForwarder(
         }
     }
 
+    /** Describes the connection's target for failure logs; [pod] is null when resolving it failed. */
+    private fun describePod(pod: V1Pod?): String {
+        val metadata = pod?.metadata
+        val name = metadata?.name ?: return "an unresolved pod"
+        val uid = metadata.uid
+        return if (uid == null) "pod $name" else "pod $name (uid=$uid)"
+    }
+
     private suspend fun CoroutineScope.forwardWithRetries(
         clientSocket: Socket,
+        pod: V1Pod,
         state: ForwardState,
         acceptedAtNanos: Long
     ) {
@@ -230,7 +258,7 @@ internal class PodPortForwarder(
             if (!isActive) return
             logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
             val isTerminal = when (
-                val result = attemptForward(clientSocket, clientIn, state)
+                val result = attemptForward(clientSocket, clientIn, pod, state)
             ) {
                 // the copy already closed the local socket: any outcome is terminal
                 is AttemptResult.Ended -> {
@@ -245,7 +273,7 @@ internal class PodPortForwarder(
                 is AttemptResult.HandshakeFailed -> {
                     val failureStartedAt = firstFailureNanos ?: System.nanoTime()
                     firstFailureNanos = failureStartedAt
-                    decideRetry(state.pod, failureStartedAt, attempt, state.ports, result.cause) !=
+                    decideRetry(pod, failureStartedAt, attempt, state.ports, result.cause) !=
                         RetryDecision.RETRY
                 }
             }
@@ -305,11 +333,12 @@ internal class PodPortForwarder(
     private suspend fun attemptForward(
         clientSocket: Socket,
         clientIn: PushbackInputStream,
+        pod: V1Pod,
         state: ForwardState
     ): AttemptResult {
         var forwardResult: PortForward.PortForwardResult? = null
         return try {
-            val opened = openForward(state)
+            val opened = openForward(pod, state)
             forwardResult = opened
             AttemptResult.Ended(copyStreams(clientSocket, clientIn, forwardResult, state.remotePort))
         } catch (e: Exception) {
@@ -321,8 +350,8 @@ internal class PodPortForwarder(
         }
     }
 
-    private fun openForward(state: ForwardState): PortForward.PortForwardResult {
-        val opened = PortForward(client).forward(state.pod, listOf(state.remotePort))
+    private fun openForward(pod: V1Pod, state: ForwardState): PortForward.PortForwardResult {
+        val opened = PortForward(client).forward(pod, listOf(state.remotePort))
         logger.info("forward successful: ${state.localPort} -> ${state.remotePort}...")
         return opened
     }

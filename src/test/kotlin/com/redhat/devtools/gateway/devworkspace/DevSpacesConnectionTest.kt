@@ -16,6 +16,7 @@ import com.redhat.devtools.gateway.ThinClientDownloadException
 import com.redhat.devtools.gateway.ThinClientLaunchException
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.ThinClientSessionContext
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import io.mockk.*
 import kotlinx.coroutines.Job
@@ -133,21 +134,15 @@ class DevSpacesConnectionTest {
 
     @Test
     fun `onThinClientClosed sets connectFailed and tears down when live`() {
-        val connectFailed = AtomicBoolean(false)
-        val connectionLive = AtomicBoolean(true)
+        val sessionCtx = session(connectionLive = true)
 
         connection.onThinClientClosed(
-            connectFailed,
-            connectionLive,
             thinClient,
             devSpacesContext.devWorkspace,
-            mockk<() -> Unit>(relaxed = true),
-            {},
-            null,
-            null
+            sessionCtx
         )
 
-        assertThat(connectFailed.get()).isTrue()
+        assertThat(sessionCtx.connectFailed.get()).isTrue()
 
         verify {
             devSpacesContext.removeWorkspace(devSpacesContext.devWorkspace)
@@ -156,21 +151,15 @@ class DevSpacesConnectionTest {
 
     @Test
     fun `onThinClientClosed does not tear down when not live`() {
-        val connectFailed = AtomicBoolean(false)
-        val connectionLive = AtomicBoolean(false)
+        val sessionCtx = session(connectionLive = false)
 
         connection.onThinClientClosed(
-            connectFailed,
-            connectionLive,
             thinClient,
             devSpacesContext.devWorkspace,
-            mockk<() -> Unit>(relaxed = true),
-            {},
-            null,
-            null
+            sessionCtx
         )
 
-        assertThat(connectFailed.get()).isTrue()
+        assertThat(sessionCtx.connectFailed.get()).isTrue()
 
         verify(exactly = 0) {
             devSpacesContext.removeWorkspace(any())
@@ -234,4 +223,17 @@ class DevSpacesConnectionTest {
         connection.focusClientWindow(thinClient)
         verify(exactly = 2) { thinClient.focusClientWindow() }
     }
+
+    private fun session(connectionLive: Boolean): ThinClientSessionContext =
+        ThinClientSessionContext(
+            localPort = 12_345,
+            remoteIdeServer = mockk(relaxed = true),
+            onConnected = {},
+            onDisconnected = {},
+            onDevWorkspaceStopped = {},
+        ).apply {
+            this.connectionLive.set(connectionLive)
+            // a genuinely closed client is the session's current client
+            thinClient = this@DevSpacesConnectionTest.thinClient
+        }
 }

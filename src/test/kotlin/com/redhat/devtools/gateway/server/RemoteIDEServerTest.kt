@@ -15,6 +15,7 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.models.V1Container
+import io.kubernetes.client.openapi.models.V1ContainerPort
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodSpec
@@ -58,7 +59,7 @@ class RemoteIDEServerTest {
             }
         }
         coEvery {
-            anyConstructed<DevWorkspacePods>().findFirst(any(), any())
+            anyConstructed<DevWorkspacePods>().findFirstRunning(any(), any())
         } returns mockPod
 
         remoteIDEServer = spyk(RemoteIDEServer(devSpacesContext), recordPrivateCalls = true)
@@ -94,7 +95,7 @@ class RemoteIDEServerTest {
     fun `#waitServerReady fails fast when idea-server container is missing`() {
         // given — refreshing the pod/container during the ready-wait finds no idea-server container
         every {
-            remoteIDEServer["findContainer"]()
+            remoteIDEServer["findContainer"](any<V1Pod>())
         } throws ServerContainerNotFoundException("Workspace IDE container not found in the Pod: test-pod")
 
         // when
@@ -206,6 +207,69 @@ class RemoteIDEServerTest {
         // then
         assertThat(result).isFalse
     }
+
+    @Test
+    fun `#awaitJoinLink returns the join link once the server is ready`() {
+        // given
+        coEvery {
+            remoteIDEServer.getStatus()
+        } returns remoteIDEServerStatus(
+            "tcp://localhost:5990?fp=NEW",
+            arrayOf(projectInfo("death star"))
+        )
+
+        // when
+        val joinLink = runBlocking {
+            remoteIDEServer.awaitJoinLink(timeout = 1)
+        }
+
+        // then
+        assertThat(joinLink).isEqualTo("tcp://localhost:5990?fp=NEW")
+    }
+
+    @Test
+    fun `#awaitJoinLink throws when ready server has no join link`() {
+        // given — ready-wait succeeds but the status carries no join link
+        coEvery {
+            remoteIDEServer.waitServerReady(checkCancelled = null, timeout = any())
+        } returns true
+        coEvery {
+            remoteIDEServer.getStatus()
+        } returns remoteIDEServerStatus(null, arrayOf(projectInfo("death star")))
+
+        // when, then
+        val exception = assertThrows<IOException> {
+            runBlocking {
+                remoteIDEServer.awaitJoinLink(timeout = 1)
+            }
+        }
+        assertThat(exception.message).isEqualTo("IDE server is ready but reports no join link")
+    }
+
+    @Test
+    fun `#setPod replaces the cached pod with the rolled pod`() {
+        // given
+        val rolledPod = ideaServerPod("rolled-pod")
+
+        // when
+        remoteIDEServer.setPod(rolledPod)
+
+        // then
+        assertThat(remoteIDEServer.pod).isSameAs(rolledPod)
+    }
+
+    private fun ideaServerPod(name: String): V1Pod =
+        V1Pod().apply {
+            metadata = V1ObjectMeta().apply { this.name = name }
+            spec = V1PodSpec().apply {
+                containers = listOf(
+                    V1Container().apply {
+                        this.name = "test-container"
+                        ports = listOf(V1ContainerPort().name("idea-server"))
+                    }
+                )
+            }
+        }
 
     private fun remoteIDEServerStatus(joinLink: String? = null, projects: Array<ProjectInfo>?): RemoteIDEServerStatus {
         return RemoteIDEServerStatus(

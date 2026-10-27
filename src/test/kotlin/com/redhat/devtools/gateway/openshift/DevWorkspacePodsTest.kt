@@ -16,6 +16,7 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
+import io.kubernetes.client.openapi.models.V1PodCondition
 import io.kubernetes.client.openapi.models.V1PodList
 import io.kubernetes.client.openapi.models.V1PodStatus
 import io.mockk.every
@@ -242,16 +243,25 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirst returns null when no pod matches`() {
-        // given
+    fun `#findFirstRunning returns null when no running and ready pod matches`() {
+        // given — one pending pod, one running but not ready pod, one terminating pod
         mockkConstructor(CoreV1Api::class)
+        val pending = podWith(name = "pending-pod", namespace = "test-ns", phase = "Pending")
+        val notReady = podWith(name = "not-ready-pod", namespace = "test-ns", phase = "Running", isReady = false)
+        val terminating = podWith(
+            name = "terminating-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            deletionTimestamp = OffsetDateTime.now(),
+        )
         val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
         every { listRequest.labelSelector(any()) } returns listRequest
-        every { listRequest.execute() } returns V1PodList().apply { items = emptyList() }
+        every { listRequest.execute() } returns V1PodList().apply { items = listOf(pending, notReady, terminating) }
         every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
 
         // when
-        val result = pods.findFirst("test-ns", "controller.devfile.io/devworkspace_name=no-workspace")
+        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isNull()
@@ -259,29 +269,138 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirst returns the first matching pod`() {
-        // given
+    fun `#findFirstRunning returns the newest running and ready pod`() {
+        // given — items are deliberately not sorted by creation timestamp
         mockkConstructor(CoreV1Api::class)
-        val first = podWith(name = "first-pod", namespace = "test-ns")
-        val second = podWith(name = "second-pod", namespace = "test-ns")
+        val oldest = podWith(
+            name = "oldest-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+        )
+        val newest = podWith(
+            name = "newest-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-03T00:00:00Z"),
+        )
+        val middle = podWith(
+            name = "middle-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-02T00:00:00Z"),
+        )
         val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
         every { listRequest.labelSelector(any()) } returns listRequest
-        every { listRequest.execute() } returns V1PodList().apply { items = listOf(first, second) }
+        every { listRequest.execute() } returns V1PodList().apply { items = listOf(oldest, newest, middle) }
         every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
 
         // when
-        val result = pods.findFirst("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
-        assertThat(result).isSameAs(first)
+        assertThat(result).isSameAs(newest)
         unmockkConstructor(CoreV1Api::class)
     }
 
-    private fun podWith(name: String, namespace: String): V1Pod {
+    @Test
+    fun `#findFirstRunning skips a terminating running pod`() {
+        // given — the newest pod is terminating, so the newer non-terminating pod must win
+        mockkConstructor(CoreV1Api::class)
+        val oldPod = podWith(
+            name = "old-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+        )
+        val newerPod = podWith(
+            name = "newer-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-02T00:00:00Z"),
+        )
+        val terminatingPod = podWith(
+            name = "terminating-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-03T00:00:00Z"),
+            deletionTimestamp = OffsetDateTime.now(),
+        )
+        val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
+        every { listRequest.labelSelector(any()) } returns listRequest
+        every { listRequest.execute() } returns V1PodList().apply { items = listOf(oldPod, terminatingPod, newerPod) }
+        every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
+
+        // when
+        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isSameAs(newerPod)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findFirstRunning skips a running pod that is not ready`() {
+        // given — the not-ready pod is newer than the ready one
+        mockkConstructor(CoreV1Api::class)
+        val readyPod = podWith(
+            name = "ready-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = true,
+            creationTimestamp = OffsetDateTime.parse("2026-01-01T00:00:00Z"),
+        )
+        val notReadyPod = podWith(
+            name = "not-ready-pod",
+            namespace = "test-ns",
+            phase = "Running",
+            isReady = false,
+            creationTimestamp = OffsetDateTime.parse("2026-01-02T00:00:00Z"),
+        )
+        val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
+        every { listRequest.labelSelector(any()) } returns listRequest
+        every { listRequest.execute() } returns V1PodList().apply { items = listOf(notReadyPod, readyPod) }
+        every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
+
+        // when
+        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isSameAs(readyPod)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    private fun podWith(
+        name: String,
+        namespace: String,
+        phase: String? = null,
+        isReady: Boolean = false,
+        creationTimestamp: OffsetDateTime? = null,
+        deletionTimestamp: OffsetDateTime? = null,
+    ): V1Pod {
         return V1Pod().apply {
             metadata = V1ObjectMeta().apply {
                 this.name = name
                 this.namespace = namespace
+                this.creationTimestamp = creationTimestamp
+                this.deletionTimestamp = deletionTimestamp
+            }
+            status = phase?.let {
+                V1PodStatus().apply {
+                    this.phase = it
+                    conditions = listOf(
+                        V1PodCondition().apply {
+                            type = "Ready"
+                            status = if (isReady) "True" else "False"
+                        }
+                    )
+                }
             }
         }
     }

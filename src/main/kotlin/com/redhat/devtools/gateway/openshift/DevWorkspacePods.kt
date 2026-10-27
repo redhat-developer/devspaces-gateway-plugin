@@ -17,6 +17,7 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
+import java.time.OffsetDateTime
 
 /**
  * Queries the Kubernetes API for the pods of a DevWorkspace.
@@ -54,19 +55,30 @@ class DevWorkspacePods(private val client: ApiClient) {
     }
 
     /**
-     * Returns the first pod matching the given label selector.
+     * Returns the newest pod matching the given label selector that is running and ready.
+     *
+     * Selecting the newest pod avoids preferring a terminating pod left over from a previous
+     * workspace instance when a newer pod is already running (CRW-13910).
      *
      * @param namespace the namespace to query.
      * @param labelSelector the Kubernetes label selector, for example
      * `controller.devfile.io/devworkspace_name=my-workspace`.
-     * @return the first matching pod, or `null` if no pod matches.
+     * @return the newest running and ready pod, or `null` if none matches.
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    fun findFirst(namespace: String, labelSelector: String): V1Pod? {
-        val pods = list(namespace, labelSelector)
-        return pods.items.firstOrNull()
+    fun findFirstRunning(namespace: String, labelSelector: String): V1Pod? {
+        return list(namespace, labelSelector).items
+            .filter { isRunningAndReady(it) }
+            .maxByOrNull { it.metadata?.creationTimestamp ?: OffsetDateTime.MIN }
     }
+
+    /** Terminating pods are excluded even in `Running` phase — same semantics as [isPodRunning]. */
+    private fun isRunningAndReady(pod: V1Pod): Boolean =
+        pod.metadata?.deletionTimestamp == null
+            && pod.status?.phase == "Running"
+            && pod.status?.conditions.orEmpty()
+                .any { it.type == "Ready" && it.status == "True" }
 
     /**
      * Lists the pods matching the given label selector.

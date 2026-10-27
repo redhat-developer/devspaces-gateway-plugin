@@ -30,11 +30,32 @@ import java.util.concurrent.CancellationException
 class ServerContainerNotFoundException(message: String) : IOException(message)
 
 /**
+ * Thrown when the IDE server is ready but reports no join link.
+ *
+ * The ready → join-link transition can flap right after a pod roll (the status exec races
+ * the server startup), so reconnects treat this as transient and retry; only exhausted
+ * retries fail the session.
+ */
+class JoinLinkMissingException(message: String) : IOException(message)
+
+/**
  * Represent an IDE server running in a CDE.
  */
 class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
-    var pod: V1Pod
-    private var container: V1Container
+
+    /**
+     * Pod + IDE container, swapped atomically: the pod and its container are refreshed from
+     * different threads (port-forward resolution, reconnect) and a probe must never target a
+     * pod with another pod's container.
+     */
+    private data class Target(val pod: V1Pod, val container: V1Container)
+
+    @Volatile
+    private var target: Target
+
+    /** The workspace pod that status probes currently target. */
+    val pod: V1Pod
+        get() = target.pod
 
     companion object {
         /** Overall wait for remote IDE readiness (wizard "Checking workspace IDE Status..."). */
@@ -51,8 +72,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     init {
-        pod = findPod()
-        container = findContainer()
+        val pod = findPod()
+        target = Target(pod, findContainer(pod))
     }
 
     /**
@@ -62,9 +83,10 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     suspend fun getStatus(checkCancelled: (() -> Unit)? = null): RemoteIDEServerStatus =
         withContext(Dispatchers.IO) {
             checkCancelled?.invoke()
-            if (!DevWorkspacePods(devSpacesContext.client).isPodRunning(pod)) {
+            val current = target
+            if (!DevWorkspacePods(devSpacesContext.client).isPodRunning(current.pod)) {
                 thisLogger().info(
-                    "Pod '${pod.metadata?.name}' is not running; " +
+                    "Pod '${current.pod.metadata?.name}' is not running; " +
                         "returning empty status."
                 )
                 return@withContext RemoteIDEServerStatus.empty()
@@ -72,8 +94,8 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
             checkCancelled?.invoke()
             val output = PodExecSession(
                 client = devSpacesContext.client,
-                pod = pod,
-                container = container.name,
+                pod = current.pod,
+                container = current.container.name,
                 command = arrayOf(
 //                  remote-dev-server.sh writes to several sub-folders of HOME (.config, .cache, etc.)
 //                  When registry.access.redhat.com/ubi9 is used for running a user container,
@@ -127,6 +149,31 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         return waitForState(false, timeout)
     }
 
+    /**
+     * Seeds the cached pod, e.g. with the pod observed after a roll, and refreshes the
+     * cached IDE container so status probes target the new pod.
+     */
+    @Throws(IOException::class)
+    fun setPod(pod: V1Pod) {
+        target = Target(pod, findContainer(pod))
+    }
+
+    /**
+     * Waits for the IDE server to become ready and returns its join link.
+     *
+     * @param checkCancelled optional progress cancellation check
+     * @param timeout maximum wait for IDE readiness in seconds
+     */
+    @Throws(IOException::class, CancellationException::class)
+    suspend fun awaitJoinLink(
+        checkCancelled: (() -> Unit)? = null,
+        timeout: Long = READY_TIMEOUT,
+    ): String {
+        waitServerReady(checkCancelled = checkCancelled, timeout = timeout)
+        return getStatus(checkCancelled).joinLink
+            ?: throw JoinLinkMissingException("IDE server is ready but reports no join link")
+    }
+
     private suspend fun waitForState(
         isReadyState: Boolean,
         timeout: Long,
@@ -134,14 +181,20 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     ): Boolean {
         return RemoteIDEServerReadiness(
             targetDescription = {
-                "IDE server on pod '${pod.metadata?.name}' container '${container.name}'"
+                val current = target
+                "IDE server on pod '${current.pod.metadata?.name}' container '${current.container.name}'"
             },
             isReady = { cancelled -> getStatus(cancelled).isReady },
-            refresh = {
-                pod = findPod()
-                container = findContainer()
-            },
+            refresh = { refreshPod() },
         ).waitFor(isReadyState, timeout, checkCancelled)
+    }
+
+    /** Re-queries the cluster for the current running workspace pod and refreshes the cached container. */
+    @Throws(IOException::class)
+    fun refreshPod(): V1Pod {
+        val pod = findPod()
+        target = Target(pod, findContainer(pod))
+        return pod
     }
 
     @Throws(IOException::class)
@@ -149,7 +202,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
         val selector = "controller.devfile.io/devworkspace_name=${devSpacesContext.devWorkspace.name}"
 
         return DevWorkspacePods(devSpacesContext.client)
-            .findFirst(
+            .findFirstRunning(
                 devSpacesContext.devWorkspace.namespace,
                 selector
             ) ?: throw IOException(
@@ -158,7 +211,7 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
     }
 
     @Throws(IOException::class)
-    private fun findContainer(): V1Container {
+    private fun findContainer(pod: V1Pod): V1Container {
         return pod.spec!!.containers.find { container ->
             container.ports?.any { port -> port.name == "idea-server" } != null
         }

@@ -368,6 +368,104 @@ class PodPortForwarderTest {
     }
 
     @Test
+    fun `#forward resolves the pod for each accepted connection`() {
+        // given - the workspace replaces pod A with pod B between two client connections
+        val podA = podWith(name = "pod-a", namespace = "test-ns")
+        val podB = podWith(name = "pod-b", namespace = "test-ns")
+        val resolvedPods = listOf(podA, podB)
+        val resolveCalls = AtomicInteger()
+
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(podA, listOf(remotePort))
+        } returns portForwardResult
+        every {
+            anyConstructed<PortForward>().forward(podB, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+
+        // when
+        val closeable = PodPortForwarder(client).forward(
+            resolvePod = {
+                val index = resolveCalls.getAndIncrement()
+                resolvedPods[index % resolvedPods.size]
+            },
+            localPort = localPort,
+            remotePort = remotePort
+        )
+        runBlocking { delay(100.milliseconds) }
+
+        // then - the first connection forwards to the pod resolved for it
+        Socket("127.0.0.1", localPort).use { socket ->
+            socket.soTimeout = 2000
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+        }
+        verify(exactly = 1) {
+            anyConstructed<PortForward>().forward(podA, listOf(remotePort))
+        }
+        verify(exactly = 0) {
+            anyConstructed<PortForward>().forward(podB, listOf(remotePort))
+        }
+
+        // the second connection re-resolves and forwards to the replacement pod
+        Socket("127.0.0.1", localPort).use { socket ->
+            socket.soTimeout = 2000
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+        }
+        verify(exactly = 1) {
+            anyConstructed<PortForward>().forward(podB, listOf(remotePort))
+        }
+        assertThat(resolveCalls.get()).isEqualTo(2)
+        closeable.close()
+    }
+
+    @Test
+    fun `#forward keeps accepting connections when resolving the pod fails`() {
+        // given - resolving fails for the first connection only
+        val resolveCalls = AtomicInteger()
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+
+        // when
+        val closeable = PodPortForwarder(client).forward(
+            resolvePod = {
+                if (resolveCalls.getAndIncrement() == 0) {
+                    throw ApiException("could not list workspace pods")
+                }
+                pod
+            },
+            localPort = localPort,
+            remotePort = remotePort
+        )
+        runBlocking { delay(100.milliseconds) }
+
+        // then - the failing connection is closed without any handshake attempt
+        Socket("127.0.0.1", localPort).use { socket ->
+            socket.soTimeout = 2000
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+        }
+        verify(exactly = 0) {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        }
+
+        // the accept loop survived: a later connection is forwarded normally
+        Socket("127.0.0.1", localPort).use { socket ->
+            socket.soTimeout = 2000
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+        }
+        verify(exactly = 1) {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        }
+        assertThat(resolveCalls.get()).isEqualTo(2)
+        closeable.close()
+    }
+
+    @Test
     fun `#check returns GONE when the pod is not found`() = runBlocking {
         // given
         mockkConstructor(CoreV1Api::class)

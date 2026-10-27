@@ -43,9 +43,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Thin-client connection lifecycle.
  *
- * Thin-client close or failed-to-open sets connectFailed (ending the connect wait);
- * [tearDownConnection] runs only if the connection is already live ([connectionLive]).
- * Failures during connect are cleaned up by [connect]'s catch path.
+ * Thin-client close or failed-to-open sets [ThinClientSessionContext.connectFailed] (ending the
+ * connect wait); [tearDownConnection] runs only if the connection is already live
+ * ([ThinClientSessionContext.connectionLive]). Failures during connect are cleaned up by
+ * [connect]'s catch path.
+ *
+ * A pod roll mid-session is recovered in place: the port forwarder re-resolves the new pod per
+ * connection, and [ThinClientReconnect] heals or replaces the thin client (CRW-13910). A close
+ * of the client that the reconnect did not issue ends the session — see
+ * [onThinClientClosed].
  *
  * Connect enablement in the wizard is based on workspace Running state (not
  * [DevSpacesContext.activeWorkspaces]), because IDEA often keeps the connector view
@@ -102,7 +108,7 @@ class DevSpacesConnection(
         var forwarder: PortForwardSession? = null
         var client: ThinClientHandle? = null
         var clientMirror: AutoCloseable? = null
-        val connectionLive = AtomicBoolean(false)
+        var sessionCtx: ThinClientSessionContext? = null
         val progress = DevSpacesClientConnectProgress(onProgress)
 
         return try {
@@ -116,35 +122,106 @@ class DevSpacesConnection(
             checkCancelled?.invoke()
             progress.waitingForClientStart()
 
-            // the forwarder outlives the client handle creation: resolve the handle lazily
-            val (fwd, localPort) = setupPortForwarding(remoteIdeServer.pod) {
-                client?.let { focusClientWindow(it) }
-            }
-            forwarder = fwd
+            val localPort = findFreePort()
+            val session = ThinClientSessionContext(
+                localPort = localPort,
+                remoteIdeServer = remoteIdeServer,
+                onConnected = onConnected,
+                onDisconnected = onConnectionEnded,
+                onDevWorkspaceStopped = onDevWorkspaceStopped,
+            )
+            sessionCtx = session
 
-            val localJoinLink = joinLink.replace(":5990", ":$localPort")
-            val connectFailed = AtomicBoolean(false)
+            val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            session.recoveryScope = recoveryScope
+
+            val forwardRecovery = ForwardRecoveryProgress(
+                scope = recoveryScope,
+                sessionCtx = session,
+                isWorkspaceRestartInProgress = ::isWorkspaceRestartInProgress,
+                onCanceled = {
+                    session.cancelReconnect()
+                    tearDownConnection(
+                        client,
+                        workspace,
+                        onConnectionEnded,
+                        onDevWorkspaceStopped,
+                        remoteIdeServer,
+                        session.forwarder,
+                        session.recoveryScope,
+                    )
+                },
+            )
+
+            val tracker = WorkspacePodTracker(remoteIdeServer, ::isWorkspaceRestartInProgress)
+            tracker.seed(remoteIdeServer.pod)
+
+            val portForwardResolver = PortForwardPodResolver(tracker, session, forwardRecovery)
+
+            val forwardSession = setupPortForwarding(
+                localPort = localPort,
+                resolvePod = portForwardResolver::resolve,
+                // the forwarder outlives the client handle creation: resolve the handle lazily
+                onRemoteEnd = { session.thinClient?.let { focusClientWindow(it) } },
+            )
+            forwarder = forwardSession
+            session.forwarder = forwardSession
+
+            setupThinClientReconnect(
+                sessionCtx = session,
+                forwardRecovery = forwardRecovery,
+                tracker = tracker,
+                reconnect = ThinClientReconnect(
+                    remoteIdeServer = remoteIdeServer,
+                    sessionCtx = session,
+                    startThinClient = { link, reconnectCtx ->
+                        startThinClientOnReconnect(
+                            joinLink = link,
+                            sessionCtx = reconnectCtx,
+                            workspace = workspace,
+                            checkCancelled = { reconnectCtx.throwIfReconnectCanceled() },
+                        )
+                    },
+                    onClientHandleReplaced = { newClient ->
+                        client = newClient
+                        session.thinClient = newClient
+                        // the replacement client needs its own watch: the watch of the replaced
+                        // client stopped with its lifetime
+                        watchSession(workspace, newClient, forwardSession, handleRestarts = registerRestartWatcher)
+                    },
+                    onClientClosed = { closedClient, reconnectCtx ->
+                        onReconnectClientClosed(closedClient, reconnectCtx, workspace)
+                    },
+                ),
+            )
+
+            val localJoinLink = ThinClientJoinLink.withLocalPort(joinLink, localPort)
 
             checkCancelled?.invoke()
             clientMirror = mirrorClient(URI(localJoinLink), progress, checkCancelled)
-            client = startClient(
-                URI(localJoinLink), workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
-                remoteIdeServer, forwarder, connectFailed, connectionLive
-            )
+            val thinClient = startThinClient(joinLink, session, workspace)
+            client = thinClient
 
             progress.startingClient()
-            waitForConnect(client, connectFailed, checkCancelled)
+            waitForConnect(thinClient, session.connectFailed, checkCancelled)
 
-            connectionLive.set(true)
+            session.connectionLive.set(true)
             onConnected()
-            watchSession(workspace, client, fwd, handleRestarts = registerRestartWatcher)
-            client
+            watchSession(workspace, thinClient, forwardSession, handleRestarts = registerRestartWatcher)
+            thinClient
         } catch (e: Exception) {
-            if (e !is ThinClientLaunchException || connectionLive.get()) {
+            sessionCtx?.cancelReconnect()
+            if (e !is ThinClientLaunchException || sessionCtx?.connectionLive?.get() == true) {
                 runCatching { client?.close() }
             }
             tearDownConnection(
-                client, workspace, onConnectionEnded, onDevWorkspaceStopped, remoteIdeServer, forwarder
+                client,
+                workspace,
+                onConnectionEnded,
+                onDevWorkspaceStopped,
+                remoteIdeServer,
+                forwarder,
+                sessionCtx?.recoveryScope,
             )
             throw e
         } finally {
@@ -156,30 +233,100 @@ class DevSpacesConnection(
      * Thin client closed or failed to open.
      * Always ends the connect-wait loop. Calls [tearDownConnection] only if the connection is
      * already live; failures during connect are cleaned up by [connect]'s catch.
+     *
+     * Closes owned by the pod-roll reconnect itself (see
+     * [ThinClientSessionContext.consumeReconnectOwnedClose]) are ignored — including stale
+     * or repeated events that arrive after a successful reconnect. Any other close while a
+     * reconnect is in flight means the client process ended (user close or crash): the
+     * reconnect is canceled so it cannot respawn a client for a dead session, and the
+     * session is torn down.
      */
     @Suppress("UnstableApiUsage")
     internal fun onThinClientClosed(
-        connectFailed: AtomicBoolean,
-        connectionLive: AtomicBoolean,
         thinClient: ThinClientHandle,
         workspace: DevWorkspace,
-        onConnectionEnded: () -> Unit,
-        onDevWorkspaceStopped: () -> Unit,
-        remoteIdeServer: RemoteIDEServer?,
-        forwarder: PortForwardSession?,
+        sessionCtx: ThinClientSessionContext,
     ) {
-        connectFailed.set(true)
-        if (connectionLive.get()) {
+        if (sessionCtx.consumeReconnectOwnedClose(thinClient)) {
+            thisLogger().debug("Thin client closed by the reconnect itself; ignoring close event")
+            return
+        }
+        sessionCtx.connectFailed.set(true)
+        if (sessionCtx.reconnecting.get()) {
+            thisLogger().info("Thin client closed while reconnecting; aborting pod-roll reconnect")
+            sessionCtx.cancelReconnect()
+        }
+        if (sessionCtx.connectionLive.get()) {
             tearDownConnection(
                 thinClient,
                 workspace,
-                onConnectionEnded,
-                onDevWorkspaceStopped,
-                remoteIdeServer,
-                forwarder
+                sessionCtx.onDisconnected,
+                sessionCtx.onDevWorkspaceStopped,
+                sessionCtx.remoteIdeServer,
+                sessionCtx.forwarder,
+                sessionCtx.recoveryScope,
             )
         }
     }
+
+    /**
+     * Tears the session down when reconnect permanently fails or is cancelled. [ThinClientReconnect]
+     * clears [ThinClientSessionContext.reconnecting] before invoking this callback.
+     */
+    @Suppress("UnstableApiUsage")
+    private fun onReconnectClientClosed(
+        client: ThinClientHandle?,
+        sessionCtx: ThinClientSessionContext,
+        workspace: DevWorkspace,
+    ) {
+        if (!sessionCtx.connectionLive.get()) {
+            return
+        }
+        tearDownConnection(
+            client,
+            workspace,
+            sessionCtx.onDisconnected,
+            sessionCtx.onDevWorkspaceStopped,
+            sessionCtx.remoteIdeServer,
+            sessionCtx.forwarder,
+            sessionCtx.recoveryScope,
+        )
+    }
+
+    /**
+     * Wires [WorkspacePodTracker.onPodRoll] to [ThinClientReconnect.execute] and the reconnect's
+     * cancellation to [ThinClientSessionContext.cancelReconnect].
+     *
+     * The tracker decides whether a roll is a recoverable pod roll or an annotated restart that
+     * [DevWorkspaceRestart] owns; this method only routes a delegated roll to reconnect.
+     */
+    private fun setupThinClientReconnect(
+        sessionCtx: ThinClientSessionContext,
+        forwardRecovery: ForwardRecoveryProgress,
+        tracker: WorkspacePodTracker,
+        reconnect: ThinClientReconnect,
+    ) {
+        sessionCtx.cancelReconnect = reconnect::cancel
+        tracker.onPodRoll = { pod ->
+            forwardRecovery.dismiss()
+            reconnect.execute(pod)
+        }
+    }
+
+    /**
+     * Returns true when the DevWorkspace carries [DevWorkspace.RESTART_KEY].
+     *
+     * Used by [WorkspacePodTracker] to suppress pod-roll reconnect while
+     * [DevWorkspaceRestart] owns the session recovery.
+     */
+    private fun isWorkspaceRestartInProgress(): Boolean =
+        runCatching {
+            val workspace = devSpacesContext.devWorkspace
+            DevWorkspaces(devSpacesContext.client).isRestarting(
+                workspace.namespace,
+                workspace.name,
+            )
+        }.getOrDefault(false)
 
     /**
      * Watches the workspace that backs this session for the user actions that end it: a restart
@@ -210,8 +357,8 @@ class DevSpacesConnection(
             onStopped = {
                 // Closing the forwarder is what makes the Guest read EOF. Its status widget then
                 // reports the loss at once, instead of waiting for the pod to terminate and for
-                // the forwarded stream to end. The listener must go too: the forwarder has the
-                // stopped pod pinned, so a re-dial could only reconnect into that dying pod.
+                // the forwarded stream to end. The listener must go too: the stopped workspace
+                // has no running pod, so a re-dial would only wait for one that never returns.
                 forwarder.close()
                 // An occluded JetBrains Client defers the repaint of its status widget, so the
                 // loss would only become visible once the user focuses it. Asking for the window
@@ -271,11 +418,13 @@ class DevSpacesConnection(
         onConnectionEnded: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         remoteIdeServer: RemoteIDEServer?,
-        forwarder: PortForwardSession?
+        forwarder: PortForwardSession?,
+        forwardRecoveryScope: CoroutineScope? = null,
     ) {
         if (!tearDownStarted.compareAndSet(false, true)) {
             return
         }
+        forwardRecoveryScope?.cancel()
         // Clear tracking + refresh UI before any remote wait so Connect is not stuck
         // behind waitServerTerminated (up to 10s) when the wizard stays open in IDEA.
         devSpacesContext.removeWorkspace(workspace)
@@ -394,18 +543,26 @@ class DevSpacesConnection(
     }
 
     /**
-     * @param onRemoteEnd brought the Guest to the front when the pod side ends an established
+     * Starts the local port-forward once for the whole session. [resolvePod] runs per accepted
+     * connection, so a recreated pod is picked up without replacing the forwarder.
+     *
+     * @param onRemoteEnd brings the Guest to the front when the pod side ends an established
      * forward, so an occluded window repaints the lost connection.
      */
     private fun setupPortForwarding(
-        pod: V1Pod,
-        onRemoteEnd: () -> Unit
-    ): Pair<PortForwardSession, Int> {
+        localPort: Int,
+        resolvePod: suspend () -> V1Pod,
+        onRemoteEnd: () -> Unit,
+    ): PortForwardSession {
         val forwarder = PodPortForwarder(devSpacesContext.client)
-        val localPort = findFreePort()
-        val session = forwarder.forward(pod, localPort, 5990, onRemoteEnd)
+        val session = forwarder.forward(
+            resolvePod = resolvePod,
+            localPort = localPort,
+            remotePort = ThinClientJoinLink.REMOTE_IDE_PORT,
+            onRemoteEnd = onRemoteEnd,
+        )
         forwarder.waitForForwardReady(localPort)
-        return session to localPort
+        return session
     }
 
     /**
@@ -431,44 +588,78 @@ class DevSpacesConnection(
         throw ThinClientDownloadException("Could not download the JetBrains Client: ${e.message}", e)
     }
 
+    /**
+     * Starts a thin client for [sessionCtx], rewriting the remote `:5990` in [joinLink] to the
+     * session's local port and attaching listeners that respect pod-roll reconnect.
+     *
+     * Used for the initial connection and for the reconnect fallback that replaces a stale
+     * client. The initial connection fires [ThinClientSessionContext.onConnected] once the
+     * client started (default); the reconnect fallback overrides [onClientStarted] with a
+     * no-op because the session is already connected.
+     */
     @Suppress("UnstableApiUsage")
-    private fun startClient(
-        localJoinLink: URI,
+    internal fun startThinClient(
+        joinLink: String,
+        sessionCtx: ThinClientSessionContext,
         workspace: DevWorkspace,
-        onConnected: () -> Unit,
-        onConnectionEnded: () -> Unit,
-        onDevWorkspaceStopped: () -> Unit,
-        remoteIdeServer: RemoteIDEServer?,
-        forwarder: PortForwardSession?,
-        connectFailed: AtomicBoolean,
-        connectionLive: AtomicBoolean,
+        onClientStarted: (() -> Unit)? = null,
     ): ThinClientHandle {
+        val localJoinLink = URI(
+            ThinClientJoinLink.withLocalPort(joinLink, sessionCtx.localPort)
+        )
         val thinClient = LinkedClientManager
             .getInstance()
             .startNewClient(
                 Lifetime.Eternal,
                 localJoinLink,
                 "",
-                onConnected,
+                onClientStarted ?: sessionCtx.onConnected,
                 false
             )
+        sessionCtx.thinClient = thinClient
+        attachClientListeners(thinClient, sessionCtx, workspace)
+        return thinClient
+    }
 
+    /**
+     * Starts the replacement thin client for a pod-roll reconnect (CRW-13910).
+     *
+     * Mirrors the JetBrains Client for the join link first (same as the initial connect): the
+     * session's connect-time mirror activation is already closed, so without this the platform
+     * downloader hits the network again even when the client is already on disk. The mirror
+     * stays active until [waitForConnect] finishes (client present or permanent failure).
+     *
+     * The wizard already handled [ThinClientSessionContext.onConnected] for this session, so
+     * the replacement starts with a no-op callback instead of re-firing wizard connect logic.
+     */
+    @Suppress("UnstableApiUsage")
+    internal suspend fun startThinClientOnReconnect(
+        joinLink: String,
+        sessionCtx: ThinClientSessionContext,
+        workspace: DevWorkspace,
+        checkCancelled: (() -> Unit)? = null,
+    ): ThinClientHandle {
+        val localJoinLink = URI(ThinClientJoinLink.withLocalPort(joinLink, sessionCtx.localPort))
+        return mirrorClient(localJoinLink, DevSpacesClientConnectProgress(), checkCancelled).use {
+            // a prior close during replace must not make waitForConnect think launch already failed
+            sessionCtx.connectFailed.set(false)
+            val handle = startThinClient(joinLink, sessionCtx, workspace, onClientStarted = {})
+            waitForConnect(handle, sessionCtx.connectFailed, checkCancelled)
+            handle
+        }
+    }
+
+    @Suppress("UnstableApiUsage")
+    private fun attachClientListeners(
+        thinClient: ThinClientHandle,
+        sessionCtx: ThinClientSessionContext,
+        workspace: DevWorkspace,
+    ) {
         fun notifyThinClientClosed() {
-            onThinClientClosed(
-                connectFailed,
-                connectionLive,
-                thinClient,
-                workspace,
-                onConnectionEnded,
-                onDevWorkspaceStopped,
-                remoteIdeServer,
-                forwarder
-            )
+            onThinClientClosed(thinClient, workspace, sessionCtx)
         }
         thinClient.clientClosed.advise(thinClient.lifetime) { notifyThinClientClosed() }
         thinClient.clientFailedToOpenProject.advise(thinClient.lifetime) { notifyThinClientClosed() }
-
-        return thinClient
     }
 
     /**
