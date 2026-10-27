@@ -34,10 +34,13 @@ import org.junit.jupiter.api.assertThrows
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.time.OffsetDateTime
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -198,6 +201,85 @@ class PodPortForwarderTest {
         assertThrows<IOException> {
             Socket("127.0.0.1", localPort).close()
         }
+    }
+
+    @Test
+    fun `#forward reports a connection the pod side cut`() {
+        // given - the remote stream reports EOF immediately (pod deleted)
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val remoteEnds = AtomicInteger()
+
+        // when
+        val session = PodPortForwarder(client)
+            .forward(pod, localPort, remotePort) { remoteEnds.incrementAndGet() }
+        runBlocking { delay(100.milliseconds) }
+        Socket("127.0.0.1", localPort).use { socket ->
+            socket.soTimeout = 2000
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+        }
+        runBlocking { delay(100.milliseconds) }
+
+        // then
+        assertThat(remoteEnds.get()).isEqualTo(1)
+        session.close()
+    }
+
+    @Test
+    fun `#forward does not report a connection the client closed itself`() {
+        // given - the pod stream never ends: only the client can end the connection
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val remoteEnds = AtomicInteger()
+
+        // when
+        val session = PodPortForwarder(client)
+            .forward(pod, localPort, remotePort) { remoteEnds.incrementAndGet() }
+        runBlocking { delay(100.milliseconds) }
+        Socket("127.0.0.1", localPort).close() // the Guest closed its window
+        runBlocking { delay(300.milliseconds) }
+
+        // then - the client is gone, its window must not be pulled to the front
+        assertThat(remoteEnds.get()).isZero()
+        session.close()
+    }
+
+    @Test
+    fun `#forward reports a connection whose client pump failed`() {
+        // given - a messy pod death: the write into the dying tunnel fails before the pod stream
+        // reports EOF, so the client pump is the first to end the copy
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns brokenTunnelStream()
+        val remoteEnds = AtomicInteger()
+
+        // when
+        val session = PodPortForwarder(client)
+            .forward(pod, localPort, remotePort) { remoteEnds.incrementAndGet() }
+        runBlocking { delay(100.milliseconds) }
+        Socket("127.0.0.1", localPort).use { socket ->
+            // the copy may already have closed the socket: the client is not what ends it
+            runCatching {
+                socket.outputStream.write("ping".toByteArray())
+                socket.outputStream.flush()
+            }
+            runBlocking { delay(300.milliseconds) }
+        }
+
+        // then - only a clean client-side close suppresses the report
+        assertThat(remoteEnds.get()).isEqualTo(1)
+        session.close()
     }
 
     @Test
@@ -394,6 +476,32 @@ class PodPortForwarderTest {
 
             // server to client
             return it.inputStream.read(buffer)
+        }
+    }
+
+    /**
+     * A pod stream that blocks until it is closed, like a pod that stays silent. A bare
+     * `PipedInputStream` cannot be used: unconnected, it fails with "Pipe not connected" instead
+     * of blocking, and closing it unblocks a reader only after its 1s poll.
+     */
+    private fun silentPodStream(onRead: () -> Unit = {}): InputStream = object : InputStream() {
+        private val released = CountDownLatch(1)
+
+        override fun read(): Int {
+            onRead()
+            released.await()
+            return -1
+        }
+
+        override fun close() {
+            released.countDown()
+        }
+    }
+
+    /** An outbound tunnel that fails on the first write, like a port forward whose pod just died. */
+    private fun brokenTunnelStream(): OutputStream = object : OutputStream() {
+        override fun write(b: Int) {
+            throw IOException("broken pipe")
         }
     }
 

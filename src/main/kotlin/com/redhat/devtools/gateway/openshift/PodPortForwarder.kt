@@ -36,18 +36,27 @@ private const val NANOS_PER_MILLI = 1_000_000L
  */
 internal interface PortForwardSession : Closeable
 
-/** Why a bidirectional stream copy ended. */
-private sealed interface CopyResult {
-    /** Either direction reached EOF: the connection ended normally. */
-    object PeerClosed : CopyResult
+/** Which pump of a forwarded connection ended it: the pod (remote) or the local client. */
+private enum class CopySide { REMOTE, CLIENT }
 
-    /** Either direction failed while copying. */
-    data class Failed(val cause: Throwable) : CopyResult
+/** Why a bidirectional stream copy ended, and which side ended it. */
+private sealed interface CopyResult {
+    val side: CopySide
+
+    /** The pump reached EOF: that side closed the connection normally. */
+    data class PeerClosed(override val side: CopySide) : CopyResult
+
+    /** The pump failed while copying. */
+    data class Failed(override val side: CopySide, val cause: Throwable) : CopyResult
 }
 
+/** Whether the client ended the connection cleanly itself: the Guest closed and is already gone. */
+private val CopyResult.isClosedByClient: Boolean
+    get() = this is CopyResult.PeerClosed && side == CopySide.CLIENT
+
 private fun CopyResult.reason(): String = when (this) {
-    CopyResult.PeerClosed -> "peer closed"
-    is CopyResult.Failed -> "failed: ${cause.javaClass.simpleName}: ${cause.message}"
+    is CopyResult.PeerClosed -> "peer closed (${side.name.lowercase()} side)"
+    is CopyResult.Failed -> "failed (${side.name.lowercase()} side): ${cause.javaClass.simpleName}: ${cause.message}"
 }
 
 /**
@@ -76,6 +85,20 @@ private enum class RetryDecision {
 private data class PortMapping(val localPort: Int, val remotePort: Int)
 
 /**
+ * Mutable state of one running forward: the pod and ports it bridges, the local sockets currently
+ * bridged to it, and the notification for a connection the pod side ended.
+ */
+private class ForwardState(
+    val pod: V1Pod,
+    val localPort: Int,
+    val remotePort: Int,
+    val onRemoteEnd: () -> Unit
+) {
+    val ports = PortMapping(localPort, remotePort)
+    val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+}
+
+/**
  * Bridges a local loopback port to a port on a DevWorkspace pod via a Kubernetes port-forward,
  * retrying failed handshakes while the pod is alive and the local client stays connected.
  */
@@ -101,21 +124,30 @@ internal class PodPortForwarder(
 
     private val logger = logger<PodPortForwarder>()
 
+    /**
+     * @param onRemoteEnd invoked when an established connection ends other than by a clean
+     * client-side close: the pod side ended it (EOF or failure), or the copy failed while talking
+     * to the pod. A client that closed itself does not invoke it: the client is already gone.
+     */
     @Throws(IOException::class)
-    fun forward(pod: V1Pod, localPort: Int, remotePort: Int): PortForwardSession {
+    fun forward(
+        pod: V1Pod,
+        localPort: Int,
+        remotePort: Int,
+        onRemoteEnd: () -> Unit = {}
+    ): PortForwardSession {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
         val scope = CoroutineScope(
             // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
             SupervisorJob() + PortForwardDispatcher.dispatcher
         )
-        // local sockets currently bridged to the pod, so they can be dropped on demand
-        val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
-        scope.acceptConnections(serverSocket, clientSockets, pod, localPort, remotePort)
+        val state = ForwardState(pod, localPort, remotePort, onRemoteEnd)
+        scope.acceptConnections(serverSocket, state)
         return object : PortForwardSession {
             override fun close() {
                 closeQuietly(serverSocket)
                 scope.cancel()
-                closeClientSockets(clientSockets, localPort)
+                closeClientSockets(state)
             }
         }
     }
@@ -126,41 +158,32 @@ internal class PodPortForwarder(
      * [CoroutineScope.cancel] alone does not unblock the copy pumps: `InputStream.read` ignores
      * coroutine cancellation. Closing the sockets is what makes the client notice the loss.
      */
-    private fun closeClientSockets(clientSockets: MutableSet<Socket>, localPort: Int) {
-        val sockets = clientSockets.toList()
-        clientSockets.clear()
+    private fun closeClientSockets(state: ForwardState) {
+        val sockets = state.clientSockets.toList()
+        state.clientSockets.clear()
         if (sockets.isNotEmpty()) {
-            logger.info("Closing ${sockets.size} client connection(s) of port forward on local port $localPort")
+            logger.info(
+                "Closing ${sockets.size} client connection(s) of port forward " +
+                    "on local port ${state.localPort}"
+            )
         }
         sockets.forEach { closeQuietly(it) }
     }
 
-    private fun CoroutineScope.acceptConnections(
-        serverSocket: ServerSocket,
-        clientSockets: MutableSet<Socket>,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
-    ) {
+    private fun CoroutineScope.acceptConnections(serverSocket: ServerSocket, state: ForwardState) {
         launch {
             logger.info(
-                "Starting port forward on local port $localPort " +
+                "Starting port forward on local port ${state.localPort} " +
                     "(transport=java-websocket, copyBuffer=$COPY_BUFFER_SIZE, dispatcher=devspaces-port-forward)"
             )
 
             while (isActive) {
                 val clientSocket = createClientSocket(serverSocket) ?: break
                 applyClientSocketOptions(clientSocket)
-                clientSockets.add(clientSocket)
+                state.clientSockets.add(clientSocket)
 
                 launch {
-                    handleConnection(
-                        clientSocket,
-                        clientSockets,
-                        pod,
-                        localPort,
-                        remotePort
-                    )
+                    handleConnection(clientSocket, state)
                 }
             }
         }
@@ -179,64 +202,62 @@ internal class PodPortForwarder(
         }
     }
 
-    private suspend fun CoroutineScope.handleConnection(
-        clientSocket: Socket,
-        clientSockets: MutableSet<Socket>,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
-    ) {
+    private suspend fun CoroutineScope.handleConnection(clientSocket: Socket, state: ForwardState) {
         val acceptedAtNanos = System.nanoTime()
         try {
-            forwardWithRetries(clientSocket, pod, localPort, remotePort, acceptedAtNanos)
+            forwardWithRetries(clientSocket, state, acceptedAtNanos)
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             logger.warn(
-                "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
+                "Could not port forward to pod ${state.pod.metadata?.name} " +
+                    "using port ${state.localPort} -> ${state.remotePort}",
                 e)
         } finally {
-            clientSockets.remove(clientSocket)
+            state.clientSockets.remove(clientSocket)
             closeQuietly(clientSocket)
         }
     }
 
     private suspend fun CoroutineScope.forwardWithRetries(
         clientSocket: Socket,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int,
+        state: ForwardState,
         acceptedAtNanos: Long
     ) {
-        val ports = PortMapping(localPort, remotePort)
         // wraps the client input so the client-gone probe can push back the byte it has to read (see isClientGone)
         val clientIn = PushbackInputStream(clientSocket.getInputStream(), 1)
         var firstFailureNanos: Long? = null
         for (attempt in 1..CONNECT_ATTEMPTS) {
             if (!isActive) return
-            logger.info("Attempt #$attempt: Connecting $localPort -> $remotePort...")
+            logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
             val isTerminal = when (
-                val result = attemptForward(clientSocket, clientIn, pod, localPort, remotePort)
+                val result = attemptForward(clientSocket, clientIn, state)
             ) {
                 // the copy already closed the local socket: any outcome is terminal
                 is AttemptResult.Ended -> {
-                    logCopyEnd(result.copy, localPort, remotePort, acceptedAtNanos)
+                    logCopyEnd(result.copy, state.localPort, state.remotePort, acceptedAtNanos)
+                    // a client-side failure is not a client-initiated close: on a messy pod death
+                    // the client pump often fails first, and the Guest still has to report the loss
+                    if (!result.copy.isClosedByClient) {
+                        state.onRemoteEnd()
+                    }
                     true
                 }
                 is AttemptResult.HandshakeFailed -> {
                     val failureStartedAt = firstFailureNanos ?: System.nanoTime()
                     firstFailureNanos = failureStartedAt
-                    decideRetry(pod, failureStartedAt, attempt, ports, result.cause) != RetryDecision.RETRY
+                    decideRetry(state.pod, failureStartedAt, attempt, state.ports, result.cause) !=
+                        RetryDecision.RETRY
                 }
             }
             if (isTerminal) break
             if (isClientGone(clientSocket, clientIn)) {
-                logClientGone(localPort, remotePort)
+                logClientGone(state.localPort, state.remotePort)
                 return
             }
             @Suppress("ConvertLongToDuration")
             delay(RECONNECT_DELAY)
             if (isClientGone(clientSocket, clientIn)) {
-                logClientGone(localPort, remotePort)
+                logClientGone(state.localPort, state.remotePort)
                 return
             }
         }
@@ -284,31 +305,25 @@ internal class PodPortForwarder(
     private suspend fun attemptForward(
         clientSocket: Socket,
         clientIn: PushbackInputStream,
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
+        state: ForwardState
     ): AttemptResult {
         var forwardResult: PortForward.PortForwardResult? = null
         return try {
-            val opened = openForward(pod, localPort, remotePort)
+            val opened = openForward(state)
             forwardResult = opened
-            AttemptResult.Ended(copyStreams(clientSocket, clientIn, forwardResult, remotePort))
+            AttemptResult.Ended(copyStreams(clientSocket, clientIn, forwardResult, state.remotePort))
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             if (forwardResult == null) AttemptResult.HandshakeFailed(e)
-            else AttemptResult.Ended(CopyResult.Failed(e))
+            else AttemptResult.Ended(CopyResult.Failed(CopySide.REMOTE, e))
         } finally {
-            closeStreams(remotePort, forwardResult)
+            closeStreams(state.remotePort, forwardResult)
         }
     }
 
-    private fun openForward(
-        pod: V1Pod,
-        localPort: Int,
-        remotePort: Int
-    ): PortForward.PortForwardResult {
-        val opened = PortForward(client).forward(pod, listOf(remotePort))
-        logger.info("forward successful: $localPort -> $remotePort...")
+    private fun openForward(state: ForwardState): PortForward.PortForwardResult {
+        val opened = PortForward(client).forward(state.pod, listOf(state.remotePort))
+        logger.info("forward successful: ${state.localPort} -> ${state.remotePort}...")
         return opened
     }
 
@@ -378,7 +393,7 @@ internal class PodPortForwarder(
             "Port forward $localPort -> $remotePort ended (reason=${result.reason()}, " +
                 "elapsed=${elapsedMs}ms); closing local socket"
         when (result) {
-            CopyResult.PeerClosed ->
+            is CopyResult.PeerClosed ->
                 logger.info(message)
             is CopyResult.Failed ->
                 logger.info(message, result.cause)
@@ -396,12 +411,12 @@ internal class PodPortForwarder(
         // once the socket is closed below
         val firstResult = CompletableDeferred<CopyResult>()
         val podToClient = launch {
-            firstResult.complete(runCopy {
+            firstResult.complete(runCopy(CopySide.REMOTE) {
                 forwardResult.getInputStream(remotePort).copyToLocalSocket(clientSocket.getOutputStream())
             })
         }
         val clientToPod = launch {
-            firstResult.complete(runCopy {
+            firstResult.complete(runCopy(CopySide.CLIENT) {
                 clientIn.copyToWebSocketOutbound(forwardResult.getOutboundStream(remotePort))
             })
         }
@@ -418,14 +433,14 @@ internal class PodPortForwarder(
         }
     }
 
-    private inline fun runCopy(copy: () -> Unit): CopyResult =
+    private inline fun runCopy(side: CopySide, copy: () -> Unit): CopyResult =
         try {
             copy()
-            CopyResult.PeerClosed
+            CopyResult.PeerClosed(side)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            CopyResult.Failed(e)
+            CopyResult.Failed(side, e)
         }
 
     private fun closeStreams(port: Int, forwardResult: PortForward.PortForwardResult?) {
