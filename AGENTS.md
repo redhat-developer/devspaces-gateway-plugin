@@ -143,8 +143,9 @@ Write elegant, clean, performant, thread-safe code. No draft or incomplete imple
 **Lint (full source set):**
 - `./gradlew detekt`
 
-**Lint (single file, fast feedback):**
-- `detekt --input <path/to/file.kt>`
+**Lint (current branch changes - committed, uncommitted and untracked files vs. main):**
+- `./gradlew detektBranch`
+- Override base ref: `./gradlew detektBranch -PdetektBaseRef=origin/main`
 
 **Type-check:**
 - `./gradlew compileKotlin`
