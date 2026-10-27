@@ -21,21 +21,20 @@ import com.jetbrains.rd.util.lifetime.Lifetime
 import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import com.redhat.devtools.gateway.devworkspace.DevWorkspacePatch
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaceRestart
+import com.redhat.devtools.gateway.devworkspace.DevWorkspaceSessionWatch
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
-import com.redhat.devtools.gateway.devworkspace.RestartDevWorkspaceAnnotationWatch
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import com.redhat.devtools.gateway.download.DevSpacesClientMirror
 import com.redhat.devtools.gateway.openshift.PodPortForwarder
+import com.redhat.devtools.gateway.openshift.PortForwardSession
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
-import java.io.Closeable
 import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -54,6 +53,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Still clear [DevSpacesContext.activeWorkspaces] when the connection ends (before optional
  * remote stop) for tooltips / bookkeeping.
+ *
+ * A live connection also watches its DevWorkspace: a restart annotation from the remote IDE
+ * restarts it, and a stop (Dashboard or Gateway) closes the port forward at once so the Guest
+ * reports the loss without waiting for the pod to terminate.
  */
 class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
 
@@ -80,7 +83,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         devSpacesContext.addWorkspace(workspace)
 
         var remoteIdeServer: RemoteIDEServer? = null
-        var forwarder: Closeable? = null
+        var forwarder: PortForwardSession? = null
         var client: ThinClientHandle? = null
         var clientMirror: AutoCloseable? = null
         val connectionLive = AtomicBoolean(false)
@@ -113,17 +116,9 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
             progress.startingClient()
             waitForConnect(client, connectFailed, checkCancelled)
 
-            if (registerRestartWatcher) {
-                watchRestartAnnotation(
-                    workspace.namespace,
-                    workspace.name,
-                    devSpacesContext.client,
-                    client
-                )
-            }
-
             connectionLive.set(true)
             onConnected()
+            watchSession(workspace, client, fwd, handleRestarts = registerRestartWatcher)
             client
         } catch (e: Exception) {
             if (e !is ThinClientLaunchException || connectionLive.get()) {
@@ -152,7 +147,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnectionEnded: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         remoteIdeServer: RemoteIDEServer?,
-        forwarder: Closeable?,
+        forwarder: PortForwardSession?,
     ) {
         connectFailed.set(true)
         if (connectionLive.get()) {
@@ -167,34 +162,54 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         }
     }
 
+    /**
+     * Watches the workspace that backs this session for the user actions that end it: a restart
+     * annotation set by the remote IDE and a stop requested from Dashboard or Gateway. One watch
+     * stream serves both; see [DevWorkspaceSessionWatch].
+     */
     @Suppress("UnstableApiUsage")
-    private fun watchRestartAnnotation(
-        namespace: String,
-        workspaceName: String,
-        kubeClient: ApiClient,
-        thinClient: ThinClientHandle
+    private fun watchSession(
+        workspace: DevWorkspace,
+        thinClient: ThinClientHandle,
+        forwarder: PortForwardSession,
+        handleRestarts: Boolean
     ) {
-        val restartWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        RestartDevWorkspaceAnnotationWatch(
-            onRestartAnnotated(thinClient),
-            kubeClient,
-            namespace,
-            workspaceName
-        ).start(restartWatchScope)
+        val sessionWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val workspaces = DevWorkspaces(devSpacesContext.client)
+        val sessionWatch = DevWorkspaceSessionWatch(
+            namespace = workspace.namespace,
+            workspaceName = workspace.name,
+            readWorkspace = { workspaces.get(workspace.namespace, workspace.name) },
+            createWatcher = { latestResourceVersion ->
+                workspaces.createWatcher(
+                    namespace = workspace.namespace,
+                    fieldSelector = DevWorkspaces.nameSelector(workspace.name),
+                    latestResourceVersion = latestResourceVersion
+                )
+            },
+            onRestartAnnotated = if (handleRestarts) onRestartAnnotated(thinClient) else null,
+            onStopped = {
+                // Closing the forwarder is what makes the Guest read EOF. Its status widget then
+                // reports the loss at once, instead of waiting for the pod to terminate and for
+                // the forwarded stream to end. The listener must go too: the forwarder has the
+                // stopped pod pinned, so a re-dial could only reconnect into that dying pod.
+                forwarder.close()
+            }
+        )
+        sessionWatch.start(sessionWatchScope)
 
         thinClient.lifetime.onTermination {
-            restartWatchScope.cancel()
+            sessionWatch.stop()
+            sessionWatchScope.cancel()
         }
     }
 
     @Suppress("UnstableApiUsage")
-    private fun onRestartAnnotated(
-        thinClient: ThinClientHandle
-    ): () -> Job {
+    private fun onRestartAnnotated(thinClient: ThinClientHandle): () -> Unit {
         return {
-            CoroutineScope(Dispatchers.IO).launch {
-                DevWorkspaceRestart(devSpacesContext).execute(thinClient)
-            }
+            // DevWorkspaceRestart.execute only submits a background task: running it directly keeps
+            // the watch's own dispatch off its consumer thread without a second nested launch.
+            DevWorkspaceRestart(devSpacesContext).execute(thinClient)
         }
     }
 
@@ -214,7 +229,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnectionEnded: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         remoteIdeServer: RemoteIDEServer?,
-        forwarder: Closeable?
+        forwarder: PortForwardSession?
     ) {
         if (!tearDownStarted.compareAndSet(false, true)) {
             return
@@ -336,12 +351,12 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         return remoteIdeServer!!
     }
 
-    private fun setupPortForwarding(pod: V1Pod): Pair<Closeable, Int> {
+    private fun setupPortForwarding(pod: V1Pod): Pair<PortForwardSession, Int> {
         val forwarder = PodPortForwarder(devSpacesContext.client)
         val localPort = findFreePort()
-        val closeable = forwarder.forward(pod, localPort, 5990)
+        val session = forwarder.forward(pod, localPort, 5990)
         forwarder.waitForForwardReady(localPort)
-        return closeable to localPort
+        return session to localPort
     }
 
     /**
@@ -375,7 +390,7 @@ class DevSpacesConnection(private val devSpacesContext: DevSpacesContext) {
         onConnectionEnded: () -> Unit,
         onDevWorkspaceStopped: () -> Unit,
         remoteIdeServer: RemoteIDEServer?,
-        forwarder: Closeable?,
+        forwarder: PortForwardSession?,
         connectFailed: AtomicBoolean,
         connectionLive: AtomicBoolean,
     ): ThinClientHandle {

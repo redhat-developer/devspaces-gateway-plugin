@@ -23,8 +23,18 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.PushbackInputStream
 import java.net.*
+import java.util.concurrent.ConcurrentHashMap
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/**
+ * A running port forward.
+ *
+ * [close] stops the listener and closes the established connections, so the client reads EOF at
+ * once. The listener must not outlive the forward: the pod is pinned when the forward is created,
+ * so a re-dial could only reach that same pod.
+ */
+internal interface PortForwardSession : Closeable
 
 /** Why a bidirectional stream copy ended. */
 private sealed interface CopyResult {
@@ -92,21 +102,42 @@ internal class PodPortForwarder(
     private val logger = logger<PodPortForwarder>()
 
     @Throws(IOException::class)
-    fun forward(pod: V1Pod, localPort: Int, remotePort: Int): Closeable {
+    fun forward(pod: V1Pod, localPort: Int, remotePort: Int): PortForwardSession {
         val serverSocket = ServerSocket(localPort, 50, InetAddress.getLoopbackAddress())
         val scope = CoroutineScope(
             // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
             SupervisorJob() + PortForwardDispatcher.dispatcher
         )
-        scope.acceptConnections(serverSocket, pod, localPort, remotePort)
-        return Closeable {
-            closeQuietly(serverSocket)
-            scope.cancel()
+        // local sockets currently bridged to the pod, so they can be dropped on demand
+        val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+        scope.acceptConnections(serverSocket, clientSockets, pod, localPort, remotePort)
+        return object : PortForwardSession {
+            override fun close() {
+                closeQuietly(serverSocket)
+                scope.cancel()
+                closeClientSockets(clientSockets, localPort)
+            }
         }
+    }
+
+    /**
+     * Closes every socket accepted so far so the connected clients read EOF.
+     *
+     * [CoroutineScope.cancel] alone does not unblock the copy pumps: `InputStream.read` ignores
+     * coroutine cancellation. Closing the sockets is what makes the client notice the loss.
+     */
+    private fun closeClientSockets(clientSockets: MutableSet<Socket>, localPort: Int) {
+        val sockets = clientSockets.toList()
+        clientSockets.clear()
+        if (sockets.isNotEmpty()) {
+            logger.info("Closing ${sockets.size} client connection(s) of port forward on local port $localPort")
+        }
+        sockets.forEach { closeQuietly(it) }
     }
 
     private fun CoroutineScope.acceptConnections(
         serverSocket: ServerSocket,
+        clientSockets: MutableSet<Socket>,
         pod: V1Pod,
         localPort: Int,
         remotePort: Int
@@ -120,10 +151,12 @@ internal class PodPortForwarder(
             while (isActive) {
                 val clientSocket = createClientSocket(serverSocket) ?: break
                 applyClientSocketOptions(clientSocket)
+                clientSockets.add(clientSocket)
 
                 launch {
                     handleConnection(
                         clientSocket,
+                        clientSockets,
                         pod,
                         localPort,
                         remotePort
@@ -148,6 +181,7 @@ internal class PodPortForwarder(
 
     private suspend fun CoroutineScope.handleConnection(
         clientSocket: Socket,
+        clientSockets: MutableSet<Socket>,
         pod: V1Pod,
         localPort: Int,
         remotePort: Int
@@ -161,6 +195,7 @@ internal class PodPortForwarder(
                 "Could not port forward to pod ${pod.metadata?.name} using port $localPort -> $remotePort",
                 e)
         } finally {
+            clientSockets.remove(clientSocket)
             closeQuietly(clientSocket)
         }
     }

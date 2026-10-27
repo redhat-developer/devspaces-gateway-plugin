@@ -30,6 +30,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -183,6 +184,20 @@ class PodPortForwarderTest {
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         closeable.close()
+    }
+
+    @Test
+    fun `#close stops accepting connections`() {
+        // given - a forward that is not bridging anything
+        val session = PodPortForwarder(client).forward(pod, localPort, remotePort)
+
+        // when - the workspace is stopped: the whole forward, listener included, is closed
+        session.close()
+
+        // then - a re-dial is refused instead of reaching the stopped pod
+        assertThrows<IOException> {
+            Socket("127.0.0.1", localPort).close()
+        }
     }
 
     @Test
