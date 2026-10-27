@@ -15,6 +15,7 @@ import com.intellij.openapi.application.EDT
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.asContextElement
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.WatchEventType
 import com.redhat.devtools.gateway.openshift.isForbidden
 import com.redhat.devtools.gateway.openshift.isGone
 import com.redhat.devtools.gateway.openshift.isNotFound
@@ -183,7 +184,8 @@ internal class DevWorkspaceWatch(
      */
     @Suppress("ReturnCount")
     private suspend fun handleEvent(event: Watch.Response<Any>, currentResourceVersion: String?): EventOutcome {
-        if (event.type == "ERROR") {
+        val type = WatchEventType.fromWireName(event.type)
+        if (type == WatchEventType.ERROR) {
             // Watch.parseLine() deserializes ERROR events into a V1Status and
             // resolves the more specific Response(String, V1Status) constructor,
             // which sets `object` to null and the payload lands in `status` instead.
@@ -211,10 +213,11 @@ internal class DevWorkspaceWatch(
         // to the listener succeeds, so a transient UI-dispatch failure can't make
         // the next reconnect resume from a stale resource version.
         dispatchToListener {
-            when (event.type) {
-                "ADDED"    -> listener.onAdded(dw)
-                "MODIFIED" -> listener.onUpdated(dw)
-                "DELETED"  -> listener.onDeleted(dw)
+            when (type) {
+                WatchEventType.ADDED    -> listener.onAdded(dw)
+                WatchEventType.MODIFIED -> listener.onUpdated(dw)
+                WatchEventType.DELETED  -> listener.onDeleted(dw)
+                else                    -> {} // ERROR returns above; other types carry no workspace change
             }
         }
         return EventOutcome(dw.resourceVersion ?: currentResourceVersion, streamUsable = true)

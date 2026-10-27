@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.WatchEventType
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.CoroutineDispatcher
@@ -50,7 +51,8 @@ class RestartDevWorkspaceAnnotationWatch(
                 try {
                     for (event in watcher) {
                         if (!isActive) break
-                        if (event.type != "ADDED" && event.type != "MODIFIED") continue
+                        val type = WatchEventType.fromWireName(event.type)
+                        if (type != WatchEventType.ADDED && type != WatchEventType.MODIFIED) continue
 
                         val dw = runCatching { DevWorkspace.from(event.`object`) }.getOrNull() ?: continue
                         if (dw.name != workspaceName || dw.namespace != namespace) continue
