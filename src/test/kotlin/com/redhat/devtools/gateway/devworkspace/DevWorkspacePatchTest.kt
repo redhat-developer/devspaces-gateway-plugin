@@ -29,7 +29,7 @@ class DevWorkspacePatchTest {
     private lateinit var customApi: CustomObjectsApi
     private lateinit var apiClient: ApiClient
     private lateinit var annotation: DevWorkspacePatch
-    private lateinit var mockDevWorkspace: DevWorkspace
+    private lateinit var devWorkspace: DevWorkspace
 
     private val namespace = "test-namespace"
     private val workspaceName = "test-workspace"
@@ -39,14 +39,13 @@ class DevWorkspacePatchTest {
         apiClient = mockk(relaxed = true)
         devWorkspaces = mockk(relaxed = true)
         customApi = mockk(relaxed = true)
-        mockDevWorkspace = mockk(relaxed = true)
         every { customApi.apiClient } returns apiClient
-        every { mockDevWorkspace.annotations } returns emptyMap()
+        devWorkspace = createDevWorkspace(annotations = emptyMap())
         annotation = DevWorkspacePatch(
             namespace,
             workspaceName,
             customApi
-        ) { mockDevWorkspace }
+        ) { devWorkspace }
     }
 
     @Test
@@ -331,8 +330,7 @@ class DevWorkspacePatchTest {
     @Test
     fun `#hasRestartAnnotation returns true when annotation is present and set to true`() {
         // given
-        val annotations = mapOf(DevWorkspacePatch.RESTART_KEY to DevWorkspacePatch.RESTART_VALUE)
-        every { mockDevWorkspace.annotations } returns annotations
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE))
 
         // when
         val result = annotation.hasRestartAnnotation()
@@ -344,7 +342,7 @@ class DevWorkspacePatchTest {
     @Test
     fun `#hasRestartAnnotation returns false when annotation is missing`() {
         // given
-        every { mockDevWorkspace.annotations } returns emptyMap()
+        devWorkspace = createDevWorkspace(annotations = emptyMap())
 
         // when
         val result = annotation.hasRestartAnnotation()
@@ -356,8 +354,7 @@ class DevWorkspacePatchTest {
     @Test
     fun `#hasRestartAnnotation returns false when annotation has wrong value`() {
         // given
-        val annotations = mapOf(DevWorkspacePatch.RESTART_KEY to "false")
-        every { mockDevWorkspace.annotations } returns annotations
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.RESTART_KEY to "false"))
 
         // when
         val result = annotation.hasRestartAnnotation()
@@ -365,4 +362,25 @@ class DevWorkspacePatchTest {
         // then
         assertThat(result).isFalse()
     }
+
+    /**
+     * A real [DevWorkspace] (not a mock), so that derived state such as
+     * [DevWorkspace.isAnnotatedForRestart] is computed from [annotations].
+     */
+    private fun createDevWorkspace(annotations: Map<String, String>): DevWorkspace = DevWorkspace.from(
+        mapOf(
+            "metadata" to mapOf(
+                "name" to workspaceName,
+                "namespace" to namespace,
+                "annotations" to annotations,
+                "uid" to "test-uid"
+            ),
+            "spec" to mapOf(
+                "started" to true
+            ),
+            "status" to mapOf(
+                "phase" to "Running"
+            )
+        )
+    )
 }

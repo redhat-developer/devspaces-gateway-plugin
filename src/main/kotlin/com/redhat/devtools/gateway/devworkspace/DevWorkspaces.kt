@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -57,13 +57,10 @@ class DevWorkspaces(private val client: ApiClient) {
     private val customApi = CustomObjectsApi(client)
 
     companion object {
-        const val FAILED: String = "Failed"
-        const val RUNNING: String = "Running"
-        const val STOPPED: String = "Stopped"
-        const val STARTING: String = "Starting"
-        const val STOPPING: String = "Stopping"
-
         const val RUNNING_TIMEOUT: Long = 300
+
+        /** Field selector that matches only the DevWorkspace called [name]. */
+        fun nameSelector(name: String): String = "metadata.name=$name"
     }
 
     @Throws(ApiException::class)
@@ -219,7 +216,7 @@ class DevWorkspaces(private val client: ApiClient) {
             start(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, RUNNING, timeoutSec, checkCancelled) }) {
+        if (!runBlocking { waitPhase(namespace, name, DevWorkspace.RUNNING, timeoutSec, checkCancelled) }) {
             throw IOException("Workspace '$name' is not running after $timeoutSec seconds")
         }
     }
@@ -238,7 +235,7 @@ class DevWorkspaces(private val client: ApiClient) {
             stop(namespace, name)
         }
 
-        if (!runBlocking { waitPhase(namespace, name, STOPPED, timeoutSec, checkCancelled) }) {
+        if (!runBlocking { waitPhase(namespace, name, DevWorkspace.STOPPED, timeoutSec, checkCancelled) }) {
             throw IOException("Workspace '$name' has not stopped after $timeoutSec seconds")
         }
     }
@@ -269,7 +266,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 when (devWorkspace.phase) {
                     desiredPhase
                         -> return@withTimeoutOrNull true
-                    FAILED
+                    DevWorkspace.FAILED
                         -> return@withTimeoutOrNull false
                 }
 

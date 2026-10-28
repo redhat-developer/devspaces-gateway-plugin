@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -23,7 +24,9 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.ThinClientConnectException
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.util.WorkspaceSessionProgress
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.util.updateProgress
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.Dispatchers
@@ -56,8 +59,12 @@ class DevWorkspaceRestart(
     private val namespace get() = devSpacesContext.devWorkspace.namespace
     private val workspaceName get() = devSpacesContext.devWorkspace.name
 
+    /**
+     * Submits the restart as a background task and returns without waiting for it: the task itself
+     * blocks on [restart] and shows an error dialog on failure.
+     */
     @Suppress("UnstableApiUsage")
-    suspend fun execute(thinClient: ThinClientHandle) {
+    fun execute(thinClient: ThinClientHandle) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             null, "Restart workspace", true
         ) {
@@ -67,7 +74,8 @@ class DevWorkspaceRestart(
                         runBlocking(Dispatchers.IO) {
                             restart(thinClient, indicator)
                         }
-
+                    } catch (e: ProcessCanceledException) {
+                        throw e // user cancellation is not a restart failure
                     } catch (e: Exception) {
                         thisLogger().error("Could not restart workspace $namespace/$workspaceName",e)
                         ApplicationManager.getApplication().invokeLater {
@@ -96,22 +104,22 @@ class DevWorkspaceRestart(
         thinClient: ThinClientHandle,
         indicator: ProgressIndicator?
     ) {
-        indicator?.update("Closing IDE connection...", 0.0)
+        indicator?.updateProgress(WorkspaceSessionProgress.CLOSING_IDE, 0.0)
         close(thinClient)
 
-        indicator?.update("Stopping workspace...", 0.2)
+        indicator?.updateProgress(WorkspaceSessionProgress.STOPPING_WORKSPACE, 0.2)
         stopWorkspaceAndWait()
 
-        indicator?.update("Waiting for pods to terminate...", 0.4)
+        indicator?.updateProgress(WorkspaceSessionProgress.WAITING_PODS_TERMINATE, 0.4)
         waitForPodsDeleted(indicator)
 
-        indicator?.update("Starting workspace...", 0.6)
+        indicator?.updateProgress(WorkspaceSessionProgress.STARTING_WORKSPACE, 0.6)
         startWorkspaceAndWait()
 
-        indicator?.update("Waiting for IDE to be ready...", 0.8)
+        indicator?.updateProgress(WorkspaceSessionProgress.WAITING_FOR_IDE, 0.8)
         waitForIDEReady()
 
-        indicator?.update("Connecting to IDE...", 1.0)
+        indicator?.updateProgress(WorkspaceSessionProgress.CONNECTING_TO_IDE, 1.0)
         connectIDE()
     }
 
@@ -237,11 +245,5 @@ class DevWorkspaceRestart(
         }.onFailure { e ->
             thisLogger().debug("Failed to remove restart annotation from $namespace/$workspaceName", e)
         }
-    }
-
-    private fun ProgressIndicator.update(text: String, fraction: Double) {
-        this.fraction = fraction
-        this.text = text
-
     }
 }

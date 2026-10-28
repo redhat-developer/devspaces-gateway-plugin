@@ -17,6 +17,8 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -50,16 +52,36 @@ internal class RawHttpServer(
     private val serverSocket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
     private val requestCount = AtomicInteger()
 
+    /**
+     * Connection threads and sockets that are serving right now. [close] stops them, so a test that
+     * cancels mid-request does not leave a handler sleeping past its own end (the platform test
+     * framework fails tests on leaked threads).
+     */
+    private val connectionThreads = CopyOnWriteArrayList<Thread>()
+    private val connections = ConcurrentHashMap.newKeySet<Socket>()
+
+    @Volatile
+    private var acceptThread: Thread? = null
+
     @Volatile
     private var running = true
 
     fun start() {
         val started = CountDownLatch(1)
-        thread(isDaemon = true, name = "raw-http-server-accept") {
+        acceptThread = thread(isDaemon = true, name = "raw-http-server-accept") {
             started.countDown()
             while (running) {
                 val socket = runCatching { serverSocket.accept() }.getOrNull() ?: break
-                thread(isDaemon = true, name = "raw-http-server-connection") { handle(socket) }
+                connections.add(socket)
+                val connection = thread(isDaemon = true, name = "raw-http-server-connection") {
+                    try {
+                        handle(socket)
+                    } finally {
+                        connections.remove(socket)
+                        connectionThreads.remove(Thread.currentThread())
+                    }
+                }
+                connectionThreads.add(connection)
             }
         }
         started.await(5, TimeUnit.SECONDS)
@@ -69,6 +91,7 @@ internal class RawHttpServer(
 
     val port: Int get() = serverSocket.localPort
 
+    @Suppress("SwallowedException") // a failed handler answers 500; an interrupted one is shutdown
     private fun handle(socket: Socket) {
         try {
             socket.use { s ->
@@ -82,8 +105,13 @@ internal class RawHttpServer(
                     if (line.isBlank()) break
                     headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim()
                 }
-                val response = runCatching { handler(Request(path, headers), requestCount.incrementAndGet()) }
-                    .getOrElse { Response(status = "500 Internal Server Error") }
+                val response = try {
+                    handler(Request(path, headers), requestCount.incrementAndGet())
+                } catch (e: InterruptedException) {
+                    throw e // close() interrupts a handler that waits (e.g. for response headers)
+                } catch (e: Exception) {
+                    Response(status = "500 Internal Server Error")
+                }
 
                 val out = s.getOutputStream()
                 out.write("HTTP/1.1 ${response.status}\r\n".toByteArray())
@@ -116,6 +144,8 @@ internal class RawHttpServer(
                     return
                 }
             }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt() // close() stops a handler waiting in the test
         } catch (e: IOException) {
             // clients that cancel or reset mid-response are part of the test scenarios
         }
@@ -133,6 +163,18 @@ internal class RawHttpServer(
 
     override fun close() {
         running = false
-        serverSocket.close()
+        runCatching { serverSocket.close() }
+        // unblock reads/writes and handler waits before the test framework checks for leaked threads
+        connections.forEach { runCatching { it.close() } }
+        connectionThreads.forEach { it.interrupt() }
+        acceptThread?.let { runCatching { it.join(CLOSE_TIMEOUT_MILLIS) } }
+        connectionThreads.forEach { runCatching { it.join(CLOSE_TIMEOUT_MILLIS) } }
+        connections.clear()
+        connectionThreads.clear()
+        acceptThread = null
+    }
+
+    private companion object {
+        private const val CLOSE_TIMEOUT_MILLIS = 1_000L
     }
 }
