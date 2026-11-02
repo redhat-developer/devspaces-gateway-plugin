@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.devworkspace
 import com.intellij.openapi.diagnostic.Logger
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.ApiResponse
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.mockk.*
 import org.assertj.core.api.Assertions.assertThat
@@ -35,6 +36,21 @@ class DevWorkspacesTest {
     fun beforeEach() {
         client = mockk(relaxed = true)
         customApi = mockk(relaxed = true)
+
+        // PatchUtils deserializes the response as DevWorkspace, so hand back a typed ApiResponse
+        // rather than letting the relaxed mock leak an untyped Object.
+        val patchResponse = mockk<ApiResponse<DevWorkspace>>()
+        every { patchResponse.data } returns DevWorkspace.from(
+            mapOf(
+                "metadata" to mapOf(
+                    "name" to workspaceName,
+                    "namespace" to namespace,
+                    "uid" to "uid",
+                    "resourceVersion" to "1"
+                )
+            )
+        )
+        every { client.execute<DevWorkspace>(any(), any()) } returns patchResponse
 
         // Mock CustomObjectsApi constructor
         mockkConstructor(CustomObjectsApi::class)
@@ -93,7 +109,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(result)
@@ -107,7 +123,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -126,7 +142,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -147,10 +163,139 @@ class DevWorkspacesTest {
         mockPatchDevWorkspace(callBuilder)
 
         // when
-        devWorkspaces.removeRestarting(namespace, workspaceName)
+        devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
 
         // then
         verifyPatchDevWorkspace()
+    }
+
+    @Test
+    fun `#removeRestartRequest removes both restart request annotations`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE,
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspace(mockk(relaxed = true))
+
+        // when
+        devWorkspaces.removeRestartRequest(namespace, workspaceName)
+
+        // then
+        verify(atLeast = 1) {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                match { patchContains(it, "restart-in-progress") }
+            )
+        }
+        verify(atLeast = 1) {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                match { patchContains(it, "pending-devfile-template") }
+            )
+        }
+    }
+
+    @Test
+    fun `#removeRestartRequest attempts pending template removal when restart removal fails`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE,
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceThrows(ApiException("API error"))
+
+        // when/then
+        assertThatThrownBy {
+            devWorkspaces.removeRestartRequest(namespace, workspaceName)
+        }.isInstanceOf(ApiException::class.java)
+            .hasMessageContaining("API error")
+        verify(atLeast = 1) {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                match { patchContains(it, "restart-in-progress") }
+            )
+        }
+        verify(atLeast = 1) {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                match { patchContains(it, "pending-devfile-template") }
+            )
+        }
+    }
+
+    @Test
+    fun `#removeRestartRequest removes pending template before the restart annotation`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE,
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        val removalOrder = mutableListOf<String>()
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceRecording(removalOrder)
+
+        // when
+        devWorkspaces.removeRestartRequest(namespace, workspaceName)
+
+        // then
+        assertThat(removalOrder)
+            .containsExactly("pending-devfile-template", "restart-in-progress")
+    }
+
+    @Test
+    fun `#removeRestartRequest removes pending template when restart annotation is absent`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        val removalOrder = mutableListOf<String>()
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceRecording(removalOrder)
+
+        // when
+        devWorkspaces.removeRestartRequest(namespace, workspaceName)
+
+        // then
+        assertThat(removalOrder).contains("pending-devfile-template")
     }
 
     @Test
@@ -184,7 +329,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.isRestarting(namespace, workspaceName)
+            devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }
@@ -196,7 +341,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.removeRestarting(namespace, workspaceName)
+            devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }
@@ -630,6 +775,9 @@ class DevWorkspacesTest {
         )
     }
 
+    private fun patchContains(patch: Any, pathFragment: String): Boolean =
+        (patch as? Array<*>)?.any { it.toString().contains(pathFragment) } == true
+
     private fun mockPatchDevWorkspace(callBuilder: okhttp3.Call) {
         every {
             anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
@@ -657,6 +805,36 @@ class DevWorkspacesTest {
             )
         } returns mockk {
             every { buildCall(null) } throws exception
+        }
+    }
+
+    private fun mockPatchDevWorkspaceRecording(removalOrder: MutableList<String>) {
+        // PatchUtils invokes the PatchCallFunc twice for one patch (request inspection and the
+        // actual call). Both invocations receive the same patch instance, so record only the
+        // first one to keep one entry per logical patch.
+        var lastRecordedPatch: Any? = null
+        every {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        } answers {
+            val patch = arg<Any>(5)
+            if (patch !== lastRecordedPatch) {
+                lastRecordedPatch = patch
+                when {
+                    patchContains(patch, "pending-devfile-template") ->
+                        removalOrder.add("pending-devfile-template")
+
+                    patchContains(patch, "restart-in-progress") ->
+                        removalOrder.add("restart-in-progress")
+                }
+            }
+            mockk { every { buildCall(null) } returns mockk(relaxed = true) }
         }
     }
 

@@ -36,6 +36,19 @@ fun ApiException.isGone(): Boolean {
     return code == 410 || getStatus()?.code == 410
 }
 
+fun ApiException.isUnprocessableEntity(): Boolean {
+    return code == 422 || getStatus()?.code == 422
+}
+
+fun ApiException.isRequestTimeout(): Boolean {
+    return code == 408 || getStatus()?.code == 408
+}
+
+/** `ApiException.code` when the client got no HTTP response, e.g. on a timeout. */
+fun ApiException.isNoHttpStatus(): Boolean {
+    return code == 0
+}
+
 fun ApiException.isDevWorkspaceCrdMissing(): Boolean {
     val status = getStatus() ?: return false
     val message = status.message.orEmpty()

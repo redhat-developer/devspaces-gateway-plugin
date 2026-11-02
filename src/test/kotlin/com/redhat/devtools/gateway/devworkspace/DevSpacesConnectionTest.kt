@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.redhat.devtools.gateway.ClientWindowFocus
 import com.redhat.devtools.gateway.ThinClientDownloadException
@@ -213,6 +214,51 @@ class DevSpacesConnectionTest {
             }
         }
         assertThat(closed).isTrue()
+    }
+
+    @Test
+    fun `teardown during restart keeps host projects and workspace`() {
+        val closed = AtomicBoolean(false)
+        val session = PortForwardSession(41_234) { closed.set(true) }
+        val connectionWithForward = DevSpacesConnection(
+            devSpacesContext,
+            ClientWindowFocus(),
+            PortForwarder { _, _, _ -> session }
+        )
+        every { anyConstructed<DevWorkspaces>().get(any<String>(), any<String>()) } returns
+            mockk(relaxed = true) {
+                every { annotations } returns mapOf(
+                    DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE
+                )
+            }
+        mockkObject(ProjectManagerEx.Companion)
+        try {
+            every { ProjectManagerEx.Companion.getInstanceEx() } returns mockk(relaxed = true)
+            connectionWithForward.onThinClientClosed(
+                AtomicBoolean(false),
+                AtomicBoolean(true),
+                thinClient,
+                devSpacesContext.devWorkspace,
+                {},
+                {},
+                mockk(relaxed = true),
+                session
+            )
+
+            // teardown runs on Dispatchers.IO: wait for it to reach the forward
+            runBlocking {
+                withTimeout(2_000) {
+                    while (!closed.get()) {
+                        delay(10)
+                    }
+                }
+            }
+
+            verify(exactly = 0) { ProjectManagerEx.Companion.getInstanceEx() }
+            verify(exactly = 0) { anyConstructed<DevWorkspaces>().stop(any(), any()) }
+        } finally {
+            unmockkObject(ProjectManagerEx.Companion)
+        }
     }
 
     @Test

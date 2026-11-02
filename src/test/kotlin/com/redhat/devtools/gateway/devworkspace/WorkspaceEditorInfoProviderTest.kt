@@ -27,7 +27,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "uid1" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("uid1")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("uid1")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -49,7 +49,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "uid1" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("uid1")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("uid1")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "vscode-server"))))
                 )
             )
@@ -71,7 +71,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "uid1" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("uid1")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("uid1")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -270,7 +270,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "test", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -296,7 +296,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -325,7 +325,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "jetbrains-template", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -363,7 +363,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -384,11 +384,11 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "my-template", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "my-template", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "vscode-server"))))
                 ),
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
@@ -408,7 +408,7 @@ class WorkspaceEditorInfoProviderTest {
         val templateMap = mapOf(
             "test-uid" to listOf(
                 DevWorkspaceTemplate(
-                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerRefencesUids = listOf("test-uid")),
+                    metadata = DevWorkspaceTemplateMetadata(name = "other", namespace = "ns", pluginRegistryUrl = null, ownerReferencesUids = listOf("test-uid")),
                     spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
                 )
             )
