@@ -316,7 +316,7 @@ class WorkspaceEditorResolverTest {
                 name = "jetbrains-template",
                 namespace = namespace,
                 pluginRegistryUrl = null,
-                ownerRefencesUids = listOf(ownerUid)
+                ownerReferencesUids = listOf(ownerUid)
             ),
             spec = DevWorkspaceTemplateSpec(components = listOf(mapOf("volume" to mapOf("name" to "idea-server"))))
         )

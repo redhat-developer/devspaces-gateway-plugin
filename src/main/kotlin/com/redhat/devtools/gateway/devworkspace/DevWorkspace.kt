@@ -31,6 +31,15 @@ data class DevWorkspace(
         const val RESTART_KEY: String = "che.eclipse.org/restart-in-progress"
         const val RESTART_VALUE: String = "true"
 
+        /** The annotation that carries the `spec.template` the remote IDE wants applied. */
+        const val PENDING_TEMPLATE_KEY: String = "che.eclipse.org/pending-devfile-template"
+
+        /** The JSON-Patch path of `spec.started`, which starts/stops a workspace. */
+        const val SPEC_STARTED_PATH: String = "/spec/started"
+
+        /** The JSON-Patch path of `spec.template`, which carries the devfile template. */
+        const val SPEC_TEMPLATE_PATH: String = "/spec/template"
+
         fun from(map: Any?) = object {
             val metadata = Utils.getValue(map, arrayOf("metadata")) ?: emptyMap<String, Any>()
             val spec = Utils.getValue(map, arrayOf("spec")) ?: emptyMap<String, Any>()
@@ -112,13 +121,25 @@ data class DevWorkspace(
      */
     val isNoLongerRunning: Boolean
         get() {
-            return isStopped || phase == STOPPING || phase == STOPPED
+            return isStopped
+                    || phase == STOPPING
+                    || phase == STOPPED
         }
 
     /** Whether the remote IDE requested a restart through the [RESTART_KEY] annotation. */
     val isAnnotatedForRestart: Boolean
         get() {
             return annotations[RESTART_KEY] == RESTART_VALUE
+        }
+
+    /**
+     * The unparsed, versioned payload the remote IDE published in [PENDING_TEMPLATE_KEY], or
+     * `null` when no restart request carries a template. See [PendingTemplateParser] for the
+     * payload format.
+     */
+    val pendingTemplatePayload: String?
+        get() {
+            return annotations[PENDING_TEMPLATE_KEY]
         }
 
     override fun equals(other: Any?): Boolean {

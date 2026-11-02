@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.util.Watch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
 
+@Suppress("LargeClass") // one watch, many policy cases; keeping them together eases discovery
 class DevWorkspaceSessionWatchTest {
 
     private val namespace = "test-namespace"
@@ -29,11 +31,13 @@ class DevWorkspaceSessionWatchTest {
 
     private val stoppedReports = AtomicInteger()
     private val restartReports = AtomicInteger()
+    private val clearReports = AtomicInteger()
 
     @BeforeEach
     fun beforeEach() {
         stoppedReports.set(0)
         restartReports.set(0)
+        clearReports.set(0)
     }
 
     // --- stop policy -------------------------------------------------------
@@ -262,22 +266,48 @@ class DevWorkspaceSessionWatchTest {
     }
 
     @Test
-    fun `does not report the annotation that was already present when the watch started`(): Unit = runBlocking {
-        // a stale annotation from an abandoned restart: no transition, so no request
-        val watch = sessionWatch(
-            event("MODIFIED", restart = true),
-            event("MODIFIED", restart = true),
-            baselineRestart = true
-        )
+    fun `clears the annotation that was already present when the watch started`(): Unit = runBlocking {
+        // a leftover annotation is state, not a request: it must be removed so the next request
+        // is observable as an absent-to-present transition
+        val watch = sessionWatch(baselineRestart = true)
+
+        val job = watch.start(this)
+        awaitReport(clearReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(clearReports.get()).isEqualTo(1)
+        assertThat(restartReports.get()).isZero()
+    }
+
+    @Test
+    fun `does not clear an annotation that was absent when the watch started`(): Unit = runBlocking {
+        val watch = sessionWatch()
 
         val job = watch.start(this)
         delay(SETTLE)
         watch.stop()
         job.join()
 
-        assertThat(restartReports.get()).isZero()
-        assertThat(stoppedReports.get()).isZero()
+        assertThat(clearReports.get()).isZero()
     }
+
+    @Test
+    fun `clears a pending template that was left without the restart annotation`(): Unit =
+        runBlocking {
+            // A cleanup that partially failed can leave the template behind. Applying it to a
+            // later request would overwrite devfile changes made in between, so it is stale state
+            // too and must be removed before a new request is accepted.
+            val watch = sessionWatch(baselinePendingTemplate = """{"version":1,"template":{}}""")
+
+            val job = watch.start(this)
+            awaitReport(clearReports, 1)
+            watch.stop()
+            job.join()
+
+            assertThat(clearReports.get()).isEqualTo(1)
+            assertThat(restartReports.get()).isZero()
+        }
 
     @Test
     fun `reports the annotation that is set again after the stale one was removed`(): Unit = runBlocking {
@@ -292,6 +322,76 @@ class DevWorkspaceSessionWatchTest {
         watch.stop()
         job.join()
 
+        assertThat(restartReports.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `reports an annotation set after a stale one was cleaned without an absent event`(): Unit = runBlocking {
+        // The watch stream may be reconnecting and thus not deliver the event of the cleanup. The
+        // next annotated state must still be a request.
+        val watch = sessionWatch(
+            event("MODIFIED", restart = true),
+            baselineRestart = true
+        )
+
+        val job = watch.start(this)
+        awaitReport(restartReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(restartReports.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `reports a restart requested while the stream was down`(): Unit = runBlocking {
+        // an event can be missed while the watch is reconnecting; re-reading the workspace when the
+        // stream is reopened must still observe the request
+        val reads = AtomicInteger()
+        val watch = DevWorkspaceSessionWatch(
+            namespace = namespace,
+            workspaceName = workspaceName,
+            readWorkspace = {
+                val restart = if (reads.incrementAndGet() > 1) true else null
+                DevWorkspace.from(workspace(restart = restart))
+            },
+            createWatcher = { watcherOf(emptyList()) },
+            onRestartAnnotated = { restartReports.incrementAndGet() },
+            onStopped = { stoppedReports.incrementAndGet() },
+            removeRestartAnnotations = {
+                clearReports.incrementAndGet()
+                null
+            },
+            dispatcher = Dispatchers.Default
+        )
+
+        val job = watch.start(this)
+        awaitReport(restartReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(restartReports.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `retries stale cleanup and still reports the next request`(): Unit = runBlocking {
+        val clearAttempts = AtomicInteger()
+        val watch = sessionWatch(
+            event("MODIFIED", restart = true),
+            baselineRestart = true,
+            removeRestartAnnotations = {
+                if (clearAttempts.incrementAndGet() == 1) {
+                    error("cleanup failed")
+                }
+                null
+            }
+        )
+
+        val job = watch.start(this)
+        awaitReport(restartReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(clearAttempts.get()).isGreaterThanOrEqualTo(2)
         assertThat(restartReports.get()).isEqualTo(1)
     }
 
@@ -313,6 +413,252 @@ class DevWorkspaceSessionWatchTest {
 
         assertThat(restartReports.get()).isEqualTo(1)
     }
+
+    @Test
+    fun `keeps a restart request published while clearing stale annotations`(): Unit =
+        runBlocking {
+            val reads = AtomicInteger()
+            val publishedTemplate = """{"version":1,"template":{"components":[]}}"""
+            val watch = DevWorkspaceSessionWatch(
+                namespace = namespace,
+                workspaceName = workspaceName,
+                readWorkspace = {
+                    val published = reads.incrementAndGet() > 1
+                    DevWorkspace.from(
+                        workspace(
+                            restart = true,
+                            pendingTemplate = if (published) publishedTemplate else "old",
+                            resourceVersion = if (published) "101" else "100"
+                        )
+                    )
+                },
+                createWatcher = {
+                    watcherOf(
+                        listOf(
+                            event(
+                                "MODIFIED",
+                                restart = true,
+                                pendingTemplate = publishedTemplate,
+                                resourceVersion = "101"
+                            )
+                        )
+                    )
+                },
+                onRestartAnnotated = { restartReports.incrementAndGet() },
+                onStopped = { stoppedReports.incrementAndGet() },
+                removeRestartAnnotations = {
+                    clearReports.incrementAndGet()
+                    // a failed JSON-Patch test is answered with 422, not 409
+                    throw ApiException(422, "the server rejected our request")
+                },
+                dispatcher = Dispatchers.Default
+            )
+
+            val job = watch.start(this)
+            awaitReport(restartReports, 1)
+            watch.stop()
+            job.join()
+
+            assertThat(restartReports.get()).isEqualTo(1)
+        }
+
+    @Test
+    fun `retries the cleanup when an unrelated write rejected it`(): Unit = runBlocking {
+        val reads = AtomicInteger()
+        val clears = AtomicInteger()
+        val watch = DevWorkspaceSessionWatch(
+            namespace = namespace,
+            workspaceName = workspaceName,
+            readWorkspace = {
+                val version = if (reads.incrementAndGet() == 1) "100" else "101"
+                // the annotations are unchanged: the write that rejected the cleanup was unrelated
+                DevWorkspace.from(
+                    workspace(restart = true, pendingTemplate = "old", resourceVersion = version)
+                )
+            },
+            createWatcher = { watcherOf(emptyList()) },
+            onRestartAnnotated = { restartReports.incrementAndGet() },
+            onStopped = { stoppedReports.incrementAndGet() },
+            removeRestartAnnotations = {
+                if (clears.incrementAndGet() == 1) {
+                    throw ApiException(422, "the server rejected our request")
+                }
+                "102"
+            },
+            dispatcher = Dispatchers.Default
+        )
+
+        val job = watch.start(this)
+        withTimeout(TIMEOUT) {
+            while (clears.get() < 2) {
+                delay(10)
+            }
+        }
+        delay(SETTLE)
+        watch.stop()
+        job.join()
+
+        assertThat(clears.get()).isGreaterThanOrEqualTo(2)
+        assertThat(restartReports.get()).isZero()
+    }
+
+    @Test
+    fun `does not resume from an older version served by a lagging replica`(): Unit = runBlocking {
+        // the read before a reconnect can be older than the last consumed event; resuming from it
+        // would make the stale-event filter accept events that were already handled
+        val reads = AtomicInteger()
+        val resumedVersions = mutableListOf<String?>()
+        val watch = DevWorkspaceSessionWatch(
+            namespace = namespace,
+            workspaceName = workspaceName,
+            readWorkspace = {
+                val version = if (reads.incrementAndGet() == 1) "200" else "150"
+                DevWorkspace.from(workspace(resourceVersion = version))
+            },
+            createWatcher = { version ->
+                resumedVersions.add(version)
+                watcherOf(emptyList())
+            },
+            onRestartAnnotated = null,
+            onStopped = { stoppedReports.incrementAndGet() },
+            dispatcher = Dispatchers.Default
+        )
+
+        val job = watch.start(this)
+        withTimeout(TIMEOUT) {
+            while (resumedVersions.size < 2) {
+                delay(10)
+            }
+        }
+        watch.stop()
+        job.join()
+
+        assertThat(resumedVersions).containsExactly("200", "200")
+    }
+
+    @Test
+    fun `does not replay the still annotated state removed by the baseline cleanup`(): Unit = runBlocking {
+        // cleanup removes the pending template first, so the stream resumed at the baseline
+        // redelivers a version that still carries the restart annotation before the removal
+        val watch = sessionWatch(
+            event("MODIFIED", restart = true, resourceVersion = "101"),
+            event("MODIFIED", resourceVersion = "102"),
+            baselineRestart = true,
+            baselineResourceVersion = "100",
+            cleanupResourceVersion = "102"
+        )
+
+        val job = watch.start(this)
+        delay(SETTLE)
+        watch.stop()
+        job.join()
+
+        assertThat(restartReports.get()).isZero()
+        assertThat(stoppedReports.get()).isZero()
+    }
+
+    @Test
+    fun `reports a request made after the cleanup boundary`(): Unit = runBlocking {
+        val watch = sessionWatch(
+            event("MODIFIED", restart = true, resourceVersion = "101"), // cleanup replay
+            event("MODIFIED", resourceVersion = "102"), // cleanup completed
+            event("MODIFIED", restart = true, resourceVersion = "103"), // new request
+            baselineRestart = true,
+            baselineResourceVersion = "100",
+            cleanupResourceVersion = "102"
+        )
+
+        val job = watch.start(this)
+        awaitReport(restartReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(restartReports.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `reports a stop even when it predates the cleanup boundary`(): Unit = runBlocking {
+        val watch = sessionWatch(
+            event("MODIFIED", started = false, restart = true, resourceVersion = "101"),
+            baselineRestart = true,
+            baselineResourceVersion = "100",
+            cleanupResourceVersion = "102"
+        )
+
+        withTimeout(TIMEOUT) {
+            watch.start(this).join()
+        }
+
+        assertThat(stoppedReports.get()).isEqualTo(1)
+        assertThat(restartReports.get()).isZero()
+    }
+
+    @Test
+    fun `does not replay an annotated reconnect baseline at the cleanup boundary`(): Unit =
+        runBlocking {
+            val reads = AtomicInteger()
+            val watch = DevWorkspaceSessionWatch(
+                namespace = namespace,
+                workspaceName = workspaceName,
+                readWorkspace = {
+                    val resourceVersion = if (reads.incrementAndGet() == 1) "100" else "101"
+                    DevWorkspace.from(
+                        workspace(restart = true, resourceVersion = resourceVersion)
+                    )
+                },
+                createWatcher = { watcherOf(emptyList()) },
+                onRestartAnnotated = { restartReports.incrementAndGet() },
+                onStopped = { stoppedReports.incrementAndGet() },
+                removeRestartAnnotations = {
+                    clearReports.incrementAndGet()
+                    "102"
+                },
+                dispatcher = Dispatchers.Default
+            )
+
+            val job = watch.start(this)
+            withTimeout(TIMEOUT) {
+                while (reads.get() < 2) {
+                    delay(10)
+                }
+            }
+            delay(SETTLE)
+            watch.stop()
+            job.join()
+
+            assertThat(restartReports.get()).isZero()
+        }
+
+    @Test
+    fun `reports an annotated reconnect baseline after the cleanup boundary`(): Unit =
+        runBlocking {
+            val reads = AtomicInteger()
+            val watch = DevWorkspaceSessionWatch(
+                namespace = namespace,
+                workspaceName = workspaceName,
+                readWorkspace = {
+                    val resourceVersion = if (reads.incrementAndGet() == 1) "100" else "103"
+                    DevWorkspace.from(
+                        workspace(restart = true, resourceVersion = resourceVersion)
+                    )
+                },
+                createWatcher = { watcherOf(emptyList()) },
+                onRestartAnnotated = { restartReports.incrementAndGet() },
+                onStopped = { stoppedReports.incrementAndGet() },
+                removeRestartAnnotations = {
+                    clearReports.incrementAndGet()
+                    "102"
+                },
+                dispatcher = Dispatchers.Default
+            )
+
+            val job = watch.start(this)
+            awaitReport(restartReports, 1)
+            watch.stop()
+            job.join()
+
+            assertThat(restartReports.get()).isEqualTo(1)
+        }
 
     @Test
     fun `reports a stop when restart handling is disabled`(): Unit = runBlocking {
@@ -337,12 +683,19 @@ class DevWorkspaceSessionWatchTest {
 
     // --- helpers -----------------------------------------------------------
 
+    @Suppress("LongParameterList") // mirrors the watch constructor and test variations
     private fun sessionWatch(
         vararg events: Watch.Response<Any>,
         baselineRestart: Any? = null,
+        baselinePendingTemplate: String? = null,
         baselineResourceVersion: String? = null,
         baselineStarted: Boolean = true,
-        baselinePhase: String = DevWorkspace.RUNNING
+        baselinePhase: String = DevWorkspace.RUNNING,
+        cleanupResourceVersion: String? = null,
+        removeRestartAnnotations: () -> String? = {
+            clearReports.incrementAndGet()
+            cleanupResourceVersion
+        }
     ) = DevWorkspaceSessionWatch(
         namespace = namespace,
         workspaceName = workspaceName,
@@ -352,6 +705,7 @@ class DevWorkspaceSessionWatchTest {
                     started = baselineStarted,
                     phase = baselinePhase,
                     restart = baselineRestart,
+                    pendingTemplate = baselinePendingTemplate,
                     resourceVersion = baselineResourceVersion
                 )
             )
@@ -359,6 +713,7 @@ class DevWorkspaceSessionWatchTest {
         createWatcher = { watcherOf(events.toList()) },
         onRestartAnnotated = { restartReports.incrementAndGet() },
         onStopped = { stoppedReports.incrementAndGet() },
+        removeRestartAnnotations = removeRestartAnnotations,
         dispatcher = Dispatchers.Default
     )
 
@@ -378,12 +733,21 @@ class DevWorkspaceSessionWatchTest {
         started: Boolean = true,
         phase: String = DevWorkspace.RUNNING,
         restart: Any? = null,
+        pendingTemplate: String? = null,
         name: String = workspaceName,
         namespace: String = this.namespace,
         resourceVersion: String? = null
     ): Watch.Response<Any> = Watch.Response(
         type,
-        workspace(started, phase, restart, name, namespace, resourceVersion)
+        workspace(
+            started = started,
+            phase = phase,
+            restart = restart,
+            pendingTemplate = pendingTemplate,
+            name = name,
+            namespace = namespace,
+            resourceVersion = resourceVersion
+        )
     )
 
     @Suppress("LongParameterList") // mirrors the fields of a DevWorkspace payload
@@ -391,6 +755,7 @@ class DevWorkspaceSessionWatchTest {
         started: Boolean = true,
         phase: String = DevWorkspace.RUNNING,
         restart: Any? = null,
+        pendingTemplate: String? = null,
         name: String = workspaceName,
         namespace: String = this.namespace,
         resourceVersion: String? = null
@@ -399,7 +764,7 @@ class DevWorkspaceSessionWatchTest {
             "name" to name,
             "namespace" to namespace,
             "uid" to "uid",
-            "annotations" to restartAnnotations(restart),
+            "annotations" to requestAnnotations(restart, pendingTemplate),
             "resourceVersion" to resourceVersion
         ),
         "spec" to mapOf(
@@ -410,11 +775,14 @@ class DevWorkspaceSessionWatchTest {
         )
     )
 
-    private fun restartAnnotations(restart: Any?): Map<String, String> =
-        if (restart == null) {
-            emptyMap()
-        } else {
-            mapOf(DevWorkspace.RESTART_KEY to restart.toString())
+    private fun requestAnnotations(restart: Any?, pendingTemplate: String?): Map<String, String> =
+        buildMap {
+            if (restart != null) {
+                put(DevWorkspace.RESTART_KEY, restart.toString())
+            }
+            if (pendingTemplate != null) {
+                put(DevWorkspace.PENDING_TEMPLATE_KEY, pendingTemplate)
+            }
         }
 
     /** [Watch] over a fixed list of events; a real [Watch] blocks on the API server instead. */

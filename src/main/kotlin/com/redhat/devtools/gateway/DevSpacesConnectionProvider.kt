@@ -22,6 +22,7 @@ import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.openshift.toWorkspaceException
 import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.view.SelectClusterDialog
+import com.redhat.devtools.gateway.view.ui.ProgressDialogParent
 import io.kubernetes.client.openapi.ApiException
 import kotlinx.coroutines.*
 import java.util.concurrent.CancellationException
@@ -81,7 +82,8 @@ class DevSpacesConnectionProvider : GatewayConnectionProvider {
                 },
                 "Connecting to Workspace IDE...",
                 true,
-                null
+                null,
+                ProgressDialogParent.component()
             )
         }
     }
