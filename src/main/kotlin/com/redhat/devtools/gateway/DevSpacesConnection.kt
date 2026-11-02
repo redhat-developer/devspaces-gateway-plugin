@@ -11,10 +11,8 @@
  */
 package com.redhat.devtools.gateway
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
@@ -34,7 +32,6 @@ import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -78,7 +75,7 @@ class DevSpacesConnection internal constructor(
     private val tearDownStarted = AtomicBoolean(false)
 
     @Throws(Exception::class)
-    @Suppress("UnstableApiUsage")
+    @Suppress("UnstableApiUsage", "LongParameterList") // this is the connection API surface
     suspend fun connect(
         onConnected: () -> Unit,
         onConnectionEnded: () -> Unit,
@@ -86,9 +83,10 @@ class DevSpacesConnection internal constructor(
         onProgress: ((value: ProgressCountdown.ProgressEvent) -> Unit)? = null,
         checkCancelled: (() -> Unit)? = null,
         modalityState: ModalityState? = null,
-        registerRestartWatcher: Boolean = true
+        registerRestartWatcher: Boolean = true,
+        workspace: DevWorkspace? = null
     ): ThinClientHandle {
-        val workspace = devSpacesContext.devWorkspace
+        val workspace = workspace ?: devSpacesContext.devWorkspace
         tearDownStarted.set(false)
         clientWindowFocus.resetThrottle()
         devSpacesContext.addWorkspace(workspace)
@@ -101,7 +99,7 @@ class DevSpacesConnection internal constructor(
         val progress = DevSpacesClientConnectProgress(onProgress)
 
         return try {
-            remoteIdeServer = waitUntilServerReady(checkCancelled, onProgress, modalityState)
+            remoteIdeServer = waitUntilServerReady(workspace, checkCancelled, onProgress, modalityState)
 
             checkCancelled?.invoke()
             val joinLink = remoteIdeServer.getStatus(checkCancelled).joinLink
@@ -203,7 +201,10 @@ class DevSpacesConnection internal constructor(
                     latestResourceVersion = latestResourceVersion
                 )
             },
-            onRestartAnnotated = if (handleRestarts) onRestartAnnotated(thinClient) else null,
+            onRestartAnnotated = if (handleRestarts) onRestartAnnotated(thinClient, workspace) else null,
+            removeRestartAnnotations = {
+                workspaces.removeRestartRequest(workspace.namespace, workspace.name)
+            },
             onStopped = {
                 // close sockets -> Guest EOF, immediate status loss
                 // close listener -> pod pinned, re-dial would hit stopped pod
@@ -226,8 +227,11 @@ class DevSpacesConnection internal constructor(
      * then sees a failure and retries on the next event.
      */
     @Suppress("UnstableApiUsage")
-    private fun onRestartAnnotated(thinClient: ThinClientHandle): () -> Unit =
-        { DevWorkspaceRestart(devSpacesContext).execute(thinClient) }
+    private fun onRestartAnnotated(
+        thinClient: ThinClientHandle,
+        workspace: DevWorkspace
+    ): () -> Unit =
+        { DevWorkspaceRestart(devSpacesContext).execute(thinClient, workspace) }
 
     /**
      * Ends the local connection: clear "already connected" tracking, notify the UI, then
@@ -262,12 +266,14 @@ class DevSpacesConnection internal constructor(
                 workspace.name,
                 devSpacesContext.client
             ) {
-                DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
+                DevWorkspaces(devSpacesContext.client)
+                    .get(workspace.namespace, workspace.name)
             }
             try {
-                if (workspacePatch.hasRestartAnnotation()) {
-                    closeAllProjects()
-                } else if (true == remoteIdeServer?.waitServerTerminated()) {
+                val restartInProgress = workspacePatch.hasRestartAnnotation()
+                if (!restartInProgress
+                    && true == remoteIdeServer?.waitServerTerminated()) {
+                    // User closed the IDE and asked to stop the workspace.
                     DevWorkspaces(devSpacesContext.client)
                         .stop(workspace.namespace, workspace.name)
                         .also { onDevWorkspaceStopped() }
@@ -279,33 +285,20 @@ class DevSpacesConnection internal constructor(
         }
     }
 
-    private fun closeAllProjects() {
-        ApplicationManager.getApplication().invokeLater(
-            {
-                val pm = ProjectManagerEx.getInstanceEx()
-                for (project in pm.openProjects.toList()) {
-                    if (!project.isDisposed) {
-                        pm.closeAndDispose(project)
-                    }
-                }
-            },
-            ModalityState.nonModal()
-        )
-    }
-
     /**
      * Handles the case where the remote IDE server is not ready after starting the workspace.
      * Shows a dialog and either restarts the workspace (return true) or indicates cancellation (return false).
      */
     private fun handleServerNotReady(
+        workspace: DevWorkspace,
         checkCancelled: (() -> Unit)?,
         modalityState: ModalityState?
     ): Boolean {
         val restartWorkspace = Dialogs.ideNotResponding(modalityState)
         if (restartWorkspace) {
             DevWorkspaces(devSpacesContext.client).stopAndWait(
-                devSpacesContext.devWorkspace.namespace,
-                devSpacesContext.devWorkspace.name,
+                workspace.namespace,
+                workspace.name,
                 checkCancelled = checkCancelled
             )
         }
@@ -313,6 +306,7 @@ class DevSpacesConnection internal constructor(
     }
 
     private suspend fun waitUntilServerReady(
+        workspace: DevWorkspace,
         checkCancelled: (() -> Unit)?,
         onProgress: ((ProgressCountdown.ProgressEvent) -> Unit)?,
         modalityState: ModalityState?
@@ -328,8 +322,8 @@ class DevSpacesConnection internal constructor(
 
             DevWorkspaces(devSpacesContext.client)
                 .startAndWait(
-                    devSpacesContext.devWorkspace.namespace,
-                    devSpacesContext.devWorkspace.name,
+                    workspace.namespace,
+                    workspace.name,
                     checkCancelled = checkCancelled)
 
             checkCancelled?.invoke()
@@ -338,7 +332,7 @@ class DevSpacesConnection internal constructor(
                 countdownSeconds = RemoteIDEServer.READY_TIMEOUT)
             )
 
-            remoteIdeServer = RemoteIDEServer(devSpacesContext)
+            remoteIdeServer = RemoteIDEServer(devSpacesContext, workspace)
             remoteIdeServerStatus = runCatching {
                 remoteIdeServer.apply { waitServerReady(checkCancelled) }.getStatus(checkCancelled)
             }.getOrElse { e ->
@@ -350,7 +344,7 @@ class DevSpacesConnection internal constructor(
 
             checkCancelled?.invoke()
             if (!remoteIdeServerStatus.isReady) {
-                if (handleServerNotReady(checkCancelled, modalityState)) {
+                if (handleServerNotReady(workspace, checkCancelled, modalityState)) {
                     continue
                 } else {
                     throw CancellationException("User cancelled the operation")

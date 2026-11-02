@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.devworkspace
 import com.intellij.openapi.diagnostic.Logger
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.ApiResponse
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.mockk.*
 import org.assertj.core.api.Assertions.assertThat
@@ -35,6 +36,21 @@ class DevWorkspacesTest {
     fun beforeEach() {
         client = mockk(relaxed = true)
         customApi = mockk(relaxed = true)
+
+        // PatchUtils deserializes the response as DevWorkspace, so hand back a typed ApiResponse
+        // rather than letting the relaxed mock leak an untyped Object.
+        val patchResponse = mockk<ApiResponse<DevWorkspace>>()
+        every { patchResponse.data } returns DevWorkspace.from(
+            mapOf(
+                "metadata" to mapOf(
+                    "name" to workspaceName,
+                    "namespace" to namespace,
+                    "uid" to "uid",
+                    "resourceVersion" to "1"
+                )
+            )
+        )
+        every { client.execute<DevWorkspace>(any(), any()) } returns patchResponse
 
         // Mock CustomObjectsApi constructor
         mockkConstructor(CustomObjectsApi::class)
@@ -93,7 +109,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(result)
@@ -107,7 +123,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -126,7 +142,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -147,10 +163,91 @@ class DevWorkspacesTest {
         mockPatchDevWorkspace(callBuilder)
 
         // when
-        devWorkspaces.removeRestarting(namespace, workspaceName)
+        devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
 
         // then
         verifyPatchDevWorkspace()
+    }
+
+    @Test
+    fun `#removeRestartRequest removes both annotations in one conditional patch`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE,
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        val patchSlot = slot<Any>()
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceCapturing(patchSlot)
+
+        // when
+        devWorkspaces.removeRestartRequest(namespace, workspaceName)
+
+        // then
+        val patch = patchSlot.captured as List<Map<String, Any?>>
+        assertThat(patch).hasSize(3)
+        assertThat(patch[0]).containsEntry("op", "test")
+        assertThat(patch[0]).containsEntry("path", "/metadata/resourceVersion")
+        assertThat(patch[0]).containsEntry("value", "42")
+        assertThat(patch[1]).containsEntry("op", "remove")
+        assertThat(patch[1]["path"])
+            .isEqualTo("/metadata/annotations/che.eclipse.org~1pending-devfile-template")
+        assertThat(patch[2]).containsEntry("op", "remove")
+        assertThat(patch[2]["path"])
+            .isEqualTo("/metadata/annotations/che.eclipse.org~1restart-in-progress")
+    }
+
+    @Test
+    fun `#removeRestartRequest propagates a conflict without deleting the new request`() {
+        // given: the workspace changed between the read and the patch
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE,
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceThrows(ApiException(422, "the server rejected our request"))
+
+        // when/then
+        assertThatThrownBy {
+            devWorkspaces.removeRestartRequest(namespace, workspaceName)
+        }.isInstanceOf(ApiException::class.java)
+            .hasMessageContaining("rejected")
+    }
+
+    @Test
+    fun `#removeRestartRequest removes the pending template when the restart annotation is absent`() {
+        // given
+        val mockDevWorkspace = createMockDevWorkspace(
+            namespace,
+            workspaceName,
+            true,
+            mapOf(
+                DevWorkspace.PENDING_TEMPLATE_KEY to """{"version":1,"template":{"components":[]}}"""
+            )
+        )
+        val patchSlot = slot<Any>()
+        mockGetDevWorkspace(mockDevWorkspace)
+        mockPatchDevWorkspaceCapturing(patchSlot)
+
+        // when
+        devWorkspaces.removeRestartRequest(namespace, workspaceName)
+
+        // then
+        val patch = patchSlot.captured as List<Map<String, Any?>>
+        assertThat(patch).hasSize(2)
+        assertThat(patch[1]["path"].toString()).contains("pending-devfile-template")
+        assertThat(patch.map { it["path"].toString() })
+            .noneMatch { it.contains("restart-in-progress") }
     }
 
     @Test
@@ -184,7 +281,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.isRestarting(namespace, workspaceName)
+            devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }
@@ -196,7 +293,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.removeRestarting(namespace, workspaceName)
+            devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }
@@ -660,6 +757,21 @@ class DevWorkspacesTest {
         }
     }
 
+    private fun mockPatchDevWorkspaceCapturing(patchSlot: CapturingSlot<Any>) {
+        every {
+            anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                capture(patchSlot)
+            )
+        } returns mockk {
+            every { buildCall(null) } returns mockk(relaxed = true)
+        }
+    }
+
     private fun verifyPatchDevWorkspace() {
         verify {
             anyConstructed<CustomObjectsApi>().patchNamespacedCustomObject(
@@ -684,7 +796,8 @@ class DevWorkspacesTest {
                 "name" to name,
                 "namespace" to namespace,
                 "annotations" to annotations,
-                "uid" to "test-uid"
+                "uid" to "test-uid",
+                "resourceVersion" to "42"
             ),
             "spec" to mapOf(
                 "started" to started

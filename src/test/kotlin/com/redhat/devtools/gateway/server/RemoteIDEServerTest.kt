@@ -12,6 +12,7 @@
 package com.redhat.devtools.gateway.server
 
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.models.V1Container
@@ -62,6 +63,26 @@ class RemoteIDEServerTest {
         } returns mockPod
 
         remoteIDEServer = spyk(RemoteIDEServer(devSpacesContext), recordPrivateCalls = true)
+    }
+
+    @Test
+    fun `#constructor looks up the pod of the workspace it was given`() {
+        // given
+        val workspace = mockk<DevWorkspace> {
+            every { namespace } returns "other-namespace"
+            every { name } returns "other-workspace"
+        }
+
+        // when
+        RemoteIDEServer(devSpacesContext, workspace)
+
+        // then
+        verify {
+            anyConstructed<DevWorkspacePods>().findFirst(
+                "other-namespace",
+                "controller.devfile.io/devworkspace_name=other-workspace"
+            )
+        }
     }
 
     @AfterEach

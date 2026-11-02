@@ -14,6 +14,7 @@ package com.redhat.devtools.gateway.server
 import com.google.gson.Gson
 import com.intellij.openapi.diagnostic.thisLogger
 import com.redhat.devtools.gateway.DevSpacesContext
+import com.redhat.devtools.gateway.devworkspace.DevWorkspace
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.models.V1Container
@@ -31,8 +32,16 @@ class ServerContainerNotFoundException(message: String) : IOException(message)
 
 /**
  * Represent an IDE server running in a CDE.
+ *
+ * @param devSpacesContext the context that supplies the client and the current workspace.
+ * @param workspace the workspace whose IDE server is probed; the context's current workspace by
+ *   default. Restart passes the workspace it captured, so a context change cannot redirect the
+ *   readiness probe.
  */
-class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
+class RemoteIDEServer(
+    private val devSpacesContext: DevSpacesContext,
+    private val workspace: DevWorkspace = devSpacesContext.devWorkspace
+) {
     var pod: V1Pod
     private var container: V1Container
 
@@ -146,14 +155,14 @@ class RemoteIDEServer(private val devSpacesContext: DevSpacesContext) {
 
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
-        val selector = "controller.devfile.io/devworkspace_name=${devSpacesContext.devWorkspace.name}"
+        val selector = "controller.devfile.io/devworkspace_name=${workspace.name}"
 
         return DevWorkspacePods(devSpacesContext.client)
             .findFirst(
-                devSpacesContext.devWorkspace.namespace,
+                workspace.namespace,
                 selector
             ) ?: throw IOException(
-            "DevWorkspace '${devSpacesContext.devWorkspace.name}' is not running.",
+            "DevWorkspace '${workspace.name}' is not running.",
         )
     }
 
