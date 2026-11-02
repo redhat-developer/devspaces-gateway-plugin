@@ -227,6 +227,89 @@ class DevWorkspacePatchTest {
     }
 
     @Test
+    fun `#setSpecTemplate calls patch API with replace operation and the template`() {
+        // given
+        val patchSlot = slot<Any>()
+        val callBuilder = mockk<okhttp3.Call>(relaxed = true)
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                capture(patchSlot)
+            )
+        } returns mockk {
+            every { buildCall(null) } returns callBuilder
+        }
+        val template = mapOf("components" to listOf(mapOf("name" to "tools")))
+
+        // when
+        annotation.setSpecTemplate(template)
+
+        // then
+        @Suppress("UNCHECKED_CAST")
+        val patch = patchSlot.captured as Array<Map<String, Any>>
+        assertThat(patch).hasSize(1)
+        assertThat(patch[0]["op"]).isEqualTo("replace")
+        assertThat(patch[0]["path"]).isEqualTo("/spec/template")
+        assertThat(patch[0]["value"]).isEqualTo(template)
+    }
+
+    @Test
+    fun `#removePendingTemplate calls patch API with remove operation`() {
+        // given
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "{}"))
+        val patchSlot = slot<Any>()
+        val callBuilder = mockk<okhttp3.Call>(relaxed = true)
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                capture(patchSlot)
+            )
+        } returns mockk {
+            every { buildCall(null) } returns callBuilder
+        }
+
+        // when
+        annotation.removePendingTemplate()
+
+        // then
+        @Suppress("UNCHECKED_CAST")
+        val patch = patchSlot.captured as Array<Map<String, Any>>
+        assertThat(patch).hasSize(1)
+        assertThat(patch[0]["op"]).isEqualTo("remove")
+        assertThat(patch[0]["path"])
+            .isEqualTo("/metadata/annotations/che.eclipse.org~1pending-devfile-template")
+    }
+
+    @Test
+    fun `#removePendingTemplate does not call patch API when annotation is absent`() {
+        // given
+        devWorkspace = createDevWorkspace(annotations = emptyMap())
+
+        // when
+        annotation.removePendingTemplate()
+
+        // then
+        verify(exactly = 0) {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        }
+    }
+
+    @Test
     fun `#setSpecStarted with true calls patch API with replace operation and started=true`() {
         // given
         val patchSlot = slot<Any>()

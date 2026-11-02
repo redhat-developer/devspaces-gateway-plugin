@@ -158,7 +158,7 @@ class DevWorkspaces(private val client: ApiClient) {
             val map = items
                 .map { DevWorkspaceTemplate.from(it) }
                 .flatMap { templ ->
-                    templ.ownerRefencesUids.map { uid -> uid to templ }
+                    templ.ownerReferencesUids.map { uid -> uid to templ }
                 }
                 .groupBy(
                     keySelector = { it.first },   // UID
@@ -189,17 +189,44 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     @Throws(ApiException::class)
-    fun isRestarting(namespace: String, workspaceName: String): Boolean {
+    fun hasRestartAnnotation(namespace: String, workspaceName: String): Boolean {
         return DevWorkspacePatch(namespace, workspaceName, client) {
             get(namespace, workspaceName)
         }.hasRestartAnnotation()
     }
 
     @Throws(ApiException::class)
-    fun removeRestarting(namespace: String, workspaceName: String) {
+    fun removeRestartAnnotation(namespace: String, workspaceName: String) {
         DevWorkspacePatch(namespace, workspaceName, client) {
             get(namespace, workspaceName)
         }.removeRestartAnnotation()
+    }
+
+    /**
+     * Replaces [DevWorkspace.SPEC_TEMPLATE_PATH] with the template the remote IDE published.
+     *
+     * @param namespace the namespace of the DevWorkspace
+     * @param name the name of the DevWorkspace
+     * @param template the template to apply
+     * @throws ApiException if the Kubernetes API call fails
+     */
+    @Throws(ApiException::class)
+    fun setSpecTemplate(namespace: String, name: String, template: Map<String, Any?>) {
+        DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.setSpecTemplate(template)
+    }
+
+    /**
+     * Removes [DevWorkspace.PENDING_TEMPLATE_KEY] that carries the pending devfile template.
+     *
+     * @throws ApiException if the Kubernetes API call fails
+     */
+    @Throws(ApiException::class)
+    fun removePendingTemplate(namespace: String, name: String) {
+        DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.removePendingTemplate()
     }
 
     @Throws(IOException::class, ApiException::class, CancellationException::class)

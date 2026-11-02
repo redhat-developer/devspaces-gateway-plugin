@@ -14,7 +14,7 @@ package com.redhat.devtools.gateway.devworkspace
 import com.redhat.devtools.gateway.openshift.Utils
 import java.util.Collections
 
-data class DevWorkspaceTemplate (
+data class DevWorkspaceTemplate(
     private val metadata: DevWorkspaceTemplateMetadata,
     private val spec: DevWorkspaceTemplateSpec,
 ) {
@@ -28,12 +28,12 @@ data class DevWorkspaceTemplate (
             return metadata.name
         }
 
-    val ownerRefencesUids: List<String>
+    val ownerReferencesUids: List<String>
         get() {
-            return metadata.ownerRefencesUids
+            return metadata.ownerReferencesUids
         }
 
-    val components: Any
+    val components: List<Map<String, Any>>
         get() {
             return spec.components
         }
@@ -62,18 +62,13 @@ data class DevWorkspaceTemplate (
 
         other as DevWorkspaceTemplate
 
-        if (metadata.name != other.name) return false
-        if (metadata.namespace != other.namespace) return false
-        if (metadata.pluginRegistryUrl != other.pluginRegistryUrl) return false
-        if (metadata.ownerRefencesUids != other.ownerRefencesUids) return false
-
-        return true
+        return metadata == other.metadata
     }
 
     override fun hashCode(): Int {
-        var result = metadata.hashCode()
-        result = 31 * result + spec.hashCode()
-        return result
+        // Delegates to metadata for the same reason equals does: identity is metadata only,
+        // so two templates for one owner stay interchangeable when their spec differs.
+        return metadata.hashCode()
     }
 }
 
@@ -81,7 +76,7 @@ data class DevWorkspaceTemplateMetadata(
     val name: String,
     val namespace: String,
     val pluginRegistryUrl: String?,
-    val ownerRefencesUids: List<String>
+    val ownerReferencesUids: List<String>
 ) {
     companion object {
         fun from(map: Any) = object {

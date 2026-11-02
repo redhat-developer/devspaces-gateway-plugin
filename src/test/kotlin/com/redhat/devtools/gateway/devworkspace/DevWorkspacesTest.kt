@@ -93,7 +93,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(result)
@@ -107,7 +107,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -126,7 +126,7 @@ class DevWorkspacesTest {
         mockGetDevWorkspace(mockDevWorkspace)
 
         // when
-        val result = devWorkspaces.isRestarting(namespace, workspaceName)
+        val result = devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
 
         // then
         assert(!result)
@@ -147,7 +147,7 @@ class DevWorkspacesTest {
         mockPatchDevWorkspace(callBuilder)
 
         // when
-        devWorkspaces.removeRestarting(namespace, workspaceName)
+        devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
 
         // then
         verifyPatchDevWorkspace()
@@ -184,7 +184,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.isRestarting(namespace, workspaceName)
+            devWorkspaces.hasRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }
@@ -196,7 +196,7 @@ class DevWorkspacesTest {
 
         // when/then
         assertThatThrownBy {
-            devWorkspaces.removeRestarting(namespace, workspaceName)
+            devWorkspaces.removeRestartAnnotation(namespace, workspaceName)
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("API error")
     }

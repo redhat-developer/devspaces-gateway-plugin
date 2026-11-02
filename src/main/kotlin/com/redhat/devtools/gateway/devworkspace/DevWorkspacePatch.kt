@@ -21,8 +21,8 @@ import io.kubernetes.client.util.PatchUtils
 /**
  * Patches a specific DevWorkspace resource.
  *
- * * annotation `che.eclipse.org/restart-in-progress`: signals that a restart of the workspace should happen
- * * resource value`spec.started`: starts/stops a workspace
+ * * annotation [DevWorkspace.RESTART_KEY]: signals that a restart of the workspace should happen
+ * * resource value [DevWorkspace.SPEC_STARTED_PATH]: starts/stops a workspace
  *
  * @param namespace The namespace of the DevWorkspace.
  * @param name The name of the DevWorkspace.
@@ -118,8 +118,7 @@ class DevWorkspacePatch(
     }
 
     /**
-     * Sets the spec.started field on the DevWorkspace.
-     * Used by [DevWorkspaces.start] and [DevWorkspaces.stop].
+     * Sets the `started` field at [DevWorkspace.SPEC_STARTED_PATH] on the DevWorkspace.
      *
      * @param value The value to set (true to start, false to stop).
      * @throws ApiException if the Kubernetes API call fails.
@@ -128,9 +127,58 @@ class DevWorkspacePatch(
     internal fun setSpecStarted(value: Boolean) {
         val patch = arrayOf(mapOf(
             "op" to "replace",
-            "path" to "/spec/started",
+            "path" to DevWorkspace.SPEC_STARTED_PATH,
             "value" to value))
         doPatch(patch)
+    }
+
+    /**
+     * Sets [DevWorkspace.SPEC_TEMPLATE_PATH] to the value of the given template.
+     *
+     * @param template the template to apply
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    fun setSpecTemplate(template: Map<String, Any?>) {
+        val patch = arrayOf(
+            mapOf(
+                "op" to "replace",
+                "path" to DevWorkspace.SPEC_TEMPLATE_PATH,
+                "value" to template
+            )
+        )
+        doPatch(patch)
+    }
+
+    /**
+     * Removes the [DevWorkspace.PENDING_TEMPLATE_KEY] template annotation.
+     *
+     * Idempotent: the annotation is checked first, so cleanup paths can call this
+     * unconditionally without provoking a failing JSON-Patch `remove` (Kubernetes answers
+     * 422 when the path does not exist).
+     *
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    fun removePendingTemplate() {
+        if (!hasPendingTemplate()) {
+            thisLogger().debug("No pending template annotation to remove from $namespace/$name")
+            return
+        }
+        thisLogger().info("Removing pending template annotation from $namespace/$name")
+        removeAnnotation(DevWorkspace.PENDING_TEMPLATE_KEY)
+    }
+
+    /**
+     * Checks if the DevWorkspace has the [DevWorkspace.PENDING_TEMPLATE_KEY] annotation set.
+     *
+     * @return `true` if the pending template annotation is present, `false` otherwise.
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    private fun hasPendingTemplate(): Boolean {
+        return getDevWorkspace().annotations
+            .containsKey(DevWorkspace.PENDING_TEMPLATE_KEY)
     }
 
     /**

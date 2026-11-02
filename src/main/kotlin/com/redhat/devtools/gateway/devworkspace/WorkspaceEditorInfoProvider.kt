@@ -80,17 +80,12 @@ object WorkspaceEditorInfoProvider {
     }
 
     private fun hasIdeaServerComponent(template: DevWorkspaceTemplate): Boolean {
-        @Suppress("UNCHECKED_CAST")
-        val components = template.components as? List<Any>
-            ?: return false
-        return components.any { component: Any ->
-            val map = component as? Map<*, *>
-                ?: return@any false
-            val volume = map["volume"] as? Map<*, *>
+        return template.components.any { component: Map<String, Any> ->
+            val volume = component["volume"] as? Map<*, *>
             // Check 'volume.name' first (v1alpha1)
             val name = volume?.get("name") as? String
             // fallback to top-level 'name' (v1alpha2)
-                ?: map["name"] as? String
+                ?: component["name"] as? String
             name.equals("idea-server", ignoreCase = true)
         }
     }

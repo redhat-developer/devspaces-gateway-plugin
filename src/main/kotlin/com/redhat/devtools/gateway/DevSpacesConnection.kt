@@ -34,7 +34,6 @@ import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -204,6 +203,18 @@ class DevSpacesConnection internal constructor(
                 )
             },
             onRestartAnnotated = if (handleRestarts) onRestartAnnotated(thinClient) else null,
+            clearRestartAnnotation = {
+                workspaces.removeRestartAnnotation(workspace.namespace, workspace.name)
+                runCatching {
+                    workspaces.removePendingTemplate(workspace.namespace, workspace.name)
+                }.onFailure { e ->
+                    thisLogger().debug(
+                        "Could not remove pending devfile template from " +
+                            "${workspace.namespace}/${workspace.name}",
+                        e
+                    )
+                }
+            },
             onStopped = {
                 // close sockets -> Guest EOF, immediate status loss
                 // close listener -> pod pinned, re-dial would hit stopped pod

@@ -11,6 +11,9 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import com.intellij.openapi.application.Application
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
@@ -18,6 +21,7 @@ import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
@@ -26,6 +30,7 @@ import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CancellationException
 
 class DevWorkspaceRestartTest {
 
@@ -65,6 +70,9 @@ class DevWorkspaceRestartTest {
 
         // Default: no pods remaining
         every { pods.list(any(), any()) } returns V1PodList().items(emptyList())
+        // Default: the workspace publishes a devfile template (a restart request always carries one)
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to templatePayload))
         // Default: IDE ready and connection succeed (`just Awaits` never completes — hangs runTest)
         coJustRun { remoteIDEServer.waitServerReady() }
         coEvery { devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any()) } returns mockk(relaxed = true)
@@ -202,26 +210,26 @@ class DevWorkspaceRestartTest {
 
     @Test
     fun `#execute removes restart annotation after successful restart`() = runTest {
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
+        every { workspaces.hasRestartAnnotation(namespace, workspaceName) } returns true
         runExecuteWithProgressMock {
             restart.execute(thinClient)
         }
-        verify { workspaces.removeRestarting(namespace, workspaceName) }
+        verify { workspaces.removeRestartAnnotation(namespace, workspaceName) }
     }
 
     @Test
     fun `#execute does not call removeRestarting when annotation already cleared`() = runTest {
-        every { workspaces.isRestarting(namespace, workspaceName) } returns false
+        every { workspaces.hasRestartAnnotation(namespace, workspaceName) } returns false
         runExecuteWithProgressMock {
             restart.execute(thinClient)
         }
-        verify(exactly = 0) { workspaces.removeRestarting(namespace, workspaceName) }
+        verify(exactly = 0) { workspaces.removeRestartAnnotation(namespace, workspaceName) }
     }
 
     @Test
     fun `#execute completes when annotation removal fails`() = runTest {
-        every { workspaces.isRestarting(namespace, workspaceName) } returns true
-        every { workspaces.removeRestarting(namespace, workspaceName) } throws ApiException("Remove failed")
+        every { workspaces.hasRestartAnnotation(namespace, workspaceName) } returns true
+        every { workspaces.removeRestartAnnotation(namespace, workspaceName) } throws ApiException("Remove failed")
         runExecuteWithProgressMock {
             restart.execute(thinClient)
         }
@@ -317,6 +325,201 @@ class DevWorkspaceRestartTest {
         // then
         verify(atLeast = 2) { pods.list(namespace, any()) }
         verify { workspaces.startAndWait(namespace, workspaceName, any()) }
+    }
+
+    @Test
+    fun `#doRestart applies the published template before starting`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to templatePayload))
+
+        // when
+        restart.restart(thinClient, indicator)
+
+        // then
+        verifyOrder {
+            workspaces.stopAndWait(namespace, workspaceName, any())
+            workspaces.setSpecTemplate(namespace, workspaceName, any())
+            workspaces.startAndWait(namespace, workspaceName, any())
+        }
+    }
+
+    @Test
+    fun `#doRestart refuses a request without a devfile template`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns workspace()
+
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+
+        // then
+        assertThat(result.exceptionOrNull()).isInstanceOf(InvalidRestartRequestException::class.java)
+        verify(exactly = 0) { thinClient.close() }
+        verify(exactly = 0) { workspaces.stopAndWait(any(), any(), any()) }
+        verify(exactly = 0) { workspaces.setSpecTemplate(any(), any(), any()) }
+    }
+
+    @Test
+    fun `#doRestart refuses a blank devfile template`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "  "))
+
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+
+        // then
+        assertThat(result.exceptionOrNull()).isInstanceOf(InvalidRestartRequestException::class.java)
+        verify(exactly = 0) { thinClient.close() }
+        verify(exactly = 0) { workspaces.stopAndWait(any(), any(), any()) }
+    }
+
+    @Test
+    fun `#doRestart aborts before closing when the published template is invalid`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "{invalid"))
+
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+
+        // then
+        assertThat(result.isFailure).isTrue()
+        verify(exactly = 0) { thinClient.close() }
+        verify(exactly = 0) { workspaces.stopAndWait(any(), any(), any()) }
+    }
+
+    @Test
+    fun `#doRestart starts the workspace when applying the template fails`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to templatePayload))
+        every { workspaces.setSpecTemplate(any(), any(), any()) } throws ApiException("apply failed")
+
+        // when
+        restart.restart(thinClient, indicator)
+
+        // then
+        verify { workspaces.startAndWait(namespace, workspaceName, any()) }
+    }
+
+    @Test
+    fun `#doRestart propagates cancellation when applying the template is cancelled`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to templatePayload))
+        every { workspaces.setSpecTemplate(any(), any(), any()) } throws
+            CancellationException("cancelled")
+
+        // when
+        val result = runCatching { restart.restart(thinClient, indicator) }
+
+        // then
+        assertThat(result.isFailure).isTrue()
+        assertThat(result.exceptionOrNull()).isInstanceOf(CancellationException::class.java)
+        verify(exactly = 0) { workspaces.startAndWait(any(), any(), any()) }
+    }
+
+    @Test
+    fun `#execute shows a restart error when the pending template is invalid`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "{invalid"))
+
+        // when/then
+        runExecuteWithDialogsMock {
+            restart.execute(thinClient)
+
+            verify { Dialogs.error("Invalid devfile template payload", "Restart Workspace") }
+            verify(exactly = 0) { thinClient.close() }
+        }
+    }
+
+    @Test
+    fun `#execute shows a restart error when no template is published`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns workspace()
+
+        // when/then
+        runExecuteWithDialogsMock {
+            restart.execute(thinClient)
+
+            verify {
+                Dialogs.error(
+                    "The restart request carries no devfile template. The workspace was not restarted.",
+                    "Restart Workspace"
+                )
+            }
+            verify(exactly = 0) { thinClient.close() }
+        }
+    }
+
+    @Test
+    fun `#execute shows a restart error after reconnect when applying the template fails`() = runTest {
+        // given
+        every { workspaces.get(namespace, workspaceName) } returns
+            workspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to templatePayload))
+        every { workspaces.setSpecTemplate(any(), any(), any()) } throws ApiException("apply failed")
+
+        // when/then
+        runExecuteWithDialogsMock {
+            restart.execute(thinClient)
+
+            verify { workspaces.startAndWait(namespace, workspaceName, any()) }
+            verify { Dialogs.error(any(), "Restart Workspace") }
+        }
+    }
+
+    @Test
+    fun `#execute removes the pending devfile template`() = runTest {
+        // given
+        every { workspaces.hasRestartAnnotation(namespace, workspaceName) } returns true
+
+        // when
+        runExecuteWithProgressMock {
+            restart.execute(thinClient)
+        }
+
+        // then
+        verify { workspaces.removePendingTemplate(namespace, workspaceName) }
+    }
+
+    private fun workspace(annotations: Map<String, String> = emptyMap()): DevWorkspace {
+        return DevWorkspace.from(
+            mapOf(
+                "metadata" to mapOf(
+                    "name" to workspaceName,
+                    "namespace" to namespace,
+                    "uid" to "test-uid",
+                    "annotations" to annotations
+                ),
+                "spec" to mapOf("started" to true),
+                "status" to mapOf("phase" to DevWorkspace.RUNNING)
+            )
+        )
+    }
+
+    private val templatePayload =
+        """{"version":1,"template":{"components":[{"name":"tools"}]}}"""
+
+    private suspend fun runExecuteWithDialogsMock(body: suspend () -> Unit) {
+        mockkStatic(ApplicationManager::class)
+        mockkStatic(Logger::class)
+        mockkObject(Dialogs)
+        try {
+            val application = mockk<Application>(relaxed = true)
+            every { ApplicationManager.getApplication() } returns application
+            every { application.invokeLater(any<Runnable>()) } answers {
+                firstArg<Runnable>().run()
+            }
+            every { Logger.getInstance(any<Class<*>>()) } returns mockk(relaxed = true)
+            every { Dialogs.error(any(), any()) } just Runs
+            runExecuteWithProgressMock(body)
+        } finally {
+            unmockkObject(Dialogs)
+            unmockkStatic(Logger::class)
+            unmockkStatic(ApplicationManager::class)
+        }
     }
 
     private suspend fun runExecuteWithProgressMock(body: suspend () -> Unit) {
