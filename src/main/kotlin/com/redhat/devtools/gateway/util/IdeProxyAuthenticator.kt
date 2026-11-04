@@ -30,6 +30,8 @@ import java.net.Authenticator as JvmAuthenticator
  *
  * Upstream [okhttp3.Authenticator.JAVA_NET_AUTHENTICATOR] NPEs when
  * `(proxy.address() as InetSocketAddress).address` is null — common for IDE ProxySelectors.
+ *
+ * @see [square/okhttp#9100](https://github.com/square/okhttp/issues/9100)
  */
 internal class IdeProxyAuthenticator(
     private val defaultDns: Dns = Dns.SYSTEM,

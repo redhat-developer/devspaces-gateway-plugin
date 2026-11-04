@@ -71,8 +71,8 @@ class IdeProxyAuthenticatorTest {
             .isEqualTo(okhttp3.Credentials.basic("testuser", "testpass"))
     }
 
-    // Regression sentinel — documents upstream NPE in OkHttp 4.12 (square/okhttp#9100).
-    // Drop or @Disabled when upgrading OkHttp past the fix.
+    // Regression sentinel —documents upstream NPE in OkHttp 5.5.0 (square/okhttp#9100)
+    // Drop when upstream is fixed.
     @Test
     fun `JavaNetAuthenticator NPEs on unresolved proxy address (documents upstream bug)`() {
         val unresolved = InetSocketAddress.createUnresolved("proxy.test", 3128)
@@ -83,7 +83,7 @@ class IdeProxyAuthenticatorTest {
         assertThatCode {
             Authenticator.JAVA_NET_AUTHENTICATOR.authenticate(route, response)
         }.isInstanceOf(NullPointerException::class.java)
-            .hasMessageContaining("address")
+            .hasStackTraceContaining("JavaNetAuthenticator")
     }
 
     private fun httpAddress(): Address =
