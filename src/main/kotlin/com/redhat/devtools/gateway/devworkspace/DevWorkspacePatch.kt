@@ -44,8 +44,6 @@ class DevWorkspacePatch(
 
     companion object {
         private const val ANNOTATIONS_PATH = "/metadata/annotations"
-        const val RESTART_KEY = "che.eclipse.org/restart-in-progress"
-        const val RESTART_VALUE = "true"
     }
 
     /**
@@ -56,8 +54,7 @@ class DevWorkspacePatch(
      */
     @Throws(ApiException::class)
     fun hasRestartAnnotation(): Boolean {
-        val devWorkspace = getDevWorkspace()
-        return devWorkspace.annotations[RESTART_KEY] == RESTART_VALUE
+        return getDevWorkspace().isAnnotatedForRestart
     }
 
     /**
@@ -70,7 +67,7 @@ class DevWorkspacePatch(
     @Throws(ApiException::class)
     fun setRestartAnnotation() {
         thisLogger().info("Adding restart annotation to $namespace/$name")
-        setAnnotation(RESTART_KEY, RESTART_VALUE)
+        setAnnotation(DevWorkspace.RESTART_KEY, DevWorkspace.RESTART_VALUE)
     }
 
     /**
@@ -81,7 +78,7 @@ class DevWorkspacePatch(
     @Throws(ApiException::class)
     fun removeRestartAnnotation() {
         thisLogger().info("Removing restart annotation from $namespace/$name")
-        removeAnnotation(RESTART_KEY)
+        removeAnnotation(DevWorkspace.RESTART_KEY)
     }
 
     /**
