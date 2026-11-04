@@ -53,7 +53,7 @@ jobs:
 
       # Setup Gradle
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6.4.0
+        uses: gradle/actions/setup-gradle@v6.4.1
 
       # Set environment variables
       - name: Export Properties
@@ -116,7 +116,7 @@ jobs:
 
       # Setup Gradle
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6.4.0
+        uses: gradle/actions/setup-gradle@v6.4.1
 
       # Run tests (clean + disable build cache: avoid stale compileTestKotlin from shared
       # remote cache when main Kotlin ABI changes, e.g. NoSuchMethodError on data class <init>)
@@ -206,7 +206,7 @@ jobs:
 
       # Setup Gradle
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6.4.0
+        uses: gradle/actions/setup-gradle@v6.4.1
 
       # Cache Plugin Verifier IDEs
       - name: Setup Plugin Verifier IDEs Cache
