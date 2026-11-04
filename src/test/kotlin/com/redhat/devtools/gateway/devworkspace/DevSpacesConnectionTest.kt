@@ -12,21 +12,28 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
+import com.redhat.devtools.gateway.ClientWindowFocus
 import com.redhat.devtools.gateway.ThinClientDownloadException
 import com.redhat.devtools.gateway.ThinClientLaunchException
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
+import com.redhat.devtools.gateway.openshift.PortForwardSession
+import com.redhat.devtools.gateway.openshift.PortForwarder
 import io.mockk.*
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.net.URI
+import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 class DevSpacesConnectionTest {
@@ -51,7 +58,10 @@ class DevSpacesConnectionTest {
             every { lifetime } returns mockk(relaxed = true)
         }
 
-        connection = DevSpacesConnection(devSpacesContext)
+        connection = DevSpacesConnection(
+            devSpacesContext,
+            ClientWindowFocus()
+        )
 
         mockkConstructor(DevWorkspaces::class)
         every {
@@ -171,5 +181,61 @@ class DevSpacesConnectionTest {
         verify(exactly = 0) {
             devSpacesContext.removeWorkspace(any())
         }
+    }
+
+    @Test
+    fun `teardown closes the port forward`() {
+        val closed = AtomicBoolean(false)
+        val session = PortForwardSession(41_234) { closed.set(true) }
+        val connectionWithForward = DevSpacesConnection(
+            devSpacesContext,
+            ClientWindowFocus(),
+            PortForwarder { _, _, _ -> session }
+        )
+
+        connectionWithForward.onThinClientClosed(
+            AtomicBoolean(false),
+            AtomicBoolean(true),
+            thinClient,
+            devSpacesContext.devWorkspace,
+            {},
+            {},
+            null,
+            session
+        )
+
+        // teardown runs on Dispatchers.IO: wait for it to reach the forward
+        runBlocking {
+            withTimeout(2_000) {
+                while (!closed.get()) {
+                    delay(10)
+                }
+            }
+        }
+        assertThat(closed).isTrue()
+    }
+
+    @Test
+    fun `connect resets the focus throttle`() {
+        // given - the previous session already used up the focus interval
+        val clientWindowFocus = ClientWindowFocus()
+        val reusingConnection = DevSpacesConnection(devSpacesContext, clientWindowFocus)
+        clientWindowFocus.requestFocus(thinClient)
+
+        // when - a reconnect starts and is cancelled before it reaches the client
+        assertThrows<CancellationException> {
+            runBlocking {
+                reusingConnection.connect(
+                    onConnected = {},
+                    onConnectionEnded = {},
+                    onDevWorkspaceStopped = {},
+                    checkCancelled = { throw CancellationException("cancelled") }
+                )
+            }
+        }
+
+        // then - the new session may focus at once instead of waiting out the old throttle
+        clientWindowFocus.requestFocus(thinClient)
+        verify(exactly = 2) { thinClient.focusClientWindow() }
     }
 }
