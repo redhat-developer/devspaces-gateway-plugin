@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway.devworkspace
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
@@ -18,6 +19,7 @@ import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.util.WorkspaceSessionProgress
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
@@ -51,7 +53,11 @@ class DevWorkspaceRestartTest {
         workspaces = mockk(relaxed = true)
         pods = mockk(relaxed = true)
         thinClient = mockk(relaxed = true)
-        indicator = mockk(relaxed = true)
+        // updateProgress reports only on an active, non-canceled indicator
+        indicator = mockk(relaxed = true) {
+            every { isRunning } returns true
+            every { isCanceled } returns false
+        }
         remoteIDEServer = mockk(relaxed = true)
         devSpacesConnection = mockk(relaxed = true)
 
@@ -243,6 +249,40 @@ class DevWorkspaceRestartTest {
             remoteIDEServer.waitServerReady()
             devSpacesConnection.connect(any(), any(), any(), any(), any(), any(), any())
         }
+    }
+
+    @Test
+    fun `#doRestart reports progress with the shared session texts`() = runTest {
+        // when
+        restart.restart(thinClient, indicator)
+        // then
+        verifyOrder {
+            indicator.text = WorkspaceSessionProgress.CLOSING_IDE
+            indicator.text = WorkspaceSessionProgress.STOPPING_WORKSPACE
+            indicator.text = WorkspaceSessionProgress.WAITING_PODS_TERMINATE
+            indicator.text = WorkspaceSessionProgress.STARTING_WORKSPACE
+            indicator.text = WorkspaceSessionProgress.WAITING_FOR_IDE
+            indicator.text = WorkspaceSessionProgress.CONNECTING_TO_IDE
+        }
+    }
+
+    @Test
+    fun `#execute rethrows user cancellation instead of reporting an error`() = runTest {
+        // given — the user cancels the restart task; cancellation surfaces as ProcessCanceledException
+        every { thinClient.close() } throws ProcessCanceledException()
+        every { workspaces.isRestarting(namespace, workspaceName) } returns true
+
+        // when
+        val result = runCatching {
+            runExecuteWithProgressMock {
+                restart.execute(thinClient)
+            }
+        }
+
+        // then — cancellation escapes the task instead of showing the error dialog;
+        // the annotation cleanup in the finally block still ran
+        assertThat(result.exceptionOrNull()).isInstanceOf(ProcessCanceledException::class.java)
+        verify { workspaces.removeRestarting(namespace, workspaceName) }
     }
 
     @Test

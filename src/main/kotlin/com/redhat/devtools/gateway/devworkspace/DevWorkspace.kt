@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Red Hat, Inc.
+ * Copyright (c) 2024-2026 Red Hat, Inc.
  * This program and the accompanying materials are made
  * available under the terms of the Eclipse Public License 2.0
  * which is available at https://www.eclipse.org/legal/epl-2.0/
@@ -19,6 +19,31 @@ data class DevWorkspace(
     private val spec: DevWorkspaceSpec,
     private val status: DevWorkspaceStatus
 ) {
+    companion object {
+        /** The phases a DevWorkspace reports in its status. */
+        const val FAILED: String = "Failed"
+        const val STARTING: String = "Starting"
+        const val RUNNING: String = "Running"
+        const val STOPPING: String = "Stopping"
+        const val STOPPED: String = "Stopped"
+
+        /** The annotation the remote IDE sets to request a workspace restart. */
+        const val RESTART_KEY: String = "che.eclipse.org/restart-in-progress"
+        const val RESTART_VALUE: String = "true"
+
+        fun from(map: Any?) = object {
+            val metadata = Utils.getValue(map, arrayOf("metadata")) ?: emptyMap<String, Any>()
+            val spec = Utils.getValue(map, arrayOf("spec")) ?: emptyMap<String, Any>()
+            val status = Utils.getValue(map, arrayOf("status")) ?: emptyMap<String, Any>()
+
+            val data = DevWorkspace(
+                DevWorkspaceObjectMeta.from(metadata),
+                DevWorkspaceSpec.from(spec),
+                DevWorkspaceStatus.from(status)
+            )
+        }.data
+    }
+
     val namespace: String
         get() {
             return metadata.namespace
@@ -55,11 +80,6 @@ data class DevWorkspace(
             return status.phase
         }
 
-    val running: Boolean
-        get() {
-            return status.running
-        }
-
     val annotations: Map<String, String>
         get() {
             return metadata.annotations
@@ -70,19 +90,36 @@ data class DevWorkspace(
             return metadata.labels
         }
 
-    companion object {
-        fun from(map: Any?) = object {
-            val metadata = Utils.getValue(map, arrayOf("metadata")) ?: emptyMap<String, Any>()
-            val spec = Utils.getValue(map, arrayOf("spec")) ?: emptyMap<String, Any>()
-            val status = Utils.getValue(map, arrayOf("status")) ?: emptyMap<String, Any>()
+    /** The workspace phase is [RUNNING]. */
+    val isRunning: Boolean
+        get() {
+            return phase == RUNNING
+        }
 
-            val data = DevWorkspace(
-                DevWorkspaceObjectMeta.from(metadata),
-                DevWorkspaceSpec.from(spec),
-                DevWorkspaceStatus.from(status)
-            )
-        }.data
-    }
+    /**
+     * `spec.started=false`: start was never requested or a stop was requested — what
+     * Dashboard and Gateway set to stop a workspace.
+     */
+    val isStopped: Boolean
+        get() {
+            return !started
+        }
+
+    /**
+     * A workspace no longer serves its connection once the user asked to stop it
+     * ([isStopped]) or its phase moved towards Stopped (covers a stop the plugin did
+     * not issue itself).
+     */
+    val isNoLongerRunning: Boolean
+        get() {
+            return isStopped || phase == STOPPING || phase == STOPPED
+        }
+
+    /** Whether the remote IDE requested a restart through the [RESTART_KEY] annotation. */
+    val isAnnotatedForRestart: Boolean
+        get() {
+            return annotations[RESTART_KEY] == RESTART_VALUE
+        }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -160,10 +197,5 @@ data class DevWorkspaceStatus(
             )
         }.data
     }
-
-    val running: Boolean
-        get() {
-            return phase == "Running"
-        }
 }
 

@@ -137,7 +137,7 @@ class DevSpacesWorkspacesStepView(
         if (!item.editor.kind.isConnectable) {
             return false
         }
-        if (!isRunning(workspace)) {
+        if (!workspace.isRunning) {
             return false
         }
         if (item.editor.kind == WorkspaceEditorKind.UNKNOWN) {
@@ -369,7 +369,7 @@ class DevSpacesWorkspacesStepView(
             DevWorkspaces(devSpacesContext.client).waitPhase(
                 devSpacesContext.devWorkspace.namespace,
                 devSpacesContext.devWorkspace.name,
-                DevWorkspaces.RUNNING,
+                DevWorkspace.RUNNING,
                 DevWorkspaces.RUNNING_TIMEOUT,
                 checkCancelled
             )
@@ -452,7 +452,7 @@ class DevSpacesWorkspacesStepView(
             .waitPhase(
                 devWorkspace.namespace,
                 devWorkspace.name,
-                DevWorkspaces.STOPPED,
+                DevWorkspace.STOPPED,
                 30
             ) }
     }
@@ -461,8 +461,8 @@ class DevSpacesWorkspacesStepView(
         invokeLater(ModalityState.any()) {
             val workspace = getSelectedWorkspace()
 
-            startDevWorkspaceButton.isEnabled = isStopped(workspace)
-            stopDevWorkspaceButton.isEnabled = isRunning(workspace)
+            startDevWorkspaceButton.isEnabled = workspace?.isStopped == true
+            stopDevWorkspaceButton.isEnabled = workspace?.isRunning == true
 
             refreshNextButton()
         }
@@ -474,15 +474,7 @@ class DevSpacesWorkspacesStepView(
 
     override fun isNextEnabled(): Boolean {
         val item = getSelectedWorkspaceListItem() ?: return false
-        return item.editor.kind.isConnectable && isRunning(item.workspace)
-    }
-
-    private fun isStopped(workspace: DevWorkspace?): Boolean {
-        return workspace?.started == false
-    }
-
-    private fun isRunning(workspace: DevWorkspace?): Boolean {
-        return workspace?.running ?: false
+        return item.editor.kind.isConnectable && item.workspace.isRunning
     }
 
     fun refreshNextButton() {
