@@ -29,11 +29,13 @@ class DevWorkspaceSessionWatchTest {
 
     private val stoppedReports = AtomicInteger()
     private val restartReports = AtomicInteger()
+    private val clearReports = AtomicInteger()
 
     @BeforeEach
     fun beforeEach() {
         stoppedReports.set(0)
         restartReports.set(0)
+        clearReports.set(0)
     }
 
     // --- stop policy -------------------------------------------------------
@@ -262,27 +264,53 @@ class DevWorkspaceSessionWatchTest {
     }
 
     @Test
-    fun `does not report the annotation that was already present when the watch started`(): Unit = runBlocking {
-        // a stale annotation from an abandoned restart: no transition, so no request
-        val watch = sessionWatch(
-            event("MODIFIED", restart = true),
-            event("MODIFIED", restart = true),
-            baselineRestart = true
-        )
+    fun `clears the annotation that was already present when the watch started`(): Unit = runBlocking {
+        // a leftover annotation is state, not a request: it must be removed so the next request
+        // is observable as an absent-to-present transition
+        val watch = sessionWatch(baselineRestart = true)
+
+        val job = watch.start(this)
+        awaitReport(clearReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(clearReports.get()).isEqualTo(1)
+        assertThat(restartReports.get()).isZero()
+    }
+
+    @Test
+    fun `does not clear an annotation that was absent when the watch started`(): Unit = runBlocking {
+        val watch = sessionWatch()
 
         val job = watch.start(this)
         delay(SETTLE)
         watch.stop()
         job.join()
 
-        assertThat(restartReports.get()).isZero()
-        assertThat(stoppedReports.get()).isZero()
+        assertThat(clearReports.get()).isZero()
     }
 
     @Test
     fun `reports the annotation that is set again after the stale one was removed`(): Unit = runBlocking {
         val watch = sessionWatch(
             event("MODIFIED"),
+            event("MODIFIED", restart = true),
+            baselineRestart = true
+        )
+
+        val job = watch.start(this)
+        awaitReport(restartReports, 1)
+        watch.stop()
+        job.join()
+
+        assertThat(restartReports.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `reports an annotation set after a stale one was cleaned without an absent event`(): Unit = runBlocking {
+        // The watch stream may be reconnecting and thus not deliver the event of the cleanup. The
+        // next annotated state must still be a request.
+        val watch = sessionWatch(
             event("MODIFIED", restart = true),
             baselineRestart = true
         )
@@ -359,6 +387,7 @@ class DevWorkspaceSessionWatchTest {
         createWatcher = { watcherOf(events.toList()) },
         onRestartAnnotated = { restartReports.incrementAndGet() },
         onStopped = { stoppedReports.incrementAndGet() },
+        clearRestartAnnotation = { clearReports.incrementAndGet() },
         dispatcher = Dispatchers.Default
     )
 

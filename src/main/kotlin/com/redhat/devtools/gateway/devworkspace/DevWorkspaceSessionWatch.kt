@@ -29,30 +29,29 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Watches the DevWorkspace that backs an active thin-client session and reports the two user
- * actions that end it:
+ * Watches the DevWorkspace backing a thin-client session; reports the two actions that end it:
  *
- * - **stop**: the workspace was stopped, stopping, or deleted. Reported once; the session then
- *   closes its client sockets, so the Guest reads EOF at once instead of waiting for the pod to
- *   terminate and the forwarded stream to end.
- * - **restart**: the remote IDE set the restart annotation. Reported once per annotation, then
- *   again only after the annotation was removed and set anew. Optional: the connection started by
- *   the restart itself does not handle restarts ([onRestartAnnotated] is `null`).
+ * - **stop**: workspace stopped, stopping, or deleted. Reported once; session closes client
+ *   sockets, Guest reads EOF without waiting for pod termination.
+ * - **restart**: restart annotation set by the remote IDE. Reported once per absent-to-present
+ *   transition; re-armed only after annotation removal. The reconnect triggered by the restart
+ *   starts a new watch, so later requests are still observed.
  *
- * A stop always wins over the annotation. The annotation is a *state*, not a request: it stays on
- * the object for as long as the restart runs, and it survives when that restart fails or is
- * abandoned. Treating its mere presence as a request lets a leftover annotation restart a
- * workspace the user stopped on purpose. Only the transition from absent to present is a request,
- * and the annotation that is already present when the watch starts ([readWorkspace]) is the
- * baseline that transition is measured against.
+ * Stop wins over annotation. Annotation is state, not request: it persists during the restart and
+ * survives failure or abandonment. Presence alone must not restart a workspace the user stopped.
+ * Only absent-to-present is a request. Annotation present at watch start ([readWorkspace]) is a
+ * leftover: removed ([clearRestartAnnotation]) so later requests are observable transitions. If
+ * the workspace is already stopped, stop is reported instead and the annotation is ignored.
  *
- * Both policies watch the same object with the same selector and share one stream, its
- * reconnection, and its teardown.
+ * Both policies share one object, selector, stream, reconnection, and teardown.
  *
- * @param readWorkspace Reads the current workspace, once, before the stream is opened: it supplies
- *   the resume version for the stream and the restart annotation to use as baseline.
- * @param createWatcher Opens the event stream, resuming at the given `resourceVersion` so that
- *   nothing that happened while the stream was being opened is missed.
+ * @param readWorkspace Reads the workspace before opening the stream and after resume-version
+ *   expiry: supplies the resume version and the restart-annotation baseline.
+ * @param createWatcher Opens the event stream at the given `resourceVersion`; nothing missed
+ *   during stream opening.
+ * @param clearRestartAnnotation Removes a leftover restart annotation present at watch start.
+ *   Not a request (transition never observed); cleanup keeps later requests observable, otherwise
+ *   it would block every later request.
  */
 @Suppress("TooManyFunctions", "LongParameterList") // one watch stream shared by two small policies
 internal class DevWorkspaceSessionWatch(
@@ -62,6 +61,7 @@ internal class DevWorkspaceSessionWatch(
     private val createWatcher: (latestResourceVersion: String?) -> Watch<Any>,
     private val onRestartAnnotated: (() -> Unit)?,
     private val onStopped: () -> Unit,
+    private val clearRestartAnnotation: (() -> Unit)? = null,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
@@ -126,7 +126,8 @@ internal class DevWorkspaceSessionWatch(
             if (stopReported.get()) return true
         }
         // a baseline (or 404) stop already reported: end the loop instead of retrying after a delay
-        val watcher = openWatcher() ?: return stopReported.get()
+        val watcher = openWatcher()
+            ?: return stopReported.get()
         return try {
             consumeUntilStop(watcher)
         } catch (e: CancellationException) {
@@ -176,16 +177,32 @@ internal class DevWorkspaceSessionWatch(
         return stopped
     }
 
-    /** Handles one event; returns `true` when it reports that the workspace no longer runs. */
+    /**
+     * Consumes one watch event: drops events for other resources and stale versions, advances
+     * [watchResourceVersion], then applies the event's effect. A stop is reported as `true` and
+     * takes precedence over the restart annotation; otherwise the annotation edge is handled and
+     * `false` is returned.
+     *
+     * @param event The watch event received from the API server; ignored when it is not a
+     *   supported event type, not this workspace, or not newer than the last consumed version.
+     * @return `true` when the event reports that the workspace no longer runs, so the caller must
+     *   not open another watch; `false` otherwise.
+     */
     @Suppress("ReturnCount")
     private fun handleEvent(event: Watch.Response<Any>): Boolean {
-        val type = WatchEventType.fromWireName(event.type) ?: return false
-        val workspace = watchedWorkspace(event, type, workspaceName, namespace) ?: return false
-        if (isStale(workspace.resourceVersion)) return false
+        val type = WatchEventType.fromWireName(event.type)
+            ?: return false
+        val workspace = watchedWorkspace(event, type, workspaceName, namespace)
+            ?: return false
+        if (isStale(workspace.resourceVersion)) {
+            return false
+        }
         saveResourceVersion(workspace)
         // A stop wins over the annotation: while the workspace is down an annotation on it can
         // only be a leftover of an earlier restart request, never a request to restart it again.
-        if (isStopEvent(type, workspace)) return true
+        if (isStopEvent(type, workspace)) {
+            return true
+        }
         handleRestartAnnotation(workspace)
         return false
     }
@@ -245,7 +262,8 @@ internal class DevWorkspaceSessionWatch(
     private fun openWatcher(): Watch<Any>? {
         if (!readBaseline()) return null
         return try {
-            createWatcher(watchResourceVersion).also { currentWatcher = it }
+            createWatcher(watchResourceVersion)
+                .also { currentWatcher = it }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -271,15 +289,44 @@ internal class DevWorkspaceSessionWatch(
     private fun readBaseline(): Boolean {
         if (!isBaselineRead) {
             val workspace = readWorkspaceOrNull() ?: return false
-            restartSeen.set(workspace.isAnnotatedForRestart)
             watchResourceVersion = workspace.resourceVersion
             isBaselineRead = true
             if (workspace.isNoLongerRunning) {
+                restartSeen.set(workspace.isAnnotatedForRestart)
                 reportStopped()
                 return false // loop ends on stopReported; no stream is needed
             }
+            restartSeen.set(workspace.isAnnotatedForRestart)
+            if (workspace.isAnnotatedForRestart) {
+                clearStaleAnnotation()
+            }
         }
         return true
+    }
+
+    /**
+     * Removes a restart annotation that predates this watch, so that a request made now is an
+     * absent-to-present transition again. A failure leaves the annotation in place: it is then
+     * still ignored, which is no worse than not cleaning it up.
+     */
+    @Suppress("TooGenericExceptionCaught") // cleanup is best effort; the watch must keep running
+    private fun clearStaleAnnotation() {
+        val clear = clearRestartAnnotation ?: return
+        try {
+            clear()
+            // The annotation is gone server-side now, whether or not the watch stream delivers the
+            // resulting event. Reset here so the next appearance is a request even when the event
+            // is missed (for example because the stream is reconnecting).
+            restartSeen.set(false)
+            thisLogger().info("Removed stale restart annotation from $namespace/$workspaceName.")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            thisLogger().warn(
+                "Could not remove stale restart annotation from $namespace/$workspaceName.",
+                e
+            )
+        }
     }
 
     /**

@@ -23,7 +23,9 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.ThinClientConnectException
 import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.server.RemoteIDEServer
+import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.messageWithoutPrefix
+import com.redhat.devtools.gateway.util.showProgress
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.Dispatchers
@@ -35,15 +37,26 @@ import kotlinx.coroutines.withTimeout
 private const val TIMEOUT_SECONDS_DELETE_PODS = 120
 
 /**
- * Handles the restart of a DevWorkspace when triggered by the restart annotation.
+ * Performs a DevWorkspace restart that the remote IDE requested by adding the
+ * [DevWorkspace.RESTART_KEY] annotation.
  *
- * The restart process:
- * 1. Close the thin client connection
- * 2. Stop the workspace (spec.started = false)
- * 3. Wait for all pods to be deleted
- * 4. Start the workspace (spec.started = true)
- * 5. Reconnect the IDE; then [execute] removes the restart annotation in a `finally` block
- *    (once per attempt, success or failure).
+ * The remote IDE (integration plugin) requests the restart by adding to the workspace k8s resource:
+ * * [DevWorkspace.RESTART_KEY]
+ * * the devfile template in [DevWorkspace.PENDING_TEMPLATE_KEY].
+ *
+ * The session watch observes the new annotation, calls [execute], and this class carries the restart out:
+ *
+ * 1. Read the devfile template the remote IDE published
+ * 2. Close the thin client connection
+ * 3. Stop the workspace (`spec.started` = false)
+ * 4. Wait for all pods to be deleted
+ * 5. Apply the devfile template while the workspace is stopped
+ * 6. Start the workspace (`spec.started` = true)
+ * 7. Reconnect the IDE; then remove
+ *    * [DevWorkspace.RESTART_KEY] and
+ *    * [DevWorkspace.PENDING_TEMPLATE_KEY]
+ *   in a `finally` block (once per attempt, success or failure).
+ *
  */
 class DevWorkspaceRestart(
     private val devSpacesContext: DevSpacesContext,
@@ -66,7 +79,6 @@ class DevWorkspaceRestart(
             null, "Restart workspace", true
         ) {
                 override fun run(indicator: ProgressIndicator) {
-                    indicator.isIndeterminate = false
                     try {
                         runBlocking(Dispatchers.IO) {
                             restart(thinClient, indicator)
@@ -77,46 +89,117 @@ class DevWorkspaceRestart(
                         ApplicationManager.getApplication().invokeLater {
                             when {
                                 // classified thin-client failures carry their own dialog title
-                                e is ThinClientConnectException -> Dialogs.error(
-                                    e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
-                                    e.title
-                                )
-                                else -> Dialogs.error(
-                                    e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
-                                    "Connection Error"
-                                )
+                                e is ThinClientConnectException ->
+                                    Dialogs.error(
+                                        e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                                        e.title
+                                    )
+                                // a refused request aborts the restart before the IDE is closed
+                                e is InvalidRestartRequestException ->
+                                    Dialogs.error(
+                                        e.messageWithoutPrefix() ?: "Could not restart workspace",
+                                        "Restart Workspace"
+                                    )
+                                else ->
+                                    Dialogs.error(
+                                        e.messageWithoutPrefix() ?: "Could not connect to workspace IDE",
+                                        "Connection Error"
+                                    )
                             }
                         }
                     } finally {
-                        removeAnnotation()
+                        removeAnnotations()
                     }
                 }
             }
         )
     }
 
+    /**
+     * Restarts the workspace with the devfile template the remote IDE (integration plugin) has added.
+     *
+     * The remote IDE writes [DevWorkspace.PENDING_TEMPLATE_KEY] together with
+     * [DevWorkspace.RESTART_KEY]. The template is applied after the workspace stops and before it
+     * starts again, so the DevWorkspace Operator does not roll the pod on its own.
+     *
+     * @param thinClient the connection to close and replace
+     * @param indicator progress indicator stepped through the restart, or `null`
+     */
     @Suppress("UnstableApiUsage")
     internal suspend fun restart(
         thinClient: ThinClientHandle,
         indicator: ProgressIndicator?
     ) {
-        indicator?.update("Closing IDE connection...", 0.0)
+        indicator.showProgress("Reading devfile...", 0.0)
+        val pendingTemplate = readPendingTemplate()
+            ?: throw InvalidRestartRequestException(
+                "The restart request carries no devfile template. The workspace was not restarted."
+            )
+
+        indicator.showProgress("Closing IDE connection...", 0.1)
         close(thinClient)
 
-        indicator?.update("Stopping workspace...", 0.2)
+        indicator.showProgress("Stopping workspace...", 0.2)
         stopWorkspaceAndWait()
 
-        indicator?.update("Waiting for pods to terminate...", 0.4)
+        indicator.showProgress("Waiting for pods to terminate...", 0.4)
         waitForPodsDeleted(indicator)
 
-        indicator?.update("Starting workspace...", 0.6)
+        indicator.showProgress("Applying devfile...", 0.5)
+        val templateApplied = applyTemplate(pendingTemplate)
+
+        indicator.showProgress("Starting workspace...", 0.6)
         startWorkspaceAndWait()
 
-        indicator?.update("Waiting for IDE to be ready...", 0.8)
+        indicator.showProgress("Waiting for IDE to be ready...", 0.8)
         waitForIDEReady()
 
-        indicator?.update("Connecting to IDE...", 1.0)
+        indicator.showProgress("Connecting to IDE...", 1.0)
         connectIDE()
+
+        if (!templateApplied) {
+            showTemplateError()
+        }
+    }
+
+    /**
+     * Reads the template the remote IDE published, before anything is closed or stopped. A missing
+     * or invalid payload aborts here, so the IDE stays connected and the workspace keeps running.
+     */
+    private fun readPendingTemplate(): Map<String, Any?>? {
+        val workspace = workspaces.get(namespace, workspaceName)
+        val content = workspace.pendingTemplatePayload
+        val template = PendingTemplateParser.parse(content)
+        if (template != null) {
+            thisLogger().debug("Read devfile template published for $namespace/$workspaceName")
+        }
+        return template
+    }
+
+    /**
+     * Applies the published template while the workspace is stopped, so the DevWorkspace Operator
+     * does not roll the pod on its own. A failure does not keep the workspace down: it is started
+     * with its previous template and the user is told.
+     */
+    private fun applyTemplate(template: Map<String, Any?>): Boolean {
+        return try {
+            workspaces.setSpecTemplate(namespace, workspaceName, template)
+            thisLogger().debug("Applied devfile template to $namespace/$workspaceName")
+            true
+        } catch (e: Exception) {
+            if (e.isCancellationException()) throw e
+            thisLogger().warn("Could not apply devfile template to $namespace/$workspaceName", e)
+            false
+        }
+    }
+
+    private fun showTemplateError() {
+        ApplicationManager.getApplication()?.invokeLater {
+            Dialogs.error(
+                "Workspace $namespace/$workspaceName was restarted without the devfile changes.",
+                "Restart Workspace"
+            )
+        }
     }
 
     private suspend fun waitForIDEReady() {
@@ -139,7 +222,10 @@ class DevWorkspaceRestart(
             {
                 thisLogger().debug("Workspace stopped after connection")
             },
-            registerRestartWatcher = false
+            // The annotation of the restart we are completing is still present here and is
+            // removed in the finally block. The session watch treats it as stale state and
+            // cleans it up, so later restart requests are observed as transitions again.
+            registerRestartWatcher = true
         )
     }
 
@@ -230,10 +316,10 @@ class DevWorkspaceRestart(
         }
     }
 
-    private fun removeAnnotation() {
+    private fun removeAnnotations() {
         runCatching {
-            if (workspaces.isRestarting(namespace, workspaceName)) {
-                workspaces.removeRestarting(namespace, workspaceName)
+            if (workspaces.hasRestartAnnotation(namespace, workspaceName)) {
+                workspaces.removeRestartAnnotation(namespace, workspaceName)
                 thisLogger().debug("Removed restart annotation from $namespace/$workspaceName")
             } else {
                 thisLogger().debug("Restart annotation already removed from $namespace/$workspaceName")
@@ -241,11 +327,10 @@ class DevWorkspaceRestart(
         }.onFailure { e ->
             thisLogger().debug("Failed to remove restart annotation from $namespace/$workspaceName", e)
         }
-    }
-
-    private fun ProgressIndicator.update(text: String, fraction: Double) {
-        this.fraction = fraction
-        this.text = text
-
+        runCatching {
+            workspaces.removePendingTemplate(namespace, workspaceName)
+        }.onFailure { e ->
+            thisLogger().debug("Failed to remove pending devfile template from $namespace/$workspaceName", e)
+        }
     }
 }
