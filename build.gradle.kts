@@ -167,6 +167,9 @@ intellijPlatform {
             create("GW", "2025.1.6")
             create("GW", "2025.2.5")
             create("GW", "2025.3.2")
+            create("GW", "2026.1.4")
+            create("GW", "2026.2")
+            create("GW", "2026.3")
         }
     }
 }
