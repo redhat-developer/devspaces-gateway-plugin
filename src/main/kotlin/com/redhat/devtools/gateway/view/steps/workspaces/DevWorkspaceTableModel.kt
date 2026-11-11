@@ -21,6 +21,11 @@ internal const val NAME_COLUMN = 1
 internal const val EDITOR_COLUMN = 2
 internal const val PROJECT_COLUMN = 3
 
+/**
+ * Sort bucket for [kind]: connectable desktop IDEs first, then workspaces whose editor is
+ * still unresolved, then browser-based and non-connectable editors. Every kind is listed
+ * explicitly so a new kind cannot silently inherit an existing bucket.
+ */
 private fun editorPriority(kind: WorkspaceEditorKind): Int {
     return when (kind) {
         WorkspaceEditorKind.INTELLIJ_IDEA, WorkspaceEditorKind.PYCHARM, WorkspaceEditorKind.CLION,
@@ -28,7 +33,8 @@ private fun editorPriority(kind: WorkspaceEditorKind): Int {
         WorkspaceEditorKind.RUBYMINE, WorkspaceEditorKind.WEBSTORM, WorkspaceEditorKind.HERDR,
         WorkspaceEditorKind.KIRO, WorkspaceEditorKind.JETBRAINS -> 0
         WorkspaceEditorKind.UNKNOWN -> 1
-        else -> 2
+        WorkspaceEditorKind.VSCODE, WorkspaceEditorKind.CHEMUXER, WorkspaceEditorKind.WEB_TERMINAL,
+        WorkspaceEditorKind.TOOLBOX -> 2
     }
 }
 

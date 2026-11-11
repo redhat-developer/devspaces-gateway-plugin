@@ -15,9 +15,9 @@ import com.intellij.openapi.util.IconLoader
 import com.redhat.devtools.gateway.devworkspace.WorkspaceEditorKind
 import javax.swing.Icon
 
-object DevSpacesIcons {
+internal object DevSpacesIcons {
 
-    val LOGO = IconLoader.getIcon("/icons/dev-spaces-logo.svg", javaClass)
+    internal val LOGO = IconLoader.getIcon("/icons/dev-spaces-logo.svg", javaClass)
 
     private val WORKSPACE_STARTING = IconLoader.getIcon("/icons/starting.svg", javaClass)
     private val WORKSPACE_STARTED = IconLoader.getIcon("/icons/started.svg", javaClass)
@@ -39,10 +39,37 @@ object DevSpacesIcons {
     private val EDITOR_CHEMUXER = IconLoader.getIcon("/icons/editors/chemuxer.svg", javaClass)
     private val EDITOR_HERDR = IconLoader.getIcon("/icons/editors/herdr.svg", javaClass)
     private val EDITOR_KIRO = IconLoader.getIcon("/icons/editors/kiro.svg", javaClass)
+    private val EDITOR_TOOLBOX = IconLoader.getIcon("/icons/editors/toolbox.svg", javaClass)
     private val EDITOR_WEB_TERMINAL = IconLoader.getIcon("/icons/editors/web-terminal.svg", javaClass)
     private val EDITOR_UNKNOWN = IconLoader.getIcon("/icons/editors/unknown.svg", javaClass)
 
-    fun getWorkspacePhaseIcon(phase: String): Icon? {
+    /**
+     * Maps every editor kind to its icon. The exhaustive `when` makes a missing icon a
+     * compile error; the branches are a flat lookup table, which is why the complexity
+     * metrics are suppressed rather than factored out (splitting them would lose the
+     * compiler-enforced exhaustiveness).
+     */
+    @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
+    internal fun getEditorIcon(kind: WorkspaceEditorKind): Icon = when (kind) {
+        WorkspaceEditorKind.VSCODE -> EDITOR_VSCODE
+        WorkspaceEditorKind.INTELLIJ_IDEA -> EDITOR_INTELLIJ_IDEA
+        WorkspaceEditorKind.JETBRAINS -> EDITOR_JETBRAINS
+        WorkspaceEditorKind.PYCHARM -> EDITOR_PYCHARM
+        WorkspaceEditorKind.CLION -> EDITOR_CLION
+        WorkspaceEditorKind.GOLAND -> EDITOR_GOLAND
+        WorkspaceEditorKind.PHPSTORM -> EDITOR_PHPSTORM
+        WorkspaceEditorKind.RIDER -> EDITOR_RIDER
+        WorkspaceEditorKind.RUBYMINE -> EDITOR_RUBYMINE
+        WorkspaceEditorKind.WEBSTORM -> EDITOR_WEBSTORM
+        WorkspaceEditorKind.CHEMUXER -> EDITOR_CHEMUXER
+        WorkspaceEditorKind.HERDR -> EDITOR_HERDR
+        WorkspaceEditorKind.KIRO -> EDITOR_KIRO
+        WorkspaceEditorKind.TOOLBOX -> EDITOR_TOOLBOX
+        WorkspaceEditorKind.WEB_TERMINAL -> EDITOR_WEB_TERMINAL
+        WorkspaceEditorKind.UNKNOWN -> EDITOR_UNKNOWN
+    }
+
+    internal fun getWorkspacePhaseIcon(phase: String): Icon? {
         /*
          * mimics what the web frontend is displaying.
          * @see [getStatusIcon.tsx](https://github.com/eclipse-che/che-dashboard/blob/main/packages/dashboard-frontend/src/components/Workspace/Status/getStatusIcon.tsx)
@@ -55,26 +82,6 @@ object DevSpacesIcons {
             "Terminating" -> WORKSPACE_TERMINATING
             "Failed", "Failing", "Error" -> WORKSPACE_FAILED
             else -> null
-        }
-    }
-
-    fun getEditorIcon(kind: WorkspaceEditorKind): Icon {
-        return when (kind) {
-            WorkspaceEditorKind.VSCODE -> EDITOR_VSCODE
-            WorkspaceEditorKind.INTELLIJ_IDEA -> EDITOR_INTELLIJ_IDEA
-            WorkspaceEditorKind.JETBRAINS -> EDITOR_JETBRAINS
-            WorkspaceEditorKind.PYCHARM -> EDITOR_PYCHARM
-            WorkspaceEditorKind.CLION -> EDITOR_CLION
-            WorkspaceEditorKind.GOLAND -> EDITOR_GOLAND
-            WorkspaceEditorKind.PHPSTORM -> EDITOR_PHPSTORM
-            WorkspaceEditorKind.RIDER -> EDITOR_RIDER
-            WorkspaceEditorKind.RUBYMINE -> EDITOR_RUBYMINE
-            WorkspaceEditorKind.WEBSTORM -> EDITOR_WEBSTORM
-            WorkspaceEditorKind.CHEMUXER -> EDITOR_CHEMUXER
-            WorkspaceEditorKind.HERDR -> EDITOR_HERDR
-            WorkspaceEditorKind.KIRO -> EDITOR_KIRO
-            WorkspaceEditorKind.WEB_TERMINAL -> EDITOR_WEB_TERMINAL
-            WorkspaceEditorKind.UNKNOWN -> EDITOR_UNKNOWN
         }
     }
 

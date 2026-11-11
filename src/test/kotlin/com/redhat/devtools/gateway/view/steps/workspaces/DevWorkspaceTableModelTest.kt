@@ -51,6 +51,32 @@ class DevWorkspaceTableModelTest {
     }
 
     @Test
+    fun `addAll sorts Toolbox after UNKNOWN and JETBRAINS and within priority by namespace then name`() {
+        // given
+        val model = DevWorkspaceTableModel()
+        model.addAll(
+            listOf(
+                item("tb", "ns1", WorkspaceEditorKind.TOOLBOX),
+                item("u", "ns1", WorkspaceEditorKind.UNKNOWN),
+                item("jb", "ns1", WorkspaceEditorKind.JETBRAINS),
+                item("tb0", "ns0", WorkspaceEditorKind.TOOLBOX),
+                item("vs", "ns1", WorkspaceEditorKind.VSCODE)
+            )
+        )
+
+        // then
+        assertThat(kinds(model)).containsExactly(
+            WorkspaceEditorKind.JETBRAINS,
+            WorkspaceEditorKind.UNKNOWN,
+            WorkspaceEditorKind.TOOLBOX,
+            WorkspaceEditorKind.TOOLBOX,
+            WorkspaceEditorKind.VSCODE
+        )
+        assertThat(namespaces(model)).containsExactly("ns1", "ns1", "ns0", "ns1", "ns1")
+        assertThat(names(model)).containsExactly("jb", "u", "tb0", "tb", "vs")
+    }
+
+    @Test
     fun `add inserts item at given index`() {
         // given
         val model = DevWorkspaceTableModel()

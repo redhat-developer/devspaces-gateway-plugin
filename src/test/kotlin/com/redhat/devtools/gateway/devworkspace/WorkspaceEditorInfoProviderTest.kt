@@ -227,6 +227,104 @@ class WorkspaceEditorInfoProviderTest {
     }
 
     @Test
+    fun `#create maps jetbrains-sshd editor to TOOLBOX`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("che-incubator/jetbrains-sshd/next")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.TOOLBOX)
+        assertThat(info.tooltip).isEqualTo("JetBrains Toolbox App (unsupported editor)")
+        assertThat(info.kind.isConnectable).isFalse()
+    }
+
+    @Test
+    fun `#create maps two-part jetbrains-sshd path to TOOLBOX`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("jetbrains-sshd/latest")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.TOOLBOX)
+        assertThat(info.tooltip).isEqualTo("JetBrains Toolbox App (unsupported editor)")
+        assertThat(info.kind.isConnectable).isFalse()
+    }
+
+    @Test
+    fun `#create maps publisher-prefixed jetbrains-sshd path to TOOLBOX`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("eclipse/jetbrains-sshd")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.TOOLBOX)
+        assertThat(info.tooltip).isEqualTo("JetBrains Toolbox App (unsupported editor)")
+        assertThat(info.kind.isConnectable).isFalse()
+    }
+
+    @Test
+    fun `#create maps registry-prefixed jetbrains-sshd path to TOOLBOX`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("quay.io/che-incubator/JetBrains-SSHD/next")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.TOOLBOX)
+        assertThat(info.tooltip).isEqualTo("JetBrains Toolbox App (unsupported editor)")
+        assertThat(info.kind.isConnectable).isFalse()
+    }
+
+    @Test
+    fun `#create maps che-idea-server with toolbox version to INTELLIJ_IDEA`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("che-incubator/che-idea-server/toolbox")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.INTELLIJ_IDEA)
+        assertThat(info.tooltip).isEqualTo("IntelliJ IDEA Ultimate (desktop)")
+    }
+
+    @Test
+    fun `#create resolves Toolbox over idea-server template annotation`() {
+        // given
+        val dw = createDevWorkspaceWithEditor(
+            "che-incubator/jetbrains-sshd/next",
+            mapOf("che.eclipse.org/che-editor-template" to "toolbox-template")
+        )
+        val templateMap = mapOf(
+            "test-uid" to listOf(
+                DevWorkspaceTemplate(
+                    metadata = DevWorkspaceTemplateMetadata(
+                        name = "toolbox-template",
+                        namespace = "ns",
+                        pluginRegistryUrl = null,
+                        ownerRefencesUids = listOf("test-uid")
+                    ),
+                    spec = DevWorkspaceTemplateSpec(
+                        components = listOf(mapOf("volume" to mapOf("name" to "idea-server")))
+                    )
+                )
+            )
+        )
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, templateMap)
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.TOOLBOX)
+        assertThat(info.kind.isConnectable).isFalse()
+    }
+
+    @Test
+    fun `#create does not treat a toolbox path segment as Toolbox editor`() {
+        // given
+        val dw = createDevWorkspaceWithEditor("toolbox/che-code/latest")
+        // when
+        val info = WorkspaceEditorInfoProvider.create(dw, emptyMap())
+        // then
+        assertThat(info.kind).isEqualTo(WorkspaceEditorKind.VSCODE)
+    }
+
+    @Test
     fun `#create maps web terminal editor to WEB_TERMINAL`() {
         // given
         val dw = createDevWorkspaceWithEditor("eclipse/che-web-terminal-server/latest")
@@ -306,7 +404,7 @@ class WorkspaceEditorInfoProviderTest {
     }
 
     @Test
-    fun `#create resolves che-editor-template annotation over che-editor annotation`() {
+    fun `#create resolves che-editor-template annotation over non-Toolbox che-editor annotation`() {
         // given
         val dw = DevWorkspace(
             DevWorkspaceObjectMeta(
