@@ -26,6 +26,7 @@ enum class WorkspaceEditorKind(val isConnectable: Boolean) {
     CHEMUXER(false),
     HERDR(true),
     KIRO(true),
+    TOOLBOX(false),
     WEB_TERMINAL(false),
     JETBRAINS(true),
     UNKNOWN(true)
@@ -40,6 +41,29 @@ object WorkspaceEditorInfoProvider {
 
     private val CHE_EDITOR_ID_REGEX = Regex("che-.*-server", RegexOption.IGNORE_CASE)
 
+    private const val TOOLBOX_EDITOR_NAME = "jetbrains-sshd"
+    private const val TOOLBOX_TOOLTIP = "JetBrains Toolbox App (unsupported editor)"
+
+    private const val MIN_VERSIONED_SEGMENT_COUNT = 3
+    private const val EDITOR_NAME_SEGMENT_INDEX = 1
+    private const val CHE_EDITOR_PREFIX = "che-"
+
+    /**
+     * Resolves the workspace editor by precedence; the first matching rung wins:
+     * 1. Toolbox-specific `che-editor` — outranks the annotated template because a Toolbox
+     *    workspace can carry an `idea-server` template that this plugin cannot connect to.
+     * 2. Annotated `che-editor-template` — the explicitly chosen template outranks
+     *    editor-name matching.
+     * 3. `che-editor` — the annotation names the editor directly.
+     * 4. Template scan ([isJetBrainsEditor]) — infers a JetBrains editor from the workspace's
+     *    templates when no annotation identified one.
+     * 5. `UNKNOWN` — nothing identified the editor.
+     *
+     * Toolbox is identified exclusively by the `che-editor` annotation: no template-only
+     * Toolbox workspace exists in the field, so the template rungs deliberately never resolve
+     * `TOOLBOX`. A template carrying an `idea-server` component is still reported as connectable
+     * `JETBRAINS`, which is why the Toolbox rung must run before the template rungs.
+     */
     fun create(
         devWorkspace: DevWorkspace,
         templateMap: Map<String, List<DevWorkspaceTemplate>>
@@ -48,16 +72,26 @@ object WorkspaceEditorInfoProvider {
             devWorkspace.annotations,
             arrayOf("che.eclipse.org/che-editor-template")
         ) as? String
-        if (!editorTemplateAnnotation.isNullOrBlank()) {
-            createFromEditorTemplateAnnotation(editorTemplateAnnotation, devWorkspace, templateMap)?.let { return it }
-        }
-
         val editorAnnotation = Utils.getValue(
             devWorkspace.annotations,
             arrayOf("che.eclipse.org/che-editor")
         ) as? String
-        if (!editorAnnotation.isNullOrBlank()) {
-            createFromEditorAnnotation(editorAnnotation).let { return it }
+        val editorPath = editorAnnotation
+            ?.takeIf { it.isNotBlank() }
+            ?.let(CheEditorPath::parse)
+
+        // Toolbox wins over the editor template: a Toolbox workspace can carry an
+        // idea-server template, but this plugin cannot connect to it.
+        if (editorPath != null) {
+            createFromToolboxEditor(editorPath)?.let { return it }
+        }
+
+        if (!editorTemplateAnnotation.isNullOrBlank()) {
+            createFromEditorTemplateAnnotation(editorTemplateAnnotation, devWorkspace, templateMap)?.let { return it }
+        }
+
+        if (editorPath != null) {
+            createFromEditorAnnotation(editorPath).let { return it }
         }
 
         if (editorTemplateAnnotation.isNullOrBlank()
@@ -103,7 +137,9 @@ object WorkspaceEditorInfoProvider {
      * in which case the caller falls through to the `che-editor` annotation only; the
      * `isJetBrainsEditor` template scan is skipped, so unrelated templates carrying an
      * `idea-server` component cannot override the annotated template choice.
-     * This is intentionally scoped to JetBrains editor resolution.
+     * This is intentionally scoped to JetBrains editor resolution: Toolbox is identified only
+     * by the `che-editor` annotation, never by a template, so this rung cannot return
+     * `TOOLBOX`.
      *
      * @param editorTemplateAnnotation the value of the editor template annotation
      * @param devWorkspace the workspace owning the annotation
@@ -125,31 +161,73 @@ object WorkspaceEditorInfoProvider {
         return null
     }
 
-    private fun createFromEditorAnnotation(cheEditor: String): WorkspaceEditorInfo {
-        val cheEditorSegments = cheEditor.split("/")
-
-        val editorName = extractEditorName(cheEditorSegments)
+    private fun createFromEditorAnnotation(editorPath: CheEditorPath): WorkspaceEditorInfo {
+        val editorName = editorPath.editorName
         if (editorName != null) {
             createFromEditorName(editorName)?.let { return it }
         }
 
-        if (cheEditorSegments.any { CHE_EDITOR_ID_REGEX.matches(it) }) {
+        if (editorPath.hasCheEditorId()) {
             return WorkspaceEditorInfo(WorkspaceEditorKind.JETBRAINS, "JetBrains")
         }
 
-        val fallbackSegment = cheEditorSegments.lastOrNull { it.isNotBlank() }
-        return WorkspaceEditorInfo(WorkspaceEditorKind.UNKNOWN, fallbackSegment ?: "Unknown Editor")
+        return WorkspaceEditorInfo(
+            WorkspaceEditorKind.UNKNOWN,
+            editorPath.fallbackSegment ?: "Unknown Editor"
+        )
     }
 
-    private fun extractEditorName(cheEditorSegments: List<String>): String? {
-        val parts = cheEditorSegments.filter { it.isNotBlank() }
-        return if (parts.size >= 3) {
-            parts[1]
+    /**
+     * Detects the JetBrains Toolbox App editor from a parsed `che-editor` value.
+     *
+     * `jetbrains-sshd` is exclusive to Toolbox workspaces in the field, so the segment is
+     * matched by content instead of by position: registry-prefixed values such as
+     * `quay.io/che-incubator/jetbrains-sshd/next` would otherwise be misread as the
+     * publisher/organisation segment. The editor-name check runs before generic
+     * editor-name matching because Toolbox detection must outrank it.
+     */
+    private fun createFromToolboxEditor(editorPath: CheEditorPath): WorkspaceEditorInfo? {
+        return if (editorPath.isToolboxEditor) {
+            WorkspaceEditorInfo(WorkspaceEditorKind.TOOLBOX, TOOLBOX_TOOLTIP)
         } else {
-            parts.firstOrNull {
-                CHE_EDITOR_ID_REGEX.matches(it)
-                        || it.startsWith("che-", ignoreCase = true)
+            null
+        }
+    }
+
+    /**
+     * Parses a `che-editor` value such as `registry/editor/version`, `editor/version`, or
+     * `editor` into a single set of editor-coordinate accessors shared by every consumer,
+     * so Toolbox detection and editor-name matching cannot disagree.
+     */
+    private class CheEditorPath private constructor(segments: List<String>) {
+
+        private val parts = segments.filter { it.isNotBlank() }
+
+        val isToolboxEditor: Boolean =
+            parts.any { it.equals(TOOLBOX_EDITOR_NAME, ignoreCase = true) }
+
+        val editorName: String? = resolveEditorName()
+
+        val fallbackSegment: String?
+            get() = parts.lastOrNull()
+
+        fun hasCheEditorId(): Boolean = parts.any { CHE_EDITOR_ID_REGEX.matches(it) }
+
+        private fun resolveEditorName(): String? =
+            if (parts.size >= MIN_VERSIONED_SEGMENT_COUNT) {
+                parts[EDITOR_NAME_SEGMENT_INDEX]
+            } else {
+                parts.firstOrNull(::isEditorNameCandidate)
             }
+
+        private fun isEditorNameCandidate(segment: String): Boolean =
+            segment.equals(TOOLBOX_EDITOR_NAME, ignoreCase = true) ||
+                    CHE_EDITOR_ID_REGEX.matches(segment) ||
+                    segment.startsWith(CHE_EDITOR_PREFIX, ignoreCase = true)
+
+        companion object {
+            fun parse(annotation: String): CheEditorPath =
+                CheEditorPath(annotation.split('/'))
         }
     }
 

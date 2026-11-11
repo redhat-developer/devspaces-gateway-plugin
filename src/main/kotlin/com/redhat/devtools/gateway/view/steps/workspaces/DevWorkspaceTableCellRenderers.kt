@@ -27,6 +27,7 @@ internal const val ICON_SIZE = 16
 private const val TEXT_CELL_LEFT_PADDING = 8
 
 internal abstract class CenteredIconCellRenderer : DefaultTableCellRenderer() {
+
     protected abstract fun iconFor(item: DevWorkspaceListItem): javax.swing.Icon
 
     override fun getTableCellRendererComponent(
