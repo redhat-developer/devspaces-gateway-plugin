@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.devworkspace
 
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
+import io.kubernetes.client.openapi.ApiResponse
 import io.kubernetes.client.openapi.apis.CustomObjectsApi
 import io.mockk.every
 import io.mockk.mockk
@@ -39,8 +40,13 @@ class DevWorkspacePatchTest {
         apiClient = mockk(relaxed = true)
         devWorkspaces = mockk(relaxed = true)
         customApi = mockk(relaxed = true)
-        every { customApi.apiClient } returns apiClient
         devWorkspace = createDevWorkspace(annotations = emptyMap())
+        // PatchUtils deserializes the response as DevWorkspace, so the mocked ApiClient must hand
+        // back a typed ApiResponse instead of a relaxed mock leaking an untyped Object.
+        val patchResponse = mockk<ApiResponse<DevWorkspace>>()
+        every { patchResponse.data } returns devWorkspace
+        every { apiClient.execute<DevWorkspace>(any(), any()) } returns patchResponse
+        every { customApi.apiClient } returns apiClient
         annotation = DevWorkspacePatch(
             namespace,
             workspaceName,
@@ -156,9 +162,10 @@ class DevWorkspacePatchTest {
         }
 
         // when
-        annotation.removeRestartAnnotation()
+        val patched = annotation.removeRestartAnnotation()
 
         // then
+        assertThat(patched).isSameAs(devWorkspace)
         verify {
             customApi.patchNamespacedCustomObject(
                 "workspace.devfile.io",
@@ -224,6 +231,148 @@ class DevWorkspacePatchTest {
             annotation.removeRestartAnnotation()
         }.isInstanceOf(ApiException::class.java)
             .hasMessageContaining("Remove failed")
+    }
+
+    @Test
+    fun `#removeRestartAnnotation propagates a 422 when the annotation is still present`() {
+        // given: a 422 not caused by a missing annotation, e.g. a concurrent patch conflict
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.RESTART_KEY to DevWorkspace.RESTART_VALUE))
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        } throws ApiException(422, "the server rejected our request")
+
+        // when/then
+        assertThatThrownBy {
+            annotation.removeRestartAnnotation()
+        }.isInstanceOf(ApiException::class.java)
+            .hasMessageContaining("the server rejected our request")
+    }
+
+    @Test
+    fun `#removeRestartAnnotation treats an already absent annotation as success`() {
+        // given: a concurrent cleanup already removed the annotation
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        } throws ApiException(422, "the path does not exist")
+
+        // when/then
+        annotation.removeRestartAnnotation()
+    }
+
+    @Test
+    fun `#removePendingTemplate treats an already absent annotation as success`() {
+        // given: a concurrent cleanup already removed the template annotation
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "{}"))
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        } throws ApiException(404, "not found")
+
+        // when/then
+        annotation.removePendingTemplate()
+    }
+
+    @Test
+    fun `#setSpecTemplate calls patch API with replace operation and the template`() {
+        // given
+        val patchSlot = slot<Any>()
+        val callBuilder = mockk<okhttp3.Call>(relaxed = true)
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                capture(patchSlot)
+            )
+        } returns mockk {
+            every { buildCall(null) } returns callBuilder
+        }
+        val template = mapOf("components" to listOf(mapOf("name" to "tools")))
+
+        // when
+        annotation.setSpecTemplate(template)
+
+        // then
+        @Suppress("UNCHECKED_CAST")
+        val patch = patchSlot.captured as Array<Map<String, Any>>
+        assertThat(patch).hasSize(1)
+        assertThat(patch[0]["op"]).isEqualTo("replace")
+        assertThat(patch[0]["path"]).isEqualTo("/spec/template")
+        assertThat(patch[0]["value"]).isEqualTo(template)
+    }
+
+    @Test
+    fun `#removePendingTemplate calls patch API with remove operation`() {
+        // given
+        devWorkspace = createDevWorkspace(mapOf(DevWorkspace.PENDING_TEMPLATE_KEY to "{}"))
+        val patchSlot = slot<Any>()
+        val callBuilder = mockk<okhttp3.Call>(relaxed = true)
+        every {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                capture(patchSlot)
+            )
+        } returns mockk {
+            every { buildCall(null) } returns callBuilder
+        }
+
+        // when
+        annotation.removePendingTemplate()
+
+        // then
+        @Suppress("UNCHECKED_CAST")
+        val patch = patchSlot.captured as Array<Map<String, Any>>
+        assertThat(patch).hasSize(1)
+        assertThat(patch[0]["op"]).isEqualTo("remove")
+        assertThat(patch[0]["path"])
+            .isEqualTo("/metadata/annotations/che.eclipse.org~1pending-devfile-template")
+    }
+
+    @Test
+    fun `#removePendingTemplate does not call patch API when annotation is absent`() {
+        // given
+        devWorkspace = createDevWorkspace(annotations = emptyMap())
+
+        // when
+        annotation.removePendingTemplate()
+
+        // then
+        verify(exactly = 0) {
+            customApi.patchNamespacedCustomObject(
+                "workspace.devfile.io",
+                "v1alpha2",
+                namespace,
+                "devworkspaces",
+                workspaceName,
+                any()
+            )
+        }
     }
 
     @Test

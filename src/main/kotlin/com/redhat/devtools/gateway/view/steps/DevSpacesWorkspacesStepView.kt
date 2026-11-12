@@ -40,6 +40,7 @@ import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspaceTableModel
 import com.redhat.devtools.gateway.view.steps.workspaces.DevWorkspacesTable
 import com.redhat.devtools.gateway.view.ui.Dialogs
 import com.redhat.devtools.gateway.view.ui.Dialogs.confirmUnknownEditor
+import com.redhat.devtools.gateway.view.ui.ProgressDialogParent
 import com.redhat.devtools.gateway.view.ui.onDoubleClick
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -198,7 +199,8 @@ class DevSpacesWorkspacesStepView(
             },
             DevSpacesBundle.message("connector.loader.devspaces.fetching.text"),
             true,
-            null
+            null,
+            ProgressDialogParent.component()
         )
     }
 
@@ -312,7 +314,8 @@ class DevSpacesWorkspacesStepView(
             },
             progressTitle,
             true,
-            null
+            null,
+            ProgressDialogParent.component()
         )
     }
 
@@ -357,7 +360,8 @@ class DevSpacesWorkspacesStepView(
             },
             "Connect to Workspace IDE",
             true,
-            null
+            null,
+            ProgressDialogParent.component()
         )
 
         errorToThrow?.let { throw it }
@@ -438,7 +442,8 @@ class DevSpacesWorkspacesStepView(
             },
             DevSpacesBundle.message("connector.loader.devspaces.connecting.text"),
             true,
-            null
+            null,
+            ProgressDialogParent.component()
         )
     }
 

@@ -11,10 +11,8 @@
  */
 package com.redhat.devtools.gateway
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.project.ex.ProjectManagerEx
 import com.jetbrains.gateway.thinClientLink.LinkedClientManager
 import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.jetbrains.rd.util.lifetime.Lifetime
@@ -34,7 +32,6 @@ import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
-import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -204,6 +201,9 @@ class DevSpacesConnection internal constructor(
                 )
             },
             onRestartAnnotated = if (handleRestarts) onRestartAnnotated(thinClient) else null,
+            removeRestartAnnotations = {
+                workspaces.removeRestartRequest(workspace.namespace, workspace.name)
+            },
             onStopped = {
                 // close sockets -> Guest EOF, immediate status loss
                 // close listener -> pod pinned, re-dial would hit stopped pod
@@ -262,12 +262,14 @@ class DevSpacesConnection internal constructor(
                 workspace.name,
                 devSpacesContext.client
             ) {
-                DevWorkspaces(devSpacesContext.client).get(workspace.namespace, workspace.name)
+                DevWorkspaces(devSpacesContext.client)
+                    .get(workspace.namespace, workspace.name)
             }
             try {
-                if (workspacePatch.hasRestartAnnotation()) {
-                    closeAllProjects()
-                } else if (true == remoteIdeServer?.waitServerTerminated()) {
+                val restartInProgress = workspacePatch.hasRestartAnnotation()
+                if (!restartInProgress
+                    && true == remoteIdeServer?.waitServerTerminated()) {
+                    // User closed the IDE and asked to stop the workspace.
                     DevWorkspaces(devSpacesContext.client)
                         .stop(workspace.namespace, workspace.name)
                         .also { onDevWorkspaceStopped() }
@@ -277,20 +279,6 @@ class DevSpacesConnection internal constructor(
                     .onFailure { e -> thisLogger().debug("Failed to close port forwarder", e) }
             }
         }
-    }
-
-    private fun closeAllProjects() {
-        ApplicationManager.getApplication().invokeLater(
-            {
-                val pm = ProjectManagerEx.getInstanceEx()
-                for (project in pm.openProjects.toList()) {
-                    if (!project.isDisposed) {
-                        pm.closeAndDispose(project)
-                    }
-                }
-            },
-            ModalityState.nonModal()
-        )
     }
 
     /**

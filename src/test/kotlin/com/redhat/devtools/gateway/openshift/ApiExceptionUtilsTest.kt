@@ -35,6 +35,76 @@ class ApiExceptionUtilsTest {
   }
 
   @Test
+  fun `isUnprocessableEntity returns true when code is 422`() {
+    val exception = ApiException(422, "unprocessable entity")
+
+    assertThat(exception.isUnprocessableEntity()).isTrue()
+  }
+
+  @Test
+  fun `isUnprocessableEntity returns true when status body contains 422`() {
+    val exception = apiException(
+      code = 0,
+      body = statusBody(
+        code = 422,
+        reason = "Invalid",
+        message = "the path does not exist",
+      ),
+    )
+
+    assertThat(exception.isUnprocessableEntity()).isTrue()
+  }
+
+  @Test
+  fun `isUnprocessableEntity returns false for other failures`() {
+    val exception = ApiException(500, "server error")
+
+    assertThat(exception.isUnprocessableEntity()).isFalse()
+  }
+
+  @Test
+  fun `isRequestTimeout returns true when code is 408`() {
+    val exception = ApiException(408, "request timeout")
+
+    assertThat(exception.isRequestTimeout()).isTrue()
+  }
+
+  @Test
+  fun `isRequestTimeout returns true when status body contains 408`() {
+    val exception = apiException(
+      code = 0,
+      body = statusBody(
+        code = 408,
+        reason = "Timeout",
+        message = "request timed out",
+      ),
+    )
+
+    assertThat(exception.isRequestTimeout()).isTrue()
+  }
+
+  @Test
+  fun `isRequestTimeout returns false for other failures`() {
+    val exception = ApiException(500, "server error")
+
+    assertThat(exception.isRequestTimeout()).isFalse()
+  }
+
+  @Test
+  fun `isNoHttpStatus returns true when code is 0`() {
+    val exception = ApiException(0, "no response")
+
+    assertThat(exception.isNoHttpStatus()).isTrue()
+  }
+
+  @Test
+  fun `isNoHttpStatus returns false when code is set`() {
+    val exception = ApiException(408, "request timeout")
+
+    assertThat(exception.isNoHttpStatus()).isFalse()
+  }
+
+  @Test
   fun `isDevWorkspaceResourceMissing detects workspace name in status message`() {
     val exception = apiException(
       code = 404,

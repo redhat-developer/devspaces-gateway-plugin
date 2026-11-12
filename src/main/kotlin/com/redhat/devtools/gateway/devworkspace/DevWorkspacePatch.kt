@@ -12,6 +12,8 @@
 package com.redhat.devtools.gateway.devworkspace
 
 import com.intellij.openapi.diagnostic.thisLogger
+import com.redhat.devtools.gateway.openshift.isNotFound
+import com.redhat.devtools.gateway.openshift.isUnprocessableEntity
 import io.kubernetes.client.custom.V1Patch
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
@@ -21,8 +23,8 @@ import io.kubernetes.client.util.PatchUtils
 /**
  * Patches a specific DevWorkspace resource.
  *
- * * annotation `che.eclipse.org/restart-in-progress`: signals that a restart of the workspace should happen
- * * resource value`spec.started`: starts/stops a workspace
+ * * annotation [DevWorkspace.RESTART_KEY]: signals that a restart of the workspace should happen
+ * * resource value [DevWorkspace.SPEC_STARTED_PATH]: starts/stops a workspace
  *
  * @param namespace The namespace of the DevWorkspace.
  * @param name The name of the DevWorkspace.
@@ -73,12 +75,13 @@ class DevWorkspacePatch(
     /**
      * Removes the restart annotation from the DevWorkspace resource.
      *
+     * @return the patched workspace, or `null` when the annotation was already absent
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    fun removeRestartAnnotation() {
+    fun removeRestartAnnotation(): DevWorkspace? {
         thisLogger().info("Removing restart annotation from $namespace/$name")
-        removeAnnotation(DevWorkspace.RESTART_KEY)
+        return removeAnnotation(DevWorkspace.RESTART_KEY)
     }
 
     /**
@@ -103,23 +106,40 @@ class DevWorkspacePatch(
     /**
      * Removes an annotation from the DevWorkspace resource.
      *
+     * Idempotent: a `remove` for an annotation that is already gone answers 404/422, which is
+     * treated as success so concurrent cleanup paths cannot fail each other. Kubernetes also
+     * answers 422 for unrelated rejections, so a 422 only counts as success once the annotation
+     * is confirmed absent.
+     *
      * @param key The annotation key.
-     * @throws ApiException if the Kubernetes API call fails.
+     * @return the patched workspace, or `null` when the annotation was already absent
+     * @throws ApiException if the Kubernetes API call fails for another reason, or the
+     * annotation is still present after a 422.
      */
     @Throws(ApiException::class)
-    private fun removeAnnotation(key: String) {
+    private fun removeAnnotation(key: String): DevWorkspace? {
         val patch = arrayOf(
             mapOf(
                 "op" to "remove",
                 "path" to "$ANNOTATIONS_PATH/${key.replace("/", "~1")}"
             )
         )
-        doPatch(patch)
+        try {
+            return doPatch(patch)
+        } catch (e: ApiException) {
+            // 422 also covers unrelated rejections, so only accept it when the annotation is truly gone.
+            val isAlreadyAbsent = e.isNotFound()
+                || (e.isUnprocessableEntity() && !getDevWorkspace().annotations.containsKey(key))
+            if (!isAlreadyAbsent) {
+                throw e
+            }
+            thisLogger().debug("Annotation $key is already absent from $namespace/$name")
+            return null
+        }
     }
 
     /**
-     * Sets the spec.started field on the DevWorkspace.
-     * Used by [DevWorkspaces.start] and [DevWorkspaces.stop].
+     * Sets the `started` field at [DevWorkspace.SPEC_STARTED_PATH] on the DevWorkspace.
      *
      * @param value The value to set (true to start, false to stop).
      * @throws ApiException if the Kubernetes API call fails.
@@ -128,9 +148,59 @@ class DevWorkspacePatch(
     internal fun setSpecStarted(value: Boolean) {
         val patch = arrayOf(mapOf(
             "op" to "replace",
-            "path" to "/spec/started",
+            "path" to DevWorkspace.SPEC_STARTED_PATH,
             "value" to value))
         doPatch(patch)
+    }
+
+    /**
+     * Sets [DevWorkspace.SPEC_TEMPLATE_PATH] to the value of the given template.
+     *
+     * @param template the template to apply
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    fun setSpecTemplate(template: Map<String, Any?>) {
+        val patch = arrayOf(
+            mapOf(
+                "op" to "replace",
+                "path" to DevWorkspace.SPEC_TEMPLATE_PATH,
+                "value" to template
+            )
+        )
+        doPatch(patch)
+    }
+
+    /**
+     * Removes the [DevWorkspace.PENDING_TEMPLATE_KEY] template annotation.
+     *
+     * Idempotent: the annotation is checked first, so cleanup paths can call this
+     * unconditionally without provoking a failing JSON-Patch `remove` (Kubernetes answers
+     * 422 when the path does not exist).
+     *
+     * @return the patched workspace, or `null` when there was no pending template to remove
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    fun removePendingTemplate(): DevWorkspace? {
+        if (!hasPendingTemplate()) {
+            thisLogger().debug("No pending template annotation to remove from $namespace/$name")
+            return null
+        }
+        thisLogger().info("Removing pending template annotation from $namespace/$name")
+        return removeAnnotation(DevWorkspace.PENDING_TEMPLATE_KEY)
+    }
+
+    /**
+     * Checks if the DevWorkspace has the [DevWorkspace.PENDING_TEMPLATE_KEY] annotation set.
+     *
+     * @return `true` if the pending template annotation is present, `false` otherwise.
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    private fun hasPendingTemplate(): Boolean {
+        return getDevWorkspace().annotations
+            .containsKey(DevWorkspace.PENDING_TEMPLATE_KEY)
     }
 
     /**
@@ -138,11 +208,14 @@ class DevWorkspacePatch(
      * This is used internally by all patch operations.
      *
      * @param body The patch body.
+     * @return the patched DevWorkspace, as returned by the API server
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    private fun doPatch(body: Any) {
-        PatchUtils.patch(
+    private fun doPatch(body: Any): DevWorkspace? {
+        // PatchUtils deserializes the response as the class given here, so the result is a
+        // DevWorkspace or an ApiException; `null` only comes from an empty response body.
+        return PatchUtils.patch(
             DevWorkspace::class.java,
             {
                 customApi.patchNamespacedCustomObject(

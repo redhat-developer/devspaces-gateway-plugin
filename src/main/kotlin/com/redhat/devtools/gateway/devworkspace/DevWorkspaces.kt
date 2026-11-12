@@ -73,7 +73,7 @@ class DevWorkspaces(private val client: ApiClient) {
                 "devworkspaces"
             ).execute()
         } catch (e: ApiException) {
-            if (e.isSkippableNamespaceForDevWorkspaceListing(namespace)) {
+            if (e.isSkippableNamespaceForDevWorkspaceListing()) {
                 thisLogger().info("Ignored: ${e.message}")
                 return DevWorkspaceListResult(emptyList(), null)
             } else {
@@ -158,7 +158,7 @@ class DevWorkspaces(private val client: ApiClient) {
             val map = items
                 .map { DevWorkspaceTemplate.from(it) }
                 .flatMap { templ ->
-                    templ.ownerRefencesUids.map { uid -> uid to templ }
+                    templ.ownerReferencesUids.map { uid -> uid to templ }
                 }
                 .groupBy(
                     keySelector = { it.first },   // UID
@@ -189,17 +189,91 @@ class DevWorkspaces(private val client: ApiClient) {
     }
 
     @Throws(ApiException::class)
-    fun isRestarting(namespace: String, workspaceName: String): Boolean {
+    fun hasRestartAnnotation(namespace: String, workspaceName: String): Boolean {
         return DevWorkspacePatch(namespace, workspaceName, client) {
             get(namespace, workspaceName)
         }.hasRestartAnnotation()
     }
 
     @Throws(ApiException::class)
-    fun removeRestarting(namespace: String, workspaceName: String) {
-        DevWorkspacePatch(namespace, workspaceName, client) {
+    fun removeRestartAnnotation(namespace: String, workspaceName: String): String? {
+        return DevWorkspacePatch(namespace, workspaceName, client) {
             get(namespace, workspaceName)
-        }.removeRestartAnnotation()
+        }.removeRestartAnnotation()?.resourceVersion
+    }
+
+    /**
+     * Replaces [DevWorkspace.SPEC_TEMPLATE_PATH] with the template the remote IDE published.
+     *
+     * @param namespace the namespace of the DevWorkspace
+     * @param name the name of the DevWorkspace
+     * @param template the template to apply
+     * @throws ApiException if the Kubernetes API call fails
+     */
+    @Throws(ApiException::class)
+    fun setSpecTemplate(namespace: String, name: String, template: Map<String, Any?>) {
+        DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.setSpecTemplate(template)
+    }
+
+    /**
+     * Removes [DevWorkspace.PENDING_TEMPLATE_KEY] that carries the pending devfile template.
+     *
+     * @return the resource version of the patched workspace, or `null` when there was no
+     *   pending template to remove
+     * @throws ApiException if the Kubernetes API call fails
+     */
+    @Throws(ApiException::class)
+    fun removePendingTemplate(namespace: String, name: String): String? {
+        return DevWorkspacePatch(namespace, name, client) {
+            get(namespace, name)
+        }.removePendingTemplate()?.resourceVersion
+    }
+
+    /**
+     * Removes both annotations that make up a restart request: [DevWorkspace.RESTART_KEY] and
+     * [DevWorkspace.PENDING_TEMPLATE_KEY].
+     *
+     * The pending template is removed first, and its cleanup runs even when the restart annotation
+     * is already absent. Removing the pending template before the restart annotation keeps the
+     * restart edge disarmed until no stale template is left: otherwise a restart accepted right
+     * after the annotation removal could read and apply the template of an earlier request over
+     * devfile changes made in between.
+     *
+     * Both removals are attempted even when one fails. A pending-template removal failure is
+     * logged and doesn't mask the restart-annotation result: the restart edge is re-armed only
+     * when the restart annotation is gone.
+     *
+     * @return the resource version of the last cleanup write, or `null` when neither annotation
+     *   needed removing; used by the session watch to ignore replays of the cleaned-up state
+     * @throws ApiException when the restart annotation could not be removed; an already absent
+     *   annotation is treated as success.
+     */
+    @Throws(ApiException::class)
+    fun removeRestartRequest(namespace: String, name: String): String? {
+        val pendingVersion = runCatching {
+            removePendingTemplate(namespace, name)
+        }.onFailure { e ->
+            thisLogger().debug(
+                "Could not remove pending devfile template from $namespace/$name",
+                e
+            )
+        }.getOrNull()
+        val restartVersion = removeRestartAnnotation(namespace, name)
+        return latestResourceVersion(pendingVersion, restartVersion)
+    }
+
+    /** The numerically newer of two resource versions, or whichever one is present. */
+    private fun latestResourceVersion(first: String?, second: String?): String? {
+        val firstValue = first?.toLongOrNull()
+        val secondValue = second?.toLongOrNull()
+        return when {
+            firstValue == null -> second
+            secondValue == null -> first
+            firstValue >= secondValue -> first
+            else -> second
+        }
     }
 
     @Throws(IOException::class, ApiException::class, CancellationException::class)
@@ -278,40 +352,6 @@ class DevWorkspaces(private val client: ApiClient) {
         } ?: false
     }
 
-    // Waits until the DevWorkspace goes out of any the given phases
-    @Throws(ApiException::class, IOException::class, CancellationException::class)
-    suspend fun waitPhaseChanges(
-        namespace: String,
-        name: String,
-        currentPhases: Collection<String>,
-        timeout: Long, // in seconds
-        checkCancelled: (() -> Unit)? = null
-    ): Boolean {
-        @Suppress("ConvertLongToDuration")
-        return withTimeoutOrNull(timeout * 1000L) {
-            while (true) {
-                checkCancelled?.invoke()
-
-                val devWorkspace = try {
-                    DevWorkspaces(client).get(namespace, name)
-                } catch (e: Exception) {
-                    delay(1000L)
-                    continue
-                }
-
-                checkCancelled?.invoke()
-                if (devWorkspace.phase !in currentPhases) {
-                    return@withTimeoutOrNull true // phase changed out of the given set
-                }
-
-                delay(1000L)
-            }
-
-            @Suppress("UNREACHABLE_CODE")
-            false
-        } ?: false
-    }
-
     // Example:
     // https://github.com/kubernetes-client/java/blob/master/examples/examples-release-20/src/main/java/io/kubernetes/client/examples/WatchExample.java
     fun createWatcher(namespace: String, fieldSelector: String = "", labelSelector: String = "", latestResourceVersion: String? = null): Watch<Any> {
@@ -354,7 +394,7 @@ class DevWorkspaces(private val client: ApiClient) {
      * Non-skippable: 401 (Unauthorized) propagates/rethrows, and other errors
      * propagate normally.
      */
-    private fun ApiException.isSkippableNamespaceForDevWorkspaceListing(namespace: String): Boolean = when {
+    private fun ApiException.isSkippableNamespaceForDevWorkspaceListing(): Boolean = when {
         isDevWorkspaceCrdMissing() -> true
         isForbidden() -> true
         isNotFound() -> true
