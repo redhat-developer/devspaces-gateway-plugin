@@ -45,6 +45,10 @@ Write elegant, clean, performant, thread-safe code. No draft or incomplete imple
 **Class Structure:**
 - Companion objects at top, before instance vars and constructors
 
+**Formatting:**
+- `when` branch bodies: own line, indented
+- Boolean expressions: one condition per line, `&&`/`||` leading
+
 **Global Functions:**
 - Avoid - exception: utility helpers grouped together in same file with other global functions
 
