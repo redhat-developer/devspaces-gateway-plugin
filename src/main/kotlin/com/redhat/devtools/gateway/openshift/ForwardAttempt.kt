@@ -70,16 +70,23 @@ internal class ForwardAttempt(private val client: ApiClient) {
 
     private val logger = logger<ForwardAttempt>()
 
+    /**
+     * [onHandshakeSuccess] is invoked right after [PortForward.forward] succeeds and before the
+     * streams are copied: it reports "the handshake worked" separately from "the copy ended",
+     * which the session needs to know when its last successful handshake was.
+     */
     suspend fun attempt(
         pod: V1Pod,
         ports: PortMapping,
         clientSocket: Socket,
-        clientIn: PushbackInputStream
+        clientIn: PushbackInputStream,
+        onHandshakeSuccess: () -> Unit = {}
     ): AttemptResult {
         var forwardResult: PortForward.PortForwardResult? = null
         return try {
             val opened = openForward(pod, ports)
             forwardResult = opened
+            onHandshakeSuccess()
             AttemptResult.Ended(copyStreams(clientSocket, clientIn, opened, ports.remotePort))
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e

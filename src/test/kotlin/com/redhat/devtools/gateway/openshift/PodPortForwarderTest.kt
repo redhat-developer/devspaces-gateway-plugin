@@ -50,6 +50,19 @@ private fun PortForwarder.forward(pod: V1Pod, remotePort: Int): PortForwardSessi
 
 class PodPortForwarderTest {
 
+    companion object {
+        /** More consecutive failures than connect-time allows, so only steady-state can survive them. */
+        private const val ESTABLISHED_HANDSHAKE_FAILURES = 4
+
+        /**
+         * Covers the steady-state backoff after the failures above (1s + 2s + 3s + 5s) plus the
+         * 100ms client-gone probes between attempts.
+         */
+        private const val STEADY_STATE_RETRY_TIMEOUT_MS = 25_000L
+
+        private const val HANDSHAKE_TIMEOUT_MS = 5_000L
+    }
+
     private val serverData = "from server"
 
     private lateinit var client: ApiClient
@@ -138,6 +151,72 @@ class PodPortForwarderTest {
         } finally {
             socket.close()
             closeable.close()
+        }
+    }
+
+    @Test
+    fun `#forward keeps retrying an established session past the connect-time attempt cap`() {
+        // given - the handshake fails more often than connect-time allows, then succeeds
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val handshakes = AtomicInteger()
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } answers {
+            if (handshakes.incrementAndGet() <= ESTABLISHED_HANDSHAKE_FAILURES) {
+                throw IOException("connection reset")
+            }
+            portForwardResult
+        }
+        val podsRunning = PodPortForwarder(client) { PodLiveness.RUNNING }
+        val session = podsRunning.forward(pod, remotePort)
+        session.markEstablished()
+
+        try {
+            // when - the Guest re-dials once and stays connected across the outage
+            runBlocking { delay(100.milliseconds) }
+            Socket("127.0.0.1", session.localPort).use {
+                // then - the loop outlives the 3-attempt connect-time cap and the handshake lands
+                assertThat(
+                    awaitTrue(STEADY_STATE_RETRY_TIMEOUT_MS) {
+                        session.lastSuccessfulHandshakeNanos != null
+                    }
+                ).isTrue()
+                assertThat(handshakes.get()).isEqualTo(ESTABLISHED_HANDSHAKE_FAILURES + 1)
+            }
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#markEstablished is idempotent and records the successful handshake`() {
+        // given - a silent pod stream, so the handshake is the only observable event
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val session = PodPortForwarder(client).forward(pod, remotePort)
+
+        try {
+            // when - connect calls it once, a re-run may call it again
+            assertThat(session.isEstablished).isFalse()
+            session.markEstablished()
+            session.markEstablished()
+
+            // then - the phase only moves forward and the accepted connection records the handshake
+            assertThat(session.isEstablished).isTrue()
+            assertThat(session.lastSuccessfulHandshakeNanos).isNull()
+            Socket("127.0.0.1", session.localPort).use {
+                assertThat(
+                    awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.lastSuccessfulHandshakeNanos != null }
+                ).isTrue()
+            }
+        } finally {
+            session.close()
         }
     }
 
@@ -457,6 +536,16 @@ class PodPortForwarderTest {
         // then
         assertThat(liveness).isEqualTo(PodLiveness.UNKNOWN)
         unmockkConstructor(CoreV1Api::class)
+    }
+
+    /** Polls [condition] until it holds or [timeoutMs] elapses: the retry schedule is time-based. */
+    private fun awaitTrue(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return true
+            runBlocking { delay(100.milliseconds) }
+        }
+        return condition()
     }
 
     private fun podWith(name: String, namespace: String): V1Pod {

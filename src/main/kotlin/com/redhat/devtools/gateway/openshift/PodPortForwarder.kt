@@ -31,8 +31,42 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/**
+ * Phase state of one forward session, shared by the session handle ([PortForwardSession]) and the
+ * per-connection retry loops.
+ *
+ * The phase is carried by the session, not by the policy: the same [ForwardRetryPolicy] must fail
+ * fast while the wizard waits for the Guest (connect-time) and keep retrying once the Guest is up.
+ * [lastSuccessfulHandshakeNanos] is recorded for the recovery watcher, which must never prod a
+ * Guest that is establishing a connection.
+ */
+internal class SessionPhase {
+    private val established = AtomicBoolean(false)
+
+    @Volatile
+    private var lastHandshakeNanos: Long? = null
+
+    /** Whether the Guest came up for this session; false until [markEstablished]. */
+    val isEstablished: Boolean
+        get() = established.get()
+
+    /** [System.nanoTime] of the last successful handshake, or null when none succeeded yet. */
+    val lastSuccessfulHandshakeNanos: Long?
+        get() = lastHandshakeNanos
+
+    /** Idempotent: the phase only ever moves from connect-time to steady-state. */
+    fun markEstablished() {
+        established.set(true)
+    }
+
+    fun recordSuccessfulHandshake() {
+        lastHandshakeNanos = System.nanoTime()
+    }
+}
 
 /**
  * A running port forward session.
@@ -45,8 +79,24 @@ private const val NANOS_PER_MILLI = 1_000_000L
  */
 internal class PortForwardSession(
     val localPort: Int,
+    /**
+     * Shared with the retry loops; defaults to a fresh one so a caller that only needs the handle
+     * (tests, fakes) does not have to carry it.
+     */
+    private val phase: SessionPhase = SessionPhase(),
     private val stopForward: () -> Unit
 ) : Closeable {
+    /** Whether the Guest is up for this session; see [SessionPhase.isEstablished]. */
+    val isEstablished: Boolean
+        get() = phase.isEstablished
+
+    /** [System.nanoTime] of the last successful handshake; see [SessionPhase]. */
+    val lastSuccessfulHandshakeNanos: Long?
+        get() = phase.lastSuccessfulHandshakeNanos
+
+    /** Switches retries to the steady-state policy; call once the Guest is up. Idempotent. */
+    fun markEstablished() = phase.markEstablished()
+
     override fun close() = stopForward()
 }
 
@@ -72,7 +122,8 @@ internal fun interface PortForwarder {
 
 /**
  * Mutable state of one running forward: the pod and ports it bridges, the local sockets currently
- * bridged to it, and the notification for a connection the pod side ended.
+ * bridged to it, the session phase shared with the retry loops, and the notification for a
+ * connection the pod side ended.
  */
 private class ForwardState(
     val pod: V1Pod,
@@ -82,6 +133,7 @@ private class ForwardState(
 ) {
     val ports = PortMapping(localPort, remotePort)
     val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
+    val phase = SessionPhase()
 }
 
 /**
@@ -121,7 +173,7 @@ internal class PodPortForwarder(
         )
         val state = ForwardState(pod, serverSocket.localPort, remotePort, onRemoteEnd)
         scope.acceptConnections(serverSocket, state)
-        return PortForwardSession(state.localPort) {
+        return PortForwardSession(state.localPort, state.phase) {
             closeQuietly(serverSocket)
             scope.cancel()
             closeClientSockets(state)
@@ -203,56 +255,63 @@ internal class PodPortForwarder(
         // wraps the client input so the client-gone probe can push back the byte it has to read (see isClientGone)
         val clientIn = PushbackInputStream(clientSocket.getInputStream(), 1)
         var firstFailureNanos: Long? = null
-        for (attempt in 1..ForwardRetryPolicy.CONNECT_ATTEMPTS) {
-            if (!isActive) return
+        var attempt = 1
+        var keepRetrying = true
+        // connect-time is capped by the policy; an established session keeps retrying until its
+        // outage budget or the client gives up, so the loop itself has no attempt limit
+        while (isActive && keepRetrying) {
             logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
-            val isTerminal =
-                when (val result = forwardAttempt.attempt(state.pod, state.ports, clientSocket, clientIn)) {
-                    // the copy already closed the local socket: any outcome is terminal
-                    is AttemptResult.Ended -> {
-                        logCopyEnd(result.copy, state.localPort, state.remotePort, acceptedAtNanos)
-                        // a client-side failure is not a client-initiated close: on a messy pod death
-                        // the client pump often fails first, and the Guest still has to report the loss
-                        if (!result.copy.isClosedByClient) {
-                            state.onRemoteEnd()
-                        }
+            val result = forwardAttempt.attempt(state.pod, state.ports, clientSocket, clientIn) {
+                state.phase.recordSuccessfulHandshake()
+            }
+            keepRetrying = when (result) {
+                // the copy already closed the local socket: any outcome is terminal
+                is AttemptResult.Ended -> {
+                    logCopyEnd(result.copy, state.localPort, state.remotePort, acceptedAtNanos)
+                    // a client-side failure is not a client-initiated close: on a messy pod death
+                    // the client pump often fails first, and the Guest still has to report the loss
+                    if (!result.copy.isClosedByClient) {
+                        state.onRemoteEnd()
+                    }
+                    false
+                }
+
+                is AttemptResult.HandshakeFailed -> {
+                    firstFailureNanos = firstFailureNanos ?: System.nanoTime()
+                    val failure = FailedHandshake(attempt, firstFailureNanos, result.cause)
+                    val established = state.phase.isEstablished
+                    val retry = retryPolicy.decide(state.pod, state.ports, established, failure)
+                    if (retry != RetryDecision.RETRY) {
+                        false
+                    } else if (clientLeftDuringRetry(clientSocket, clientIn, attempt, established)) {
+                        logger.info(
+                            "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
+                                "client disconnected; stopping retries"
+                        )
+                        false
+                    } else {
                         true
                     }
-
-                    is AttemptResult.HandshakeFailed -> {
-                        val failureStartedAt = firstFailureNanos ?: System.nanoTime()
-                        firstFailureNanos = failureStartedAt
-                        retryPolicy.decide(
-                            state.pod,
-                            failureStartedAt,
-                            attempt,
-                            state.ports,
-                            result.cause
-                        ) != RetryDecision.RETRY
-                    }
                 }
-            if (isTerminal) break
-            if (clientLeftDuringRetry(clientSocket, clientIn)) {
-                logger.info(
-                    "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
-                        "client disconnected; stopping retries"
-                )
-                return
             }
+            attempt++
         }
     }
 
     /**
-     * Waits the reconnect delay, checking the client before and after it: a client that already left
-     * will not come back, so waiting the whole delay for it is pointless.
+     * Waits the policy's reconnect delay for [attempt] in the current session phase, checking the
+     * client before and after it: a client that already left will not come back, so waiting the
+     * whole delay for it is pointless.
      */
     private suspend fun clientLeftDuringRetry(
         clientSocket: Socket,
-        clientIn: PushbackInputStream
+        clientIn: PushbackInputStream,
+        attempt: Int,
+        established: Boolean
     ): Boolean {
         if (isClientGone(clientSocket, clientIn)) return true
         @Suppress("ConvertLongToDuration")
-        delay(ForwardRetryPolicy.RECONNECT_DELAY_MS)
+        delay(retryPolicy.reconnectDelayMs(attempt, established))
         return isClientGone(clientSocket, clientIn)
     }
 

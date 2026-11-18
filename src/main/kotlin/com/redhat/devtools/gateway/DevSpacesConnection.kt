@@ -131,6 +131,7 @@ class DevSpacesConnection internal constructor(
             waitForConnect(client, connectFailed, checkCancelled)
 
             connectionLive.set(true)
+            portForwardSession.markEstablished()
             onConnected()
             watchSession(workspace, client, portForwardSession, handleRestarts = registerRestartWatcher)
             client
