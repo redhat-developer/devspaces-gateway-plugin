@@ -17,6 +17,7 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
+import java.time.OffsetDateTime
 
 /**
  * Queries the Kubernetes API for the pods of a DevWorkspace.
@@ -25,6 +26,10 @@ class DevWorkspacePods(private val client: ApiClient) {
 
     companion object {
         const val WORKSPACE_LABEL_KEY = "controller.devfile.io/devworkspace_name"
+
+        private const val POD_PHASE_RUNNING = "Running"
+        private const val POD_READY_CONDITION = "Ready"
+        private const val CONDITION_STATUS_TRUE = "True"
     }
 
     /**
@@ -46,7 +51,7 @@ class DevWorkspacePods(private val client: ApiClient) {
         val namespace = pod.metadata?.namespace ?: return false
         return try {
             val current = CoreV1Api(client).readNamespacedPod(name, namespace).execute()
-            current.status?.phase == "Running" && current.metadata?.deletionTimestamp == null
+            current.status?.phase == POD_PHASE_RUNNING && current.metadata?.deletionTimestamp == null
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             false
@@ -54,19 +59,36 @@ class DevWorkspacePods(private val client: ApiClient) {
     }
 
     /**
-     * Returns the first pod matching the given label selector.
+     * Returns the current usable pod matching the given label selector.
+     *
+     * A pod roll leaves several pods of the same DevWorkspace behind for a while: the old pod is
+     * terminating and the new one is starting. Picking the first list item can therefore pin every
+     * later operation to the dying pod, which never serves again. Only a pod that is running, has
+     * passed its readiness probe, and is not terminating can serve; among those the newest one is
+     * the one the DevWorkspace controller is currently using.
+     *
+     * A pod without a creation timestamp is treated as the oldest, so it never shadows a pod with
+     * a known timestamp.
      *
      * @param namespace the namespace to query.
      * @param labelSelector the Kubernetes label selector, for example
      * `controller.devfile.io/devworkspace_name=my-workspace`.
-     * @return the first matching pod, or `null` if no pod matches.
+     * @return the newest running and ready pod, or `null` if no pod qualifies.
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    fun findFirst(namespace: String, labelSelector: String): V1Pod? {
-        val pods = list(namespace, labelSelector)
-        return pods.items.firstOrNull()
+    fun findFirstRunning(namespace: String, labelSelector: String): V1Pod? {
+        return list(namespace, labelSelector).items
+            .filter(::isRunningAndReady)
+            .maxByOrNull { it.metadata?.creationTimestamp ?: OffsetDateTime.MIN }
     }
+
+    private fun isRunningAndReady(pod: V1Pod): Boolean =
+        pod.metadata?.deletionTimestamp == null &&
+            pod.status?.phase == POD_PHASE_RUNNING &&
+            pod.status?.conditions.orEmpty().any { condition ->
+                condition.type == POD_READY_CONDITION && condition.status == CONDITION_STATUS_TRUE
+            }
 
     /**
      * Lists the pods matching the given label selector.

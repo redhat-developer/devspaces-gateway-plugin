@@ -153,12 +153,23 @@ class RemoteIDEServer(
         ).waitFor(isReadyState, timeout, checkCancelled)
     }
 
+    /**
+     * Resolves the pod that currently serves the workspace.
+     *
+     * Deliberately selects a running, ready pod instead of the first list item: during a pod roll
+     * the first item can be the terminating pod, which would pin every status exec and
+     * port-forward to a pod that no longer serves. While the pod is running but not yet ready, the
+     * constructor throws; [RemoteIDEServerReadiness] and the caller's retry loop re-resolve the pod
+     * on the next poll.
+     *
+     * @throws IOException if no pod of the workspace is running and ready.
+     */
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
         val selector = "controller.devfile.io/devworkspace_name=${workspace.name}"
 
         return DevWorkspacePods(devSpacesContext.client)
-            .findFirst(
+            .findFirstRunning(
                 workspace.namespace,
                 selector
             ) ?: throw IOException(
