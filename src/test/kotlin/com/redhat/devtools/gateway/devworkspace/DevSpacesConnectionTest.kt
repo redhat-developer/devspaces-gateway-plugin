@@ -21,6 +21,7 @@ import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import com.redhat.devtools.gateway.openshift.PortForwardSession
 import com.redhat.devtools.gateway.openshift.PortForwarder
+import io.kubernetes.client.openapi.models.V1Pod
 import io.mockk.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,6 +37,18 @@ import org.junit.jupiter.api.assertThrows
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** A forwarder that yields [session] and reports every probe as usable. */
+private fun fixedPortForwarder(session: PortForwardSession): PortForwarder =
+    object : PortForwarder {
+        override fun forward(
+            pod: V1Pod,
+            remotePort: Int,
+            onRemoteEnd: () -> Unit
+        ): PortForwardSession = session
+
+        override suspend fun probe(pod: V1Pod, remotePort: Int): Boolean = true
+    }
 
 class DevSpacesConnectionTest {
 
@@ -191,7 +204,7 @@ class DevSpacesConnectionTest {
         val connectionWithForward = DevSpacesConnection(
             devSpacesContext,
             ClientWindowFocus(),
-            PortForwarder { _, _, _ -> session }
+            fixedPortForwarder(session)
         )
 
         connectionWithForward.onThinClientClosed(
@@ -223,7 +236,7 @@ class DevSpacesConnectionTest {
         val connectionWithForward = DevSpacesConnection(
             devSpacesContext,
             ClientWindowFocus(),
-            PortForwarder { _, _, _ -> session }
+            fixedPortForwarder(session)
         )
         every { anyConstructed<DevWorkspaces>().get(any<String>(), any<String>()) } returns
             mockk(relaxed = true) {

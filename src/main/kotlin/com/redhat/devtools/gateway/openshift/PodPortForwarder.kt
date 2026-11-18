@@ -16,13 +16,17 @@ import com.redhat.devtools.gateway.util.isCancellationException
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.Closeable
 import java.io.IOException
 import java.io.PushbackInputStream
@@ -101,12 +105,12 @@ internal class PortForwardSession(
 }
 
 /**
- * Opens a loopback port forward to a port on a pod.
+ * Opens port forwards to a pod.
  *
- * The seam exists so connection lifecycle code can be exercised without a cluster:
- * production wires [PodPortForwarder], tests supply a fake session.
+ * The seam exists so connection lifecycle and recovery code can be exercised without a cluster:
+ * production wires [PodPortForwarder], tests supply a fake.
  */
-internal fun interface PortForwarder {
+internal interface PortForwarder {
     /**
      * Starts a forward to [remotePort] on a free loopback port the forwarder picks and binds
      * itself, so port allocation cannot race between "find a free port" and "listen on it".
@@ -118,6 +122,15 @@ internal fun interface PortForwarder {
      */
     @Throws(IOException::class)
     fun forward(pod: V1Pod, remotePort: Int, onRemoteEnd: () -> Unit): PortForwardSession
+
+    /**
+     * Answers "can a port forward to [remotePort] on [pod] be established right now?".
+     *
+     * Opens a real forward and closes it at once: no local listener, no client socket. It proves
+     * the whole path (auth, API server, pod, listener), which a pod liveness query cannot. Bounded:
+     * a hanging open counts as `false`, because a hanging API server cannot serve the Guest either.
+     */
+    suspend fun probe(pod: V1Pod, remotePort: Int): Boolean
 }
 
 /**
@@ -143,8 +156,14 @@ private class ForwardState(
  * The listener lifecycle lives here; one attempt is a [ForwardAttempt] and whether a failed
  * attempt may be retried is decided by [ForwardRetryPolicy].
  */
+@Suppress("TooManyFunctions") // the forwarder seam plus its socket plumbing form one cohesive unit
 internal class PodPortForwarder(
     client: ApiClient,
+    /**
+     * Upper bound of [probe]; a hanging open counts as a failed probe.
+     * Overridable so tests can exercise the bound with a short delay.
+     */
+    private val probeTimeoutMs: Long = PROBE_TIMEOUT_MS,
     /**
      * Returns pod liveness state to decide whether a failed forward may be retried.
      * Overridable in tests because [PodLiveness] is module-internal.
@@ -155,6 +174,9 @@ internal class PodPortForwarder(
     companion object {
         private const val CLIENT_GONE_PROBE_TIMEOUT_MS = 100
         private const val LISTEN_BACKLOG = 50
+
+        /** OkHttp's default 10s is too slow to poll with; see the plan's probe timeout constant. */
+        const val PROBE_TIMEOUT_MS: Long = 3_000
     }
 
     private val logger = logger<PodPortForwarder>()
@@ -177,6 +199,26 @@ internal class PodPortForwarder(
             closeQuietly(serverSocket)
             scope.cancel()
             closeClientSockets(state)
+        }
+    }
+
+    /**
+     * Opens a real forward to [remotePort] on [pod] and closes it at once, bounded to
+     * [probeTimeoutMs]. No listener and no client socket: the caller only learns whether the path
+     * is usable right now.
+     *
+     * The open runs in a scope that is not a child of the caller (the [PodLivenessProbe.query]
+     * pattern), so the bound can return `false` without joining the blocking
+     * `PortForward.forward` call, which may keep running in the background. A timeout counts as
+     * `false`: a hanging API server cannot serve the Guest either.
+     */
+    override suspend fun probe(pod: V1Pod, remotePort: Int): Boolean {
+        val scope = CoroutineScope(Dispatchers.IO + Job())
+        val open = scope.async { forwardAttempt.tryOpen(pod, remotePort) }
+        return try {
+            withTimeoutOrNull(probeTimeoutMs) { open.await() } ?: false
+        } finally {
+            scope.cancel()
         }
     }
 

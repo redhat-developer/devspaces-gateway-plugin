@@ -68,7 +68,6 @@ class DevSpacesConnection internal constructor(
 
     companion object {
         private const val CONNECT_POLL: Long = 200 // millis
-        private const val REMOTE_IDE_PORT = 5990
     }
 
     /** Ensures [tearDownConnection] runs at most once for this connect attempt. */
@@ -111,19 +110,19 @@ class DevSpacesConnection internal constructor(
 
             // the forwarder outlives the client handle creation: resolve the handle lazily
             val portForwardSession = portForwarder
-                .forward(remoteIdeServer.pod, REMOTE_IDE_PORT) {
+                .forward(remoteIdeServer.pod, ThinClientJoinLink.REMOTE_IDE_PORT) {
                     client?.let(clientWindowFocus::requestFocus)
                 }
 
             forwarder = portForwardSession
 
-            val localJoinLink = joinLink.replace(":$REMOTE_IDE_PORT", ":${portForwardSession.localPort}")
+            val localJoinLink = ThinClientJoinLink.toLocal(URI(joinLink), portForwardSession.localPort)
             val connectFailed = AtomicBoolean(false)
 
             checkCancelled?.invoke()
-            clientMirror = mirrorClient(URI(localJoinLink), progress, checkCancelled)
+            clientMirror = mirrorClient(localJoinLink, progress, checkCancelled)
             client = startClient(
-                URI(localJoinLink), workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
+                localJoinLink, workspace, onConnected, onConnectionEnded, onDevWorkspaceStopped,
                 remoteIdeServer, forwarder, connectFailed, connectionLive
             )
 

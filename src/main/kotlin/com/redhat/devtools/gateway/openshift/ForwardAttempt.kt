@@ -98,10 +98,37 @@ internal class ForwardAttempt(private val client: ApiClient) {
     }
 
     private fun openForward(pod: V1Pod, ports: PortMapping): PortForward.PortForwardResult {
-        val opened = PortForward(client).forward(pod, listOf(ports.remotePort))
+        val opened = openForwardTo(pod, ports.remotePort)
         logger.info("forward successful: ${ports.localPort} -> ${ports.remotePort}...")
         return opened
     }
+
+    /**
+     * Opens a forward without copying anything and closes it at once: answers "is the path usable
+     * right now?" without a client socket or listener. The caller bounds the call; this method just
+     * classifies the open.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure to open the tunnel is a failed probe
+    suspend fun tryOpen(pod: V1Pod, remotePort: Int): Boolean {
+        var forwardResult: PortForward.PortForwardResult? = null
+        return try {
+            forwardResult = openForwardTo(pod, remotePort)
+            logger.info("Port forward probe succeeded: pod=${pod.metadata?.name}, port=$remotePort")
+            true
+        } catch (e: Exception) {
+            if (e.isCancellationException()) throw e
+            logger.info(
+                "Port forward probe failed: pod=${pod.metadata?.name}, port=$remotePort, " +
+                    "cause=${e.javaClass.simpleName}: ${e.message}"
+            )
+            false
+        } finally {
+            closeStreams(remotePort, forwardResult)
+        }
+    }
+
+    private fun openForwardTo(pod: V1Pod, remotePort: Int): PortForward.PortForwardResult =
+        PortForward(client).forward(pod, listOf(remotePort))
 
     private suspend fun copyStreams(
         clientSocket: Socket,

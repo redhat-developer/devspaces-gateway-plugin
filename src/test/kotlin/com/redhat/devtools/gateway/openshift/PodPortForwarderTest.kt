@@ -61,6 +61,14 @@ class PodPortForwarderTest {
         private const val STEADY_STATE_RETRY_TIMEOUT_MS = 25_000L
 
         private const val HANDSHAKE_TIMEOUT_MS = 5_000L
+
+        /** Probe bound of the hang test: far below the production 3s to keep the test fast. */
+        private const val PROBE_BOUND_MS = 100L
+
+        /** An open that outlives [PROBE_BOUND_MS]. */
+        private const val HUNG_OPEN_MS = 500L
+
+        private const val NANOS_PER_MILLI = 1_000_000L
     }
 
     private val serverData = "from server"
@@ -446,6 +454,61 @@ class PodPortForwarderTest {
         // then - a normal disconnect costs no Kubernetes API call
         assertThat(livenessCalls.get()).isZero()
         closeable.close()
+    }
+
+    @Test
+    fun `#probe succeeds when the forward opens and the streams close cleanly`() = runBlocking {
+        // given
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        val podIn = mockk<InputStream>(relaxed = true)
+        val podOut = mockk<OutputStream>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns podIn
+        every { portForwardResult.getOutboundStream(remotePort) } returns podOut
+
+        // when
+        val opened = PodPortForwarder(client).probe(pod, remotePort)
+
+        // then - the forward is opened and closed at once: no listener, no client socket
+        assertThat(opened).isTrue()
+        verify { podIn.close() }
+        verify { podOut.close() }
+    }
+
+    @Test
+    fun `#probe fails when the forward cannot be opened`() = runBlocking {
+        // given
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } throws IOException("connection reset")
+
+        // when / then
+        assertThat(PodPortForwarder(client).probe(pod, remotePort)).isFalse()
+    }
+
+    @Test
+    fun `#probe fails when the open hangs past the bound`() = runBlocking {
+        // given - an API server that does not answer within the (test-shortened) bound
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } answers {
+            Thread.sleep(HUNG_OPEN_MS)
+            mockk<PortForward.PortForwardResult>(relaxed = true)
+        }
+        val forwarder = PodPortForwarder(client, probeTimeoutMs = PROBE_BOUND_MS)
+
+        // when
+        val startedAtNanos = System.nanoTime()
+        val opened = forwarder.probe(pod, remotePort)
+        val elapsedMs = (System.nanoTime() - startedAtNanos) / NANOS_PER_MILLI
+
+        // then - a hanging open counts as a failed probe, and the probe does not hang with it
+        assertThat(opened).isFalse()
+        assertThat(elapsedMs).isLessThan(HUNG_OPEN_MS)
+        // let the abandoned open finish so this test leaves no thread inside the mock
+        delay(HUNG_OPEN_MS.milliseconds)
     }
 
     @Test
