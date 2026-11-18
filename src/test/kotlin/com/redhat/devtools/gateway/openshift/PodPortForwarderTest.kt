@@ -68,6 +68,9 @@ class PodPortForwarderTest {
         /** An open that outlives [PROBE_BOUND_MS]. */
         private const val HUNG_OPEN_MS = 500L
 
+        /** Keeps a dialed connection safely past the fast-fail window, so it classifies as long-lived. */
+        private const val LONG_LIVED_MARGIN_MS = 200L
+
         private const val NANOS_PER_MILLI = 1_000_000L
     }
 
@@ -512,6 +515,131 @@ class PodPortForwarderTest {
     }
 
     @Test
+    fun `#forward reports an active forward while a connection is copied`() {
+        // given - a pod stream that never ends: only closing the session ends the connection
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val session = PodPortForwarder(client).forward(pod, remotePort)
+
+        // when - the Guest dialed and its connection is being copied
+        assertThat(session.hasActiveForward).isFalse()
+        val socket = Socket("127.0.0.1", session.localPort)
+        try {
+            assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+        } finally {
+            session.close()
+            socket.close()
+        }
+
+        // then - the connection is over and no longer counts as active
+        assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { !session.hasActiveForward }).isTrue()
+    }
+
+    @Test
+    fun `#forward classifies a dial that ended fast as fast-failed`() {
+        // given - the pod ends the connection well within the fast-fail window
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every { portForwardResult.getInputStream(remotePort) } returns eofAfter(FAST_FAIL_DIAL_MS / 20)
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val session = PodPortForwarder(client).forward(pod, remotePort)
+
+        try {
+            // when
+            Socket("127.0.0.1", session.localPort).use {
+                assertThat(
+                    awaitTrue(HANDSHAKE_TIMEOUT_MS) {
+                        session.lastFastFailedDialNanos != null
+                    }
+                ).isTrue()
+            }
+
+            // then
+            assertThat(session.fastFailedDials).isEqualTo(1)
+            assertThat(session.lastLongLivedDialNanos).isNull()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward classifies a dial that outlived the fast-fail window as long-lived`() {
+        // given - the pod holds the connection past FAST_FAIL_DIAL_MS, like a real RD session
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } returns portForwardResult
+        every {
+            portForwardResult.getInputStream(remotePort)
+        } returns eofAfter(FAST_FAIL_DIAL_MS + LONG_LIVED_MARGIN_MS)
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val session = PodPortForwarder(client).forward(pod, remotePort)
+
+        try {
+            // when
+            Socket("127.0.0.1", session.localPort).use {
+                assertThat(
+                    awaitTrue(HANDSHAKE_TIMEOUT_MS + FAST_FAIL_DIAL_MS) {
+                        session.lastLongLivedDialNanos != null
+                    }
+                ).isTrue()
+            }
+
+            // then - a long-lived dial is not evidence of a stale link
+            assertThat(session.fastFailedDials).isZero()
+            assertThat(session.lastFastFailedDialNanos).isNull()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward does not count a connection that never handshook`() {
+        // given - the first connection fails its handshake while the pod is gone (terminal attempt),
+        // the second one handshakes and stays connected
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        var podAlive = false
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } answers {
+            if (!podAlive) throw IOException("connection reset")
+            portForwardResult
+        }
+        val forwarder = PodPortForwarder(client) {
+            if (podAlive) PodLiveness.RUNNING else PodLiveness.GONE
+        }
+        val session = forwarder.forward(pod, remotePort)
+
+        try {
+            runBlocking { delay(100.milliseconds) }
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                socket.soTimeout = 2000
+                assertThat(socket.inputStream.read()).isEqualTo(-1)
+            }
+
+            // when - the Guest re-dials while the pod serves again
+            podAlive = true
+            val socket = Socket("127.0.0.1", session.localPort)
+            try {
+                // then - the count was never decremented by the connection that never handshook
+                assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+            } finally {
+                socket.close()
+            }
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `#check returns GONE when the pod is not found`() = runBlocking {
         // given
         mockkConstructor(CoreV1Api::class)
@@ -656,6 +784,14 @@ class PodPortForwarderTest {
     private fun brokenTunnelStream(): OutputStream = object : OutputStream() {
         override fun write(b: Int) {
             throw IOException("broken pipe")
+        }
+    }
+
+    /** A pod stream that reports EOF after [delayMs]: a dialed connection that ends by itself. */
+    private fun eofAfter(delayMs: Long): InputStream = object : InputStream() {
+        override fun read(): Int {
+            Thread.sleep(delayMs)
+            return -1
         }
     }
 }

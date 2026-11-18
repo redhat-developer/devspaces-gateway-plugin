@@ -36,8 +36,21 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/**
+ * Upper bound of a *fast-failed dial*: a connection that handshook and then ended within this
+ * window.
+ *
+ * The recovery watcher treats only a run of fast-failed dials as evidence that the Guest's link is
+ * stale, because an RD session may legitimately open short-lived connections while it is being
+ * established. 2 s is a guess: the live spike (plan §8.1) must record the Guest's real dial
+ * pattern before this value is fixed.
+ */
+internal const val FAST_FAIL_DIAL_MS: Long = 2_000
 
 /**
  * Phase state of one forward session, shared by the session handle ([PortForwardSession]) and the
@@ -45,31 +58,108 @@ private const val NANOS_PER_MILLI = 1_000_000L
  *
  * The phase is carried by the session, not by the policy: the same [ForwardRetryPolicy] must fail
  * fast while the wizard waits for the Guest (connect-time) and keep retrying once the Guest is up.
- * [lastSuccessfulHandshakeNanos] is recorded for the recovery watcher, which must never prod a
- * Guest that is establishing a connection.
+ * The dial outcomes ([lastSuccessfulHandshakeNanos], [lastFastFailedDialNanos],
+ * [lastLongLivedDialNanos], [fastFailedDials]) are recorded for the recovery watcher: it must never
+ * prod a Guest that is establishing a connection, and only a run of fast-failed dials makes a link
+ * stale.
  */
 internal class SessionPhase {
     private val established = AtomicBoolean(false)
+    private val activeForwards = AtomicInteger(0)
+    private val fastFailedDialCount = AtomicLong(0)
 
     @Volatile
     private var lastHandshakeNanos: Long? = null
+
+    @Volatile
+    private var lastFastFailedNanos: Long? = null
+
+    @Volatile
+    private var lastLongLivedNanos: Long? = null
 
     /** Whether the Guest came up for this session; false until [markEstablished]. */
     val isEstablished: Boolean
         get() = established.get()
 
+    /** Whether at least one connection whose handshake succeeded is still being copied. */
+    val hasActiveForward: Boolean
+        get() = activeForwards.get() > 0
+
     /** [System.nanoTime] of the last successful handshake, or null when none succeeded yet. */
     val lastSuccessfulHandshakeNanos: Long?
         get() = lastHandshakeNanos
+
+    /** [System.nanoTime] when the last fast-failed dial ended; see [FAST_FAIL_DIAL_MS]. */
+    val lastFastFailedDialNanos: Long?
+        get() = lastFastFailedNanos
+
+    /** [System.nanoTime] when the last long-lived dial ended; see [FAST_FAIL_DIAL_MS]. */
+    val lastLongLivedDialNanos: Long?
+        get() = lastLongLivedNanos
+
+    /**
+     * Monotone count of fast-failed dials since the forward started. The watcher compares it with
+     * the count it saw at its last prod: the timestamp alone cannot tell several dials apart when
+     * more than one ends between two samples.
+     */
+    val fastFailedDials: Long
+        get() = fastFailedDialCount.get()
 
     /** Idempotent: the phase only ever moves from connect-time to steady-state. */
     fun markEstablished() {
         established.set(true)
     }
 
-    fun recordSuccessfulHandshake() {
-        lastHandshakeNanos = System.nanoTime()
+    /** Records *when* the handshake succeeded: the caller keeps the same value per connection. */
+    fun recordSuccessfulHandshake(atNanos: Long) {
+        lastHandshakeNanos = atNanos
     }
+
+    /** A connection's handshake succeeded, so it is being copied now. */
+    fun recordActiveForward() {
+        activeForwards.incrementAndGet()
+    }
+
+    /**
+     * A connection ended. [handshakeNanos] is the handshake of *this* connection: `null` when it
+     * never handshook, in which case it never counted as an active forward and is not classified.
+     */
+    fun recordEndedForward(handshakeNanos: Long?) {
+        if (handshakeNanos == null) {
+            return
+        }
+        activeForwards.decrementAndGet()
+        val endNanos = System.nanoTime()
+        if (endNanos - handshakeNanos <= FAST_FAIL_DIAL_MS * NANOS_PER_MILLI) {
+            fastFailedDialCount.incrementAndGet()
+            lastFastFailedNanos = endNanos
+        } else {
+            lastLongLivedNanos = endNanos
+        }
+    }
+}
+
+/**
+ * The Guest's dial outcomes on one forward session, as the recovery watcher observes them.
+ *
+ * Narrower than [PortForwardSession]: the watcher only needs to know whether a connection is
+ * currently bridged and how the dials since its last prod ended, never to control the forward.
+ */
+internal interface ForwardDials {
+    /** Whether at least one connection whose handshake succeeded is still being copied. */
+    val hasActiveForward: Boolean
+
+    /** [System.nanoTime] of the last successful handshake, or null when none succeeded yet. */
+    val lastSuccessfulHandshakeNanos: Long?
+
+    /** [System.nanoTime] when the last fast-failed dial ended, or null when none ended fast yet. */
+    val lastFastFailedDialNanos: Long?
+
+    /** [System.nanoTime] when the last long-lived dial ended, or null when none lasted long. */
+    val lastLongLivedDialNanos: Long?
+
+    /** Monotone count of fast-failed dials; the watcher compares it across a prod. */
+    val fastFailedDials: Long
 }
 
 /**
@@ -89,14 +179,26 @@ internal class PortForwardSession(
      */
     private val phase: SessionPhase = SessionPhase(),
     private val stopForward: () -> Unit
-) : Closeable {
+) : ForwardDials, Closeable {
     /** Whether the Guest is up for this session; see [SessionPhase.isEstablished]. */
     val isEstablished: Boolean
         get() = phase.isEstablished
 
     /** [System.nanoTime] of the last successful handshake; see [SessionPhase]. */
-    val lastSuccessfulHandshakeNanos: Long?
+    override val lastSuccessfulHandshakeNanos: Long?
         get() = phase.lastSuccessfulHandshakeNanos
+
+    override val hasActiveForward: Boolean
+        get() = phase.hasActiveForward
+
+    override val lastFastFailedDialNanos: Long?
+        get() = phase.lastFastFailedDialNanos
+
+    override val lastLongLivedDialNanos: Long?
+        get() = phase.lastLongLivedDialNanos
+
+    override val fastFailedDials: Long
+        get() = phase.fastFailedDials
 
     /** Switches retries to the steady-state policy; call once the Guest is up. Idempotent. */
     fun markEstablished() = phase.markEstablished()
@@ -147,6 +249,16 @@ private class ForwardState(
     val ports = PortMapping(localPort, remotePort)
     val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
     val phase = SessionPhase()
+}
+
+/**
+ * Dial state of one accepted connection.
+ *
+ * At most one handshake can succeed for a connection: a successful handshake moves the attempt into
+ * copying, which closes the connection when it returns, so the retry loop starts no further attempt.
+ */
+private class DialState {
+    var handshakeNanos: Long? = null
 }
 
 /**
@@ -275,8 +387,9 @@ internal class PodPortForwarder(
 
     private suspend fun CoroutineScope.handleConnection(clientSocket: Socket, state: ForwardState) {
         val acceptedAtNanos = System.nanoTime()
+        val dial = DialState()
         try {
-            forwardWithRetries(clientSocket, state, acceptedAtNanos)
+            forwardWithRetries(clientSocket, state, acceptedAtNanos, dial)
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             logger.warn(
@@ -284,6 +397,9 @@ internal class PodPortForwarder(
                     "using port ${state.localPort} -> ${state.remotePort}",
                 e)
         } finally {
+            // this connection is over, whether it was copied, failed or was cancelled: a connection
+            // that never handshook passes null and must not decrement the active-forward counter
+            state.phase.recordEndedForward(dial.handshakeNanos)
             state.clientSockets.remove(clientSocket)
             closeQuietly(clientSocket)
         }
@@ -292,7 +408,8 @@ internal class PodPortForwarder(
     private suspend fun CoroutineScope.forwardWithRetries(
         clientSocket: Socket,
         state: ForwardState,
-        acceptedAtNanos: Long
+        acceptedAtNanos: Long,
+        dial: DialState
     ) {
         // wraps the client input so the client-gone probe can push back the byte it has to read (see isClientGone)
         val clientIn = PushbackInputStream(clientSocket.getInputStream(), 1)
@@ -304,7 +421,7 @@ internal class PodPortForwarder(
         while (isActive && keepRetrying) {
             logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
             val result = forwardAttempt.attempt(state.pod, state.ports, clientSocket, clientIn) {
-                state.phase.recordSuccessfulHandshake()
+                onHandshakeSucceeded(state.phase, dial)
             }
             keepRetrying = when (result) {
                 // the copy already closed the local socket: any outcome is terminal
@@ -338,6 +455,21 @@ internal class PodPortForwarder(
             }
             attempt++
         }
+    }
+
+    /**
+     * Records a successful handshake with its own timestamp: the session keeps the latest one for
+     * the recovery watcher, while [dial] keeps *this* connection's, so the fast-fail/long-lived
+     * classification when the connection ends uses this connection's lifetime only.
+     */
+    private fun onHandshakeSucceeded(phase: SessionPhase, dial: DialState) {
+        if (dial.handshakeNanos != null) {
+            return // already counted: one handshake per accepted connection
+        }
+        val handshakeNanos = System.nanoTime()
+        dial.handshakeNanos = handshakeNanos
+        phase.recordSuccessfulHandshake(handshakeNanos)
+        phase.recordActiveForward()
     }
 
     /**

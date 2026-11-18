@@ -23,6 +23,7 @@ import com.redhat.devtools.gateway.devworkspace.DevWorkspaceSessionWatch
 import com.redhat.devtools.gateway.devworkspace.DevWorkspaces
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
 import com.redhat.devtools.gateway.download.DevSpacesClientMirror
+import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.openshift.PodPortForwarder
 import com.redhat.devtools.gateway.openshift.PortForwardSession
 import com.redhat.devtools.gateway.openshift.PortForwarder
@@ -32,7 +33,9 @@ import com.redhat.devtools.gateway.util.ProgressCountdown
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
+import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.*
+import java.io.IOException
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -55,6 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * restarts it, and a stop (Dashboard or Gateway) closes the port forward at once so the Guest
  * reports the loss without waiting for the pod to terminate.
  */
+@Suppress("TooManyFunctions") // the connection lifecycle is one cohesive operation
 class DevSpacesConnection internal constructor(
     private val devSpacesContext: DevSpacesContext,
     private val clientWindowFocus: ClientWindowFocus,
@@ -73,6 +77,18 @@ class DevSpacesConnection internal constructor(
     /** Ensures [tearDownConnection] runs at most once for this connect attempt. */
     private val tearDownStarted = AtomicBoolean(false)
 
+    /**
+     * Watches the Guest's re-dial while the connection is lost. Set once the session is live and
+     * cleared when recovery ends; [tearDownConnection] reads its state to withhold the workspace
+     * auto-stop (§7.9) and [startRecovery] starts it from the forwarder's remote-end signal.
+     */
+    @Volatile
+    private var recoveryWatcher: ThinClientRecoveryWatcher? = null
+
+    /** Owns the recovery loop, so cancelling it ends recovery with the client session. */
+    @Volatile
+    private var recoveryScope: CoroutineScope? = null
+
     @Throws(Exception::class)
     @Suppress("UnstableApiUsage", "LongParameterList") // this is the connection API surface
     suspend fun connect(
@@ -87,6 +103,7 @@ class DevSpacesConnection internal constructor(
     ): ThinClientHandle {
         val workspace = workspace ?: devSpacesContext.devWorkspace
         tearDownStarted.set(false)
+        stopRecovery()
         clientWindowFocus.resetThrottle()
         devSpacesContext.addWorkspace(workspace)
 
@@ -111,7 +128,7 @@ class DevSpacesConnection internal constructor(
             // the forwarder outlives the client handle creation: resolve the handle lazily
             val portForwardSession = portForwarder
                 .forward(remoteIdeServer.pod, ThinClientJoinLink.REMOTE_IDE_PORT) {
-                    client?.let(clientWindowFocus::requestFocus)
+                    onRemoteEnd(client)
                 }
 
             forwarder = portForwardSession
@@ -133,6 +150,7 @@ class DevSpacesConnection internal constructor(
             portForwardSession.markEstablished()
             onConnected()
             watchSession(workspace, client, portForwardSession, handleRestarts = registerRestartWatcher)
+            prepareRecovery(workspace, client, portForwardSession, localJoinLink)
             client
         } catch (e: Exception) {
             if (e !is ThinClientLaunchException || connectionLive.get()) {
@@ -206,6 +224,8 @@ class DevSpacesConnection internal constructor(
                 workspaces.removeRestartRequest(workspace.namespace, workspace.name)
             },
             onStopped = {
+                // the workspace is going down: nothing to recover into
+                stopRecovery()
                 // close sockets -> Guest EOF, immediate status loss
                 // close listener -> pod pinned, re-dial would hit stopped pod
                 forwarder.close()
@@ -218,7 +238,165 @@ class DevSpacesConnection internal constructor(
         thinClient.lifetime.onTermination {
             sessionWatch.stop()
             sessionWatchScope.cancel()
+            stopRecovery()
         }
+    }
+
+    /**
+     * Builds the recovery watcher of this session. Nothing starts yet: the Guest may be perfectly
+     * fine. [startRecovery] starts it on the forward's remote-end signal; the client's lifetime and
+     * the teardown stop it.
+     *
+     * Recovery observes the existing Guest only: it resolves the current workspace pod itself and
+     * prods that Guest to re-dial. It never starts a new client and never closes one.
+     */
+    private fun prepareRecovery(
+        workspace: DevWorkspace,
+        thinClient: ThinClientHandle,
+        session: PortForwardSession,
+        localJoinLink: URI
+    ) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        recoveryScope = scope
+        recoveryWatcher = ThinClientRecoveryWatcher(
+            ThinClientRecoveryWatcher.Collaborators(
+                resolvePod = { findRunningPod(workspace) },
+                probe = { pod -> portForwarder.probe(pod, ThinClientJoinLink.REMOTE_IDE_PORT) },
+                cachedLink = localJoinLink,
+                refreshLink = refreshJoinLink(workspace, session.localPort),
+                prod = prodJoinLink(thinClient),
+                session = session,
+                isClientPresent = { thinClient.clientPresent },
+                onRecovered = { reportRecovered(thinClient) },
+                onRecoveryFailed = { reportRecoveryFailed(thinClient, workspace) }
+            )
+        )
+        thinClient.lifetime.onTermination {
+            stopRecovery()
+            scope.cancel()
+        }
+    }
+
+    /**
+     * The forward ended: the Guest lost its connection. Surface the loss and prod the Guest to
+     * re-dial. Starting is idempotent, so a session that keeps ending does not spawn a second loop.
+     */
+    private fun onRemoteEnd(client: ThinClientHandle?) {
+        client?.let(clientWindowFocus::requestFocus)
+        startRecovery()
+    }
+
+    private fun startRecovery() {
+        val watcher = recoveryWatcher
+        val scope = recoveryScope
+        // teardown already running: a connection that ends now must not start a recovery
+        if (!tearDownStarted.get() && watcher != null && scope != null) {
+            watcher.start(scope)
+        }
+    }
+
+    /**
+     * Stops recovery and reports whether it was running.
+     *
+     * The running state is read *before* the watcher is stopped, so stopping does not erase it; the
+     * return value carries it to the caller. Teardown uses it to withhold the workspace auto-stop
+     * (§7.9): a Guest closed during recovery must not stop a workspace that may come back once the
+     * outage clears. Only the remote `stop()` is withheld — the rest of the teardown is unchanged.
+     */
+    private fun stopRecovery(): Boolean {
+        val watcher = recoveryWatcher
+        val wasActive = watcher?.isActive == true
+        watcher?.stop()
+        recoveryWatcher = null
+        recoveryScope?.cancel()
+        recoveryScope = null
+        return wasActive
+    }
+
+    /**
+     * Installs the recovery watcher of this session; [prepareRecovery] wires the production one.
+     * Internal so a test can emulate a recovery in progress without a cluster.
+     */
+    internal fun installRecoveryWatcher(watcher: ThinClientRecoveryWatcher?) {
+        recoveryWatcher = watcher
+    }
+
+    /**
+     * The pod that serves [workspace] right now. Runs on the watcher's IO coroutine; a failure is
+     * retried on its next poll.
+     */
+    private fun findRunningPod(workspace: DevWorkspace): V1Pod? =
+        DevWorkspacePods(devSpacesContext.client).findFirstRunning(
+            workspace.namespace,
+            "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=${workspace.name}"
+        )
+
+    /**
+     * Builds a fresh local join link for the *current* pod, or `null` while none can be built yet.
+     *
+     * Constructing [RemoteIDEServer] resolves the pod and its container atomically; its
+     * [IOException] means "no running, ready pod yet", which is not a recovery failure — the watcher
+     * keeps polling. [RemoteIDEServer.getStatus] execs the IDE server status once, bounded by
+     * [RemoteIDEServer.STATUS_EXEC_TIMEOUT], and runs off the EDT.
+     */
+    @Suppress("TooGenericExceptionCaught") // a malformed link or a failed exec only means "poll again"
+    private fun refreshJoinLink(workspace: DevWorkspace, localPort: Int): suspend () -> URI? = {
+        try {
+            val status = RemoteIDEServer(devSpacesContext, workspace).getStatus()
+            status.joinLink
+                ?.takeIf { status.isReady }
+                ?.let { ThinClientJoinLink.toLocal(URI(it), localPort) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            thisLogger().debug("No running, ready pod to build a join link from; retrying.", e)
+            null
+        } catch (e: Exception) {
+            // a malformed link or a failed exec must not end recovery: the next poll retries
+            if (e.isCancellationException()) throw e
+            thisLogger().debug("Could not build a fresh join link; retrying.", e)
+            null
+        }
+    }
+
+    /**
+     * The transparent lever (verified in the Guest): `updateJoinLink(forceReconnect = true)` drops
+     * the RD link and re-dials the given one, keeping the window open. A throwing handle is caught
+     * by the watcher, which then checks whether the client is still present.
+     */
+    @Suppress("UnstableApiUsage")
+    private fun prodJoinLink(thinClient: ThinClientHandle): suspend (URI) -> Unit = { link ->
+        thinClient.updateJoinLink(link, true)
+    }
+
+    private fun reportRecovered(thinClient: ThinClientHandle) {
+        thisLogger().info(
+            "Recovered the connection to the workspace; the JetBrains Client keeps its window."
+        )
+        // the Guest repaints its connection status when its window is brought to the front
+        clientWindowFocus.requestFocus(thinClient)
+    }
+
+    /**
+     * Recovery is definitively over. Reported only if the Guest still exists: a Guest that is gone
+     * was closed by the user or by the platform's own websocket timeout, so there is nobody to tell.
+     * Nothing is relaunched and no client is closed; the workspace stop decision is no longer ours.
+     */
+    private fun reportRecoveryFailed(thinClient: ThinClientHandle, workspace: DevWorkspace) {
+        val workspacePath = "${workspace.namespace}/${workspace.name}"
+        if (!thinClient.clientPresent) {
+            thisLogger().warn(
+                "Could not restore the connection to workspace $workspacePath; " +
+                    "the JetBrains Client is gone, not showing a dialog."
+            )
+            return
+        }
+        thisLogger().warn("Could not restore the connection to workspace $workspacePath.")
+        Dialogs.error(
+            "The connection to workspace '${workspace.name}' could not be restored. " +
+                "Close the client and connect again.",
+            "Connection Error"
+        )
     }
 
     /**
@@ -260,6 +438,9 @@ class DevSpacesConnection internal constructor(
         runCatching { onConnectionEnded() }
 
         CoroutineScope(Dispatchers.IO).launch {
+            // §7.9: the state is read *before* stopping, so the teardown below still knows that a
+            // recovery was running and withholds only the remote stop()
+            val recoveryWasActive = stopRecovery()
             runCatching { client?.close() }
             val workspacePatch = DevWorkspacePatch(
                 workspace.namespace,
@@ -272,6 +453,7 @@ class DevSpacesConnection internal constructor(
             try {
                 val restartInProgress = workspacePatch.hasRestartAnnotation()
                 if (!restartInProgress
+                    && !recoveryWasActive
                     && true == remoteIdeServer?.waitServerTerminated()) {
                     // User closed the IDE and asked to stop the workspace.
                     DevWorkspaces(devSpacesContext.client)
