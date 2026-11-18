@@ -40,7 +40,9 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.time.OffsetDateTime
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Opens a forward that does not observe remote end. */
@@ -48,6 +50,7 @@ import kotlin.time.Duration.Companion.milliseconds
 private fun PortForwarder.forward(pod: V1Pod, remotePort: Int): PortForwardSession =
     forward(pod, remotePort) {}
 
+@Suppress("LargeClass") // one forward, many retry/retarget cases; keeping them together eases discovery
 class PodPortForwarderTest {
 
     companion object {
@@ -56,20 +59,42 @@ class PodPortForwarderTest {
 
         /**
          * Covers the steady-state backoff after the failures above (1s + 2s + 3s + 5s) plus the
-         * 100ms client-gone probes between attempts.
+         * 100ms client-gone probes between attempts - and the full-suite load on top of that
+         * real-time schedule, which alone has pushed this test past its old 25s window.
          */
-        private const val STEADY_STATE_RETRY_TIMEOUT_MS = 25_000L
+        private const val STEADY_STATE_RETRY_TIMEOUT_MS = 60_000L
 
         private const val HANDSHAKE_TIMEOUT_MS = 5_000L
+
+        /**
+         * Scheduler slack added to every observation window. The port-forward dispatcher thread and
+         * the polling test thread can both be stalled for seconds under full-suite load, so a
+         * window sized to the event alone fails on the stall, not on the behaviour under test.
+         */
+        private const val TIMING_SLACK_MS = 10_000L
+
+        /** Window for an event that is expected within milliseconds (a handshake, a dial's end). */
+        private const val EVENT_TIMEOUT_MS = HANDSHAKE_TIMEOUT_MS + TIMING_SLACK_MS
 
         /** Probe bound of the hang test: far below the production 3s to keep the test fast. */
         private const val PROBE_BOUND_MS = 100L
 
-        /** An open that outlives [PROBE_BOUND_MS]. */
-        private const val HUNG_OPEN_MS = 500L
+        /**
+         * Safety cap of the open that outlives [PROBE_BOUND_MS]. The test releases the open itself,
+         * so the hang lasts until then: no scheduling delay can shorten the margin under test.
+         */
+        private const val HUNG_OPEN_CAP_MS = 30_000L
 
         /** Keeps a dialed connection safely past the fast-fail window, so it classifies as long-lived. */
         private const val LONG_LIVED_MARGIN_MS = 200L
+
+        /**
+         * Window for a dial to be classified as long-lived. Larger than the dial itself
+         * ([FAST_FAIL_DIAL_MS] + [LONG_LIVED_MARGIN_MS]) by [TIMING_SLACK_MS]: the dial ends with a
+         * `Thread.sleep` on the dispatcher thread, which load can delay past the dial's own length.
+         */
+        private const val LONG_LIVED_DIAL_TIMEOUT_MS =
+            FAST_FAIL_DIAL_MS + LONG_LIVED_MARGIN_MS + TIMING_SLACK_MS
 
         private const val NANOS_PER_MILLI = 1_000_000L
     }
@@ -133,9 +158,13 @@ class PodPortForwarderTest {
     @Test
     fun `#forward tries several times if connecting fails`() {
         // given
+        val attempts = AtomicInteger()
         every {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } throws IOException("connection reset")
+        } answers {
+            attempts.incrementAndGet()
+            throw IOException("connection reset")
+        }
         val podsRunning = PodPortForwarder(client) { PodLiveness.RUNNING }
 
         // when
@@ -148,17 +177,19 @@ class PodPortForwarderTest {
         // (CONNECT_ATTEMPTS / retry budget) are what stop the retries
         val socket = Socket("127.0.0.1", closeable.localPort)
         try {
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             // attempts land at ~0s, ~1.2s and ~2.4s (1s reconnect delay + 2x100ms client-gone
             // probes between attempts); attempt #3 is the last one CONNECT_ATTEMPTS allows, and
-            // by then the 2s budget is exhausted too. Waiting 5s — past where a 4th attempt
-            // (~3.6s) would land — proves the loop stopped rather than retried forever.
-            runBlocking { delay(5000.milliseconds) }
-            verify(atLeast = 2) { // 2+ retries
-                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-            }
-            verify(atMost = 3) { // neither the attempts cap nor the budget allows a 4th attempt
-                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-            }
+            // by then the 2s budget is exhausted too. Awaiting the series instead of sleeping a
+            // fixed time keeps this independent of scheduler load: a 4th attempt would leave the
+            // socket open and the read below would time out.
+            assertThat(
+                awaitTrue(EVENT_TIMEOUT_MS) {
+                    attempts.get() >= ForwardRetryPolicy.CONNECT_ATTEMPTS
+                }
+            ).isTrue()
+            assertThat(socket.inputStream.read()).isEqualTo(-1)
+            assertThat(attempts.get()).isEqualTo(ForwardRetryPolicy.CONNECT_ATTEMPTS)
         } finally {
             socket.close()
             closeable.close()
@@ -223,7 +254,7 @@ class PodPortForwarderTest {
             assertThat(session.lastSuccessfulHandshakeNanos).isNull()
             Socket("127.0.0.1", session.localPort).use {
                 assertThat(
-                    awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.lastSuccessfulHandshakeNanos != null }
+                    awaitTrue(EVENT_TIMEOUT_MS) { session.lastSuccessfulHandshakeNanos != null }
                 ).isTrue()
             }
         } finally {
@@ -275,7 +306,7 @@ class PodPortForwarderTest {
 
         // then - the local socket is closed instead of staying open waiting for the other direction
         Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         closeable.close()
@@ -311,13 +342,12 @@ class PodPortForwarderTest {
             .forward(pod, remotePort) { remoteEnds.incrementAndGet() }
         runBlocking { delay(100.milliseconds) }
         Socket("127.0.0.1", session.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
-        runBlocking { delay(100.milliseconds) }
 
-        // then
-        assertThat(remoteEnds.get()).isEqualTo(1)
+        // then - the pod-side end is reported, however late the load lets the pump finish
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { remoteEnds.get() == 1 }).isTrue()
         session.close()
     }
 
@@ -366,7 +396,7 @@ class PodPortForwarderTest {
                 socket.outputStream.write("ping".toByteArray())
                 socket.outputStream.flush()
             }
-            runBlocking { delay(300.milliseconds) }
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { remoteEnds.get() == 1 }).isTrue()
         }
 
         // then - only a clean client-side close suppresses the report
@@ -389,13 +419,309 @@ class PodPortForwarderTest {
         // then - the accepted socket is closed by the first, failing attempt:
         // the client sees EOF instead of a connection left hanging
         Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         verify(exactly = 1) {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
         }
         closeable.close()
+    }
+
+    @Test
+    fun `#forward retargets to the pod that replaced a gone pod`() {
+        // given - the pinned pod is gone, the workspace already runs a replacement
+        val replacement = podWith("new-pod", uid = "new-uid")
+        val portForwardResult = silentForwardResult()
+        every {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        } answers {
+            if (firstArg<V1Pod>() === pod) {
+                throw ApiException("Expected HTTP 101 response but was '404 Not Found'")
+            }
+            portForwardResult
+        }
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = { replacement },
+            livenessProvider = { target ->
+                if (target === replacement) PodLiveness.RUNNING else PodLiveness.GONE
+            }
+        )
+
+        // when
+        val session = forwarder.forward(pod, remotePort)
+        try {
+            Socket("127.0.0.1", session.localPort).use {
+                // then - the retry lands on the replacement and the connection is established
+                assertThat(
+                    awaitTrue(EVENT_TIMEOUT_MS) { session.lastSuccessfulHandshakeNanos != null }
+                ).isTrue()
+            }
+            verify(exactly = 1) {
+                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+            }
+            verify(exactly = 1) {
+                anyConstructed<PortForward>().forward(replacement, listOf(remotePort))
+            }
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward stops when the gone pod has no replacement`() {
+        // given - the pod is gone and the workspace has no running pod to move to
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } throws ApiException("Expected HTTP 101 response but was '404 Not Found'")
+        val resolveCalls = AtomicInteger()
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = {
+                resolveCalls.incrementAndGet()
+                null
+            },
+            livenessProvider = { PodLiveness.GONE }
+        )
+
+        // when
+        val session = forwarder.forward(pod, remotePort)
+        try {
+            runBlocking { delay(100.milliseconds) }
+
+            // then - terminal: the accepted socket is closed after the single failing attempt
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
+                assertThat(socket.inputStream.read()).isEqualTo(-1)
+            }
+            verify(exactly = 1) {
+                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+            }
+            assertThat(resolveCalls.get()).isEqualTo(1)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward stops when the resolver still names the pod that just failed`() {
+        // given - the resolver answers "the current pod is the one that just failed"
+        val gonePod = podWith("luke-skywalker", uid = "old-uid")
+        every {
+            anyConstructed<PortForward>().forward(gonePod, listOf(remotePort))
+        } throws ApiException("Expected HTTP 101 response but was '404 Not Found'")
+        val resolveCalls = AtomicInteger()
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = {
+                resolveCalls.incrementAndGet()
+                podWith("luke-skywalker", uid = "old-uid")
+            },
+            livenessProvider = { PodLiveness.GONE }
+        )
+
+        // when
+        val session = forwarder.forward(gonePod, remotePort)
+        try {
+            runBlocking { delay(100.milliseconds) }
+
+            // then - no pointless swap loop: the same pod stays terminal
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
+                assertThat(socket.inputStream.read()).isEqualTo(-1)
+            }
+            verify(exactly = 1) {
+                anyConstructed<PortForward>().forward(gonePod, listOf(remotePort))
+            }
+            assertThat(resolveCalls.get()).isEqualTo(1)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward retargets once for two connections that see the same gone pod`() {
+        // given - two concurrent re-dials, both failing against the dead pod
+        val replacement = podWith("new-pod", uid = "new-uid")
+        val portForwardResult = silentForwardResult()
+        val replacementAttempts = AtomicInteger()
+        every {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        } answers {
+            if (firstArg<V1Pod>() === pod) {
+                throw ApiException("Expected HTTP 101 response but was '404 Not Found'")
+            }
+            replacementAttempts.incrementAndGet()
+            portForwardResult
+        }
+        val resolveCalls = AtomicInteger()
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = {
+                resolveCalls.incrementAndGet()
+                replacement
+            },
+            livenessProvider = { PodLiveness.GONE }
+        )
+        val session = forwarder.forward(pod, remotePort)
+
+        try {
+            val first = Socket("127.0.0.1", session.localPort)
+            val second = Socket("127.0.0.1", session.localPort)
+            first.use {
+                second.use {
+                    // then - both connections end up bridged to the replacement
+                    assertThat(
+                        awaitTrue(EVENT_TIMEOUT_MS) {
+                            session.hasActiveForward && replacementAttempts.get() >= 2
+                        }
+                    ).isTrue()
+                }
+            }
+            // the dead pod is resolved at most once per connection: one swap serves both
+            assertThat(resolveCalls.get()).isBetween(1, 2)
+            assertThat(replacementAttempts.get()).isEqualTo(2)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward starts a fresh attempt series on the replacement pod`() {
+        // given - a gone pod, and a replacement whose handshake always fails
+        val replacement = podWith("new-pod", uid = "new-uid")
+        val replacementAttempts = AtomicInteger()
+        every {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        } answers {
+            if (firstArg<V1Pod>() === pod) {
+                throw ApiException("Expected HTTP 101 response but was '404 Not Found'")
+            }
+            replacementAttempts.incrementAndGet()
+            throw IOException("connection reset")
+        }
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = { replacement },
+            livenessProvider = { target ->
+                if (target === replacement) PodLiveness.RUNNING else PodLiveness.GONE
+            }
+        )
+
+        // when
+        val session = forwarder.forward(pod, remotePort)
+        try {
+            runBlocking { delay(100.milliseconds) }
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
+
+                // then - the connect-time series restarts at the replacement: the dead pod's
+                // failure did not consume one of its attempts. Waiting for the series to have run
+                // (rather than sleeping a fixed time) keeps this independent of scheduler load;
+                // a fourth attempt would keep the socket open and fail the read below.
+                assertThat(
+                    awaitTrue(EVENT_TIMEOUT_MS) {
+                        replacementAttempts.get() >= ForwardRetryPolicy.CONNECT_ATTEMPTS
+                    }
+                ).isTrue()
+                assertThat(socket.inputStream.read()).isEqualTo(-1)
+            }
+            assertThat(replacementAttempts.get()).isEqualTo(ForwardRetryPolicy.CONNECT_ATTEMPTS)
+            verify(exactly = 1) {
+                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+            }
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward stops retargeting once the established outage budget elapsed`() {
+        // given - an established session whose first failure happened long before the retarget
+        val replacement = podWith("new-pod", uid = "new-uid")
+        val replacementAttempts = AtomicInteger()
+        val clockNanos = AtomicLong(0)
+        every {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        } answers {
+            if (firstArg<V1Pod>() === pod) {
+                throw ApiException("Expected HTTP 101 response but was '404 Not Found'")
+            }
+            replacementAttempts.incrementAndGet()
+            // the replacement is reached only after the outage budget already elapsed
+            clockNanos.addAndGet(ForwardRetryPolicy.STEADY_STATE_OUTAGE_BUDGET_MS * NANOS_PER_MILLI)
+            throw IOException("connection reset")
+        }
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = { replacement },
+            nowNanos = { clockNanos.get() },
+            livenessProvider = { target ->
+                if (target === replacement) PodLiveness.RUNNING else PodLiveness.GONE
+            }
+        )
+
+        // when
+        val session = forwarder.forward(pod, remotePort)
+        session.markEstablished()
+        try {
+            runBlocking { delay(100.milliseconds) }
+
+            // then - the budget keeps running across the retarget and wins over the fresh series:
+            // the socket is closed after the first attempt on the replacement
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
+                assertThat(socket.inputStream.read()).isEqualTo(-1)
+            }
+            assertThat(replacementAttempts.get()).isEqualTo(1)
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `#forward keeps retrying a replacement within the established outage budget`() {
+        // given - an established session early in its outage budget
+        val replacement = podWith("new-pod", uid = "new-uid")
+        val replacementAttempts = AtomicInteger()
+        val clockNanos = AtomicLong(0)
+        val portForwardResult = silentForwardResult()
+        every {
+            anyConstructed<PortForward>().forward(any(), listOf(remotePort))
+        } answers {
+            if (firstArg<V1Pod>() === pod) {
+                throw ApiException("Expected HTTP 101 response but was '404 Not Found'")
+            }
+            clockNanos.addAndGet(NANOS_PER_MILLI * 60_000)
+            if (replacementAttempts.incrementAndGet() == 1) {
+                throw IOException("connection reset")
+            }
+            portForwardResult
+        }
+        val forwarder = PodPortForwarder(
+            client,
+            resolvePod = { replacement },
+            nowNanos = { clockNanos.get() },
+            livenessProvider = { target ->
+                if (target === replacement) PodLiveness.RUNNING else PodLiveness.GONE
+            }
+        )
+
+        // when
+        val session = forwarder.forward(pod, remotePort)
+        session.markEstablished()
+        try {
+            Socket("127.0.0.1", session.localPort).use {
+                // then - the retargeted series retries while the budget lasts and succeeds
+                assertThat(
+                    awaitTrue(EVENT_TIMEOUT_MS) { session.lastSuccessfulHandshakeNanos != null }
+                ).isTrue()
+            }
+            assertThat(replacementAttempts.get()).isEqualTo(2)
+        } finally {
+            session.close()
+        }
     }
 
     @Test
@@ -416,10 +742,10 @@ class PodPortForwarderTest {
         // when
         val closeable = podsRunning.forward(pod, remotePort)
         val socket = Socket("127.0.0.1", closeable.localPort)
-        runBlocking { delay(500.milliseconds) }
 
-        // then - the copy failure is terminal: one handshake, no liveness query, socket closed
-        socket.soTimeout = 500
+        // then - the copy failure is terminal: one handshake, no liveness query, socket closed.
+        // The read itself waits for that close (bounded), so no fixed sleep is needed.
+        socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
         val readOutcome = runCatching { socket.inputStream.read() }
         assertThat(readOutcome.exceptionOrNull() is SocketTimeoutException).isFalse()
         assertThat(readOutcome.getOrNull() ?: -1).isEqualTo(-1)
@@ -449,7 +775,7 @@ class PodPortForwarderTest {
         // when
         val closeable = podsRunning.forward(pod, remotePort)
         Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         runBlocking { delay(100.milliseconds) }
@@ -494,11 +820,17 @@ class PodPortForwarderTest {
     @Test
     fun `#probe fails when the open hangs past the bound`() = runBlocking {
         // given - an API server that does not answer within the (test-shortened) bound
+        val releaseOpen = CountDownLatch(1)
+        val openFinished = CountDownLatch(1)
         every {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
         } answers {
-            Thread.sleep(HUNG_OPEN_MS)
-            mockk<PortForward.PortForwardResult>(relaxed = true)
+            releaseOpen.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)
+            try {
+                mockk<PortForward.PortForwardResult>(relaxed = true)
+            } finally {
+                openFinished.countDown()
+            }
         }
         val forwarder = PodPortForwarder(client, probeTimeoutMs = PROBE_BOUND_MS)
 
@@ -507,11 +839,15 @@ class PodPortForwarderTest {
         val opened = forwarder.probe(pod, remotePort)
         val elapsedMs = (System.nanoTime() - startedAtNanos) / NANOS_PER_MILLI
 
-        // then - a hanging open counts as a failed probe, and the probe does not hang with it
+        // then - a hanging open counts as a failed probe, and the probe returns while the open is
+        // still pending: the bound ends it, not the open. Both checks are load-independent.
         assertThat(opened).isFalse()
-        assertThat(elapsedMs).isLessThan(HUNG_OPEN_MS)
+        assertThat(openFinished.count).isEqualTo(1)
+        assertThat(elapsedMs).isLessThan(HUNG_OPEN_CAP_MS)
         // let the abandoned open finish so this test leaves no thread inside the mock
-        delay(HUNG_OPEN_MS.milliseconds)
+        releaseOpen.countDown()
+        assertThat(openFinished.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)).isTrue()
+        delay(100.milliseconds)
     }
 
     @Test
@@ -529,14 +865,14 @@ class PodPortForwarderTest {
         assertThat(session.hasActiveForward).isFalse()
         val socket = Socket("127.0.0.1", session.localPort)
         try {
-            assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
         } finally {
             session.close()
             socket.close()
         }
 
         // then - the connection is over and no longer counts as active
-        assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { !session.hasActiveForward }).isTrue()
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { !session.hasActiveForward }).isTrue()
     }
 
     @Test
@@ -554,7 +890,7 @@ class PodPortForwarderTest {
             // when
             Socket("127.0.0.1", session.localPort).use {
                 assertThat(
-                    awaitTrue(HANDSHAKE_TIMEOUT_MS) {
+                    awaitTrue(EVENT_TIMEOUT_MS) {
                         session.lastFastFailedDialNanos != null
                     }
                 ).isTrue()
@@ -585,7 +921,7 @@ class PodPortForwarderTest {
             // when
             Socket("127.0.0.1", session.localPort).use {
                 assertThat(
-                    awaitTrue(HANDSHAKE_TIMEOUT_MS + FAST_FAIL_DIAL_MS) {
+                    awaitTrue(LONG_LIVED_DIAL_TIMEOUT_MS) {
                         session.lastLongLivedDialNanos != null
                     }
                 ).isTrue()
@@ -621,7 +957,7 @@ class PodPortForwarderTest {
         try {
             runBlocking { delay(100.milliseconds) }
             Socket("127.0.0.1", session.localPort).use { socket ->
-                socket.soTimeout = 2000
+                socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
                 assertThat(socket.inputStream.read()).isEqualTo(-1)
             }
 
@@ -630,7 +966,7 @@ class PodPortForwarderTest {
             val socket = Socket("127.0.0.1", session.localPort)
             try {
                 // then - the count was never decremented by the connection that never handshook
-                assertThat(awaitTrue(HANDSHAKE_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+                assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
             } finally {
                 socket.close()
             }
@@ -739,13 +1075,22 @@ class PodPortForwarderTest {
         return condition()
     }
 
-    private fun podWith(name: String, namespace: String): V1Pod {
+    private fun podWith(name: String, namespace: String? = "test-ns", uid: String? = null): V1Pod {
         return V1Pod().apply {
             metadata = V1ObjectMeta().apply {
                 this.name = name
                 this.namespace = namespace
+                this.uid = uid
             }
         }
+    }
+
+    /** A forward whose pod side stays silent: only closing the session ends the connection. */
+    private fun silentForwardResult(): PortForward.PortForwardResult {
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        return portForwardResult
     }
 
     private fun sendClientData(port: Int, data: String): Int {

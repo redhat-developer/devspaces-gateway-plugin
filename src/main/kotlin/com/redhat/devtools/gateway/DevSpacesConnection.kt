@@ -125,9 +125,15 @@ class DevSpacesConnection internal constructor(
             checkCancelled?.invoke()
             progress.waitingForClientStart()
 
-            // the forwarder outlives the client handle creation: resolve the handle lazily
+            // the forwarder outlives the client handle creation: resolve the handle lazily.
+            // The resolver lets the forward follow a replacement pod: while the DevWorkspace stays
+            // Running, the workspace - not the pod pinned here - is what keeps serving.
             val portForwardSession = portForwarder
-                .forward(remoteIdeServer.pod, ThinClientJoinLink.REMOTE_IDE_PORT) {
+                .forward(
+                    remoteIdeServer.pod,
+                    ThinClientJoinLink.REMOTE_IDE_PORT,
+                    { findRunningPod(workspace) },
+                ) {
                     onRemoteEnd(client)
                 }
 

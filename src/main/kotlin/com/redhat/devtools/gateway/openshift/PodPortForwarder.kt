@@ -168,8 +168,9 @@ internal interface ForwardDials {
  * [localPort] is the loopback port the session listens on, so the forward describes itself and
  * callers do not have to carry the port alongside the session. [close] stops the listener and
  * closes the established connections, so the client reads EOF at once. The listener must not
- * outlive the forward: the pod is pinned when the forward is created, so a re-dial could only
- * reach that same pod.
+ * outlive the session it bridges: closing it is what keeps a re-dial away from a stopped
+ * workspace. The forward itself may retarget to the pod that replaced the one it was opened
+ * against, so a re-dial reaches whichever pod currently serves the workspace.
  */
 internal class PortForwardSession(
     val localPort: Int,
@@ -226,6 +227,27 @@ internal interface PortForwarder {
     fun forward(pod: V1Pod, remotePort: Int, onRemoteEnd: () -> Unit): PortForwardSession
 
     /**
+     * Starts a forward that follows the pod which currently serves the workspace.
+     *
+     * When a handshake fails because [pod] is gone, [resolvePod] may name the pod that replaced it,
+     * and the forward retargets to that pod instead of ending. A resolver that returns `null` or
+     * the pod the failed attempt already used keeps the "pod gone" outcome terminal, so a
+     * forwarder that cannot resolve anything behaves exactly like [forward] with a pinned pod.
+     *
+     * @param resolvePod resolves the workspace's current running and ready pod; it may block on
+     * the API server and is therefore called only from the retry loop, never on the caller's
+     * thread.
+     * @param onRemoteEnd see [forward].
+     */
+    @Throws(IOException::class)
+    fun forward(
+        pod: V1Pod,
+        remotePort: Int,
+        resolvePod: () -> V1Pod?,
+        onRemoteEnd: () -> Unit
+    ): PortForwardSession = forward(pod, remotePort, onRemoteEnd)
+
+    /**
      * Answers "can a port forward to [remotePort] on [pod] be established right now?".
      *
      * Opens a real forward and closes it at once: no local listener, no client socket. It proves
@@ -236,20 +258,79 @@ internal interface PortForwarder {
 }
 
 /**
- * Mutable state of one running forward: the pod and ports it bridges, the local sockets currently
- * bridged to it, the session phase shared with the retry loops, and the notification for a
- * connection the pod side ended.
+ * Mutable state of one running forward: the pod it bridges, the local sockets currently bridged to
+ * it, the session phase shared with the retry loops, and the notification for a connection the pod
+ * side ended.
+ *
+ * The pod is retargetable: when the workspace's pod is replaced while the DevWorkspace stays
+ * Running (eviction, drain, OOM kill), the retry loop swaps in the replacement instead of ending a
+ * session that could recover. Concurrent connections of one session may each see the old pod gone
+ * and resolve a replacement, so the swap is idempotent.
  */
 private class ForwardState(
-    val pod: V1Pod,
+    pod: V1Pod,
+    /** Resolves the pod that currently serves the workspace; see [PortForwarder.forward]. */
+    val resolvePod: () -> V1Pod?,
     val localPort: Int,
     val remotePort: Int,
     val onRemoteEnd: () -> Unit
 ) {
+    /**
+     * Guards [currentPod] for the swap. A plain lock, not a `Mutex`: the critical section is an
+     * in-memory reference swap and never suspends, so it cannot hold up a dispatcher thread, and
+     * the suspend retry loop reads the pod through [pod] outside the lock.
+     */
+    private val podLock = Any()
+
+    private var currentPod: V1Pod = pod
+
     val ports = PortMapping(localPort, remotePort)
     val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
     val phase = SessionPhase()
+
+    /** The pod this forward currently targets. */
+    val pod: V1Pod
+        get() = synchronized(podLock) { currentPod }
+
+    /**
+     * Retargets the forward to [replacement].
+     *
+     * Idempotent: a connection that resolved the pod another connection already swapped in gets
+     * `null` instead of a second swap, so concurrent re-dials never thrash between replacements.
+     *
+     * @return the pod the forward targeted before the swap, or `null` when it already targeted
+     * [replacement].
+     */
+    fun retarget(replacement: V1Pod): V1Pod? = synchronized(podLock) {
+        if (isSamePod(currentPod, replacement)) {
+            return@synchronized null
+        }
+        val previous = currentPod
+        currentPod = replacement
+        previous
+    }
 }
+
+/**
+ * Whether two pod references name the same pod.
+ *
+ * The UID is a pod's identity: a replaced pod keeps the name during a roll, so a name comparison
+ * alone would hide the replacement and keep the forward pinned to a dead pod. The namespace/name
+ * pair is the fallback for a pod without a UID (a synthetic pod in a test).
+ */
+private fun isSamePod(first: V1Pod, second: V1Pod): Boolean {
+    val firstUid = first.metadata?.uid
+    val secondUid = second.metadata?.uid
+    if (firstUid != null && secondUid != null) {
+        return firstUid == secondUid
+    }
+    return first.metadata?.namespace == second.metadata?.namespace &&
+        first.metadata?.name == second.metadata?.name
+}
+
+/** Identifies a pod in log lines: the name alone cannot tell two generations of a pod apart. */
+private fun describePod(pod: V1Pod): String =
+    "name=${pod.metadata?.name}, uid=${pod.metadata?.uid}"
 
 /**
  * Dial state of one accepted connection.
@@ -266,7 +347,9 @@ private class DialState {
  * retrying failed handshakes while the pod is alive and the local client stays connected.
  *
  * The listener lifecycle lives here; one attempt is a [ForwardAttempt] and whether a failed
- * attempt may be retried is decided by [ForwardRetryPolicy].
+ * attempt may be retried is decided by [ForwardRetryPolicy]. A pod that is replaced while the
+ * DevWorkspace stays Running does not end the session: the forward retargets to the pod that
+ * replaced it, so a re-dial reaches whatever pod currently serves the workspace.
  */
 @Suppress("TooManyFunctions") // the forwarder seam plus its socket plumbing form one cohesive unit
 internal class PodPortForwarder(
@@ -276,6 +359,17 @@ internal class PodPortForwarder(
      * Overridable so tests can exercise the bound with a short delay.
      */
     private val probeTimeoutMs: Long = PROBE_TIMEOUT_MS,
+    /**
+     * Resolves the pod that currently serves the workspace, used when the pod a forward was opened
+     * against is gone. Defaults to no resolution, so a forwarder that was not told how to find the
+     * workspace's current pod keeps its pinned pod and "pod gone" stays terminal.
+     */
+    private val resolvePod: () -> V1Pod? = { null },
+    /**
+     * Reads the clock the retry decisions use: the outage budget is measured against it.
+     * Overridable so a test can put the first failure of a series into the past.
+     */
+    private val nowNanos: () -> Long = System::nanoTime,
     /**
      * Returns pod liveness state to decide whether a failed forward may be retried.
      * Overridable in tests because [PodLiveness] is module-internal.
@@ -293,11 +387,25 @@ internal class PodPortForwarder(
 
     private val logger = logger<PodPortForwarder>()
     private val forwardAttempt = ForwardAttempt(client)
-    private val retryPolicy = ForwardRetryPolicy(livenessProvider)
+    private val retryPolicy = ForwardRetryPolicy(nowNanos, livenessProvider)
 
     override fun forward(
         pod: V1Pod,
         remotePort: Int,
+        onRemoteEnd: () -> Unit
+    ): PortForwardSession = openSession(pod, remotePort, resolvePod, onRemoteEnd)
+
+    override fun forward(
+        pod: V1Pod,
+        remotePort: Int,
+        resolvePod: () -> V1Pod?,
+        onRemoteEnd: () -> Unit
+    ): PortForwardSession = openSession(pod, remotePort, resolvePod, onRemoteEnd)
+
+    private fun openSession(
+        pod: V1Pod,
+        remotePort: Int,
+        resolvePod: () -> V1Pod?,
         onRemoteEnd: () -> Unit
     ): PortForwardSession {
         val serverSocket = ServerSocket(0, LISTEN_BACKLOG, InetAddress.getLoopbackAddress())
@@ -305,7 +413,7 @@ internal class PodPortForwarder(
             // dont cancel if child coroutine fails + use dedicated port-forward dispatcher
             SupervisorJob() + PortForwardDispatcher.dispatcher
         )
-        val state = ForwardState(pod, serverSocket.localPort, remotePort, onRemoteEnd)
+        val state = ForwardState(pod, resolvePod, serverSocket.localPort, remotePort, onRemoteEnd)
         scope.acceptConnections(serverSocket, state)
         return PortForwardSession(state.localPort, state.phase) {
             closeQuietly(serverSocket)
@@ -419,8 +527,11 @@ internal class PodPortForwarder(
         // connect-time is capped by the policy; an established session keeps retrying until its
         // outage budget or the client gives up, so the loop itself has no attempt limit
         while (isActive && keepRetrying) {
+            // one read per iteration: a concurrent connection may retarget the forward between the
+            // attempt and the decision, and the decision must judge the pod this attempt used
+            val pod = state.pod
             logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
-            val result = forwardAttempt.attempt(state.pod, state.ports, clientSocket, clientIn) {
+            val result = forwardAttempt.attempt(pod, state.ports, clientSocket, clientIn) {
                 onHandshakeSucceeded(state.phase, dial)
             }
             keepRetrying = when (result) {
@@ -436,25 +547,112 @@ internal class PodPortForwarder(
                 }
 
                 is AttemptResult.HandshakeFailed -> {
-                    firstFailureNanos = firstFailureNanos ?: System.nanoTime()
+                    firstFailureNanos = firstFailureNanos ?: nowNanos()
                     val failure = FailedHandshake(attempt, firstFailureNanos, result.cause)
                     val established = state.phase.isEstablished
-                    val retry = retryPolicy.decide(state.pod, state.ports, established, failure)
-                    if (retry != RetryDecision.RETRY) {
-                        false
-                    } else if (clientLeftDuringRetry(clientSocket, clientIn, attempt, established)) {
-                        logger.info(
-                            "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
-                                "client disconnected; stopping retries"
-                        )
-                        false
-                    } else {
-                        true
+                    val retry = retryPolicy.decide(pod, state.ports, established, failure)
+                    when {
+                        retry == RetryDecision.POD_GONE && retarget(state, pod) -> {
+                            // the replacement restarts the attempt (delay) series: the dead pod's
+                            // failure must not shorten it. In steady state it does NOT restart the
+                            // outage budget, which is the safety cap against a stuck socket and
+                            // keeps running from this connection's first failure across any number
+                            // of retargets - otherwise repeated pod churn would defeat the cap.
+                            // Connect-time resets it too: there the window is attempt-capped and
+                            // the dead pod's failure time must not shorten the replacement's 2s.
+                            attempt = 0
+                            firstFailureNanos = seriesStartAfterRetarget(firstFailureNanos, established)
+                            true
+                        }
+
+                        retry != RetryDecision.RETRY -> false
+
+                        clientLeftDuringRetry(clientSocket, clientIn, attempt, established) -> {
+                            logger.info(
+                                "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
+                                    "client disconnected; stopping retries"
+                            )
+                            false
+                        }
+
+                        else -> true
                     }
                 }
             }
             attempt++
         }
+    }
+
+    /**
+     * The start of the retry series after a retarget.
+     *
+     * Connect-time restarts the series completely: its 2 s window is attempt-capped anyway, and the
+     * dead pod's failure time must not shorten the replacement's window. An established session
+     * keeps its original first failure, so the outage budget - the safety cap against a stuck
+     * socket - keeps running across any number of pod replacements instead of restarting on each.
+     */
+    private fun seriesStartAfterRetarget(firstFailureNanos: Long?, established: Boolean): Long? =
+        if (established) firstFailureNanos else null
+
+    /**
+     * The policy says the pod this attempt used is gone: follow the pod that currently serves the
+     * workspace instead of ending the forward.
+     *
+     * A replacement only counts when it is a *different* pod than [attemptedPod]. The resolver
+     * answers "which pod serves the workspace now", so while the failed pod is still the only one
+     * running it names exactly that pod, and retargeting to it would only loop.
+     *
+     * [ForwardState.resolvePod] lists pods on the API server, so it runs outside the state lock.
+     * Concurrent connections of one session may each resolve the replacement; the swap is
+     * idempotent, so a candidate another connection already swapped in is recognized as the
+     * current pod and no connection swaps twice for the same roll. A failed resolution counts as
+     * "no replacement known" and ends the forward, like a `null` answer.
+     *
+     * @return whether the loop should retry, now against the replacement.
+     */
+    private fun retarget(state: ForwardState, attemptedPod: V1Pod): Boolean {
+        val replacement = resolveReplacement(state)
+        if (replacement == null || isSamePod(attemptedPod, replacement)) {
+            logger.info(
+                "Port forward ${state.localPort} -> ${state.remotePort}: pod " +
+                    "${describePod(attemptedPod)} is gone and no replacement serves the " +
+                    "workspace; stopping"
+            )
+            return false
+        }
+        logRetarget(state, state.retarget(replacement), replacement)
+        return true
+    }
+
+    /**
+     * Logs what the swap did: a `null` [previous] means another connection of the session already
+     * swapped this pod in, so this connection only joins it instead of swapping again.
+     */
+    private fun logRetarget(state: ForwardState, previous: V1Pod?, replacement: V1Pod) {
+        val forward = "${state.localPort} -> ${state.remotePort}"
+        if (previous == null) {
+            logger.info(
+                "Port forward $forward: a concurrent connection already retargeted to pod " +
+                    "${describePod(replacement)}; retrying"
+            )
+        } else {
+            logger.info(
+                "Port forward $forward: retargeting from pod ${describePod(previous)} to pod " +
+                    "${describePod(replacement)}; retrying immediately"
+            )
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught") // a failed pod list only means "no replacement known"
+    private fun resolveReplacement(state: ForwardState): V1Pod? = try {
+        state.resolvePod()
+    } catch (e: Exception) {
+        if (e.isCancellationException()) throw e
+        logger.info(
+            "Port forward ${state.localPort} -> ${state.remotePort}: could not resolve a " +
+                "replacement pod (${e.javaClass.simpleName}: ${e.message}); not retrying"
+        )
+        null
     }
 
     /**

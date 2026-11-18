@@ -17,6 +17,7 @@ import com.redhat.devtools.gateway.openshift.DevWorkspacePods
 import com.redhat.devtools.gateway.openshift.PodExecSession
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Container
+import io.kubernetes.client.openapi.models.V1ContainerPort
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodCondition
@@ -39,6 +40,9 @@ class RemoteIDEServerTest {
 
     private lateinit var devSpacesContext: DevSpacesContext
     private lateinit var remoteIDEServer: RemoteIDEServer
+
+    /** The pod the workspace currently reports; a test swaps it to emulate a pod roll. */
+    private var resolvedPod: V1Pod? = null
 
     @BeforeEach
     fun beforeEach() {
@@ -63,9 +67,10 @@ class RemoteIDEServerTest {
                 )
             }
         }
+        resolvedPod = mockPod
         coEvery {
             anyConstructed<DevWorkspacePods>().findFirstRunning(any(), any())
-        } returns mockPod
+        } answers { resolvedPod }
 
         remoteIDEServer = spyk(RemoteIDEServer(devSpacesContext), recordPrivateCalls = true)
     }
@@ -183,10 +188,20 @@ class RemoteIDEServerTest {
 
     @Test
     fun `#waitServerReady fails fast when idea-server container is missing`() {
-        // given — refreshing the pod/container during the ready-wait finds no idea-server container
-        every {
-            remoteIDEServer["findContainer"]()
-        } throws ServerContainerNotFoundException("Workspace IDE container not found in the Pod: test-pod")
+        // given — refreshing the target during the ready-wait resolves a pod without an
+        // idea-server container (the workspace's container spec changed under a pod roll)
+        resolvedPod = V1Pod().apply {
+            metadata = V1ObjectMeta().apply { name = "test-pod" }
+            spec = V1PodSpec().apply {
+                containers = listOf(
+                    V1Container().apply {
+                        name = "test-container"
+                        // no idea-server port: the container cannot serve the IDE
+                        ports = listOf(V1ContainerPort().apply { name = "http" })
+                    }
+                )
+            }
+        }
 
         // when
         val exception = assertThrows<IOException> {
@@ -197,6 +212,36 @@ class RemoteIDEServerTest {
 
         // then — fails immediately instead of retrying until the ready timeout elapses
         assertThat(exception.message).contains("Workspace IDE container not found")
+    }
+
+    @Test
+    fun `#refreshPod swaps the pod and its container together`() {
+        // given — the IDE server moved to a new pod whose container is in a different state
+        resolvedPod = runningPod("new-pod", containerName = "new-container")
+        assertThat(remoteIDEServer.pod.metadata?.name).isEqualTo("test-pod")
+        assertThat(remoteIDEServer.ideContainerName).isEqualTo("test-container")
+
+        // when
+        val found = remoteIDEServer.refreshPod()
+
+        // then — the previous pod's container must not survive onto the new pod
+        assertThat(found).isTrue()
+        assertThat(remoteIDEServer.pod.metadata?.name).isEqualTo("new-pod")
+        assertThat(remoteIDEServer.ideContainerName).isEqualTo("new-container")
+    }
+
+    @Test
+    fun `#refreshPod keeps the previous target when no pod is running`() {
+        // given — the workspace has no running, ready pod right now
+        resolvedPod = null
+
+        // when
+        val found = remoteIDEServer.refreshPod()
+
+        // then — nothing is swapped, the target stays what it was
+        assertThat(found).isFalse()
+        assertThat(remoteIDEServer.pod.metadata?.name).isEqualTo("test-pod")
+        assertThat(remoteIDEServer.ideContainerName).isEqualTo("test-container")
     }
 
     @Test
@@ -332,6 +377,21 @@ class RemoteIDEServerTest {
             }
         }
     }
+
+    /** A running, ready pod that serves the IDE on [containerName]: what a pod roll produces. */
+    private fun runningPod(podName: String, containerName: String): V1Pod =
+        podWith(podName).apply {
+            spec!!.containers = listOf(
+                V1Container().apply {
+                    this.name = containerName
+                    ports = listOf(
+                        mockk(relaxed = true) {
+                            every { name } returns "idea-server"
+                        }
+                    )
+                }
+            )
+        }
 
     private fun remoteIDEServerStatus(joinLink: String? = null, projects: Array<ProjectInfo>?): RemoteIDEServerStatus {
         return RemoteIDEServerStatus(

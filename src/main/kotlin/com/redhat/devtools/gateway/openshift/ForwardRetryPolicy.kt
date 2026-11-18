@@ -22,6 +22,12 @@ internal data class PortMapping(val localPort: Int, val remotePort: Int)
 /** Why a failed handshake is or is not retried. */
 internal enum class RetryDecision {
     RETRY,
+
+    /**
+     * The pod the failed attempt used is gone. Terminal for the policy: whether a forward may
+     * continue anyway (against the pod that replaced it) is the forwarder's decision, because only
+     * the forwarder can retarget its session.
+     */
     POD_GONE,
     BUDGET_EXHAUSTED,
     ATTEMPTS_EXHAUSTED
@@ -37,7 +43,10 @@ internal enum class RetryDecision {
 internal data class FailedHandshake(
     /** 1-based number of the attempt that just failed. */
     val attempt: Int,
-    /** [System.nanoTime] of the first failure of this series; the retry budgets start here. */
+    /**
+     * Clock reading ([ForwardRetryPolicy]'s `nowNanos`) of the first failure of this series; the
+     * retry budgets start here.
+     */
     val firstFailureNanos: Long,
     /** What the handshake attempt failed with. */
     val cause: Throwable
@@ -54,8 +63,18 @@ internal data class FailedHandshake(
  * The budget starts at the first failed handshake, not at socket accept, so a slow handshake does
  * not consume the whole budget. The decision is logged here because the log line explains the
  * [RetryDecision] and both must stay in sync.
+ *
+ * The policy judges the pod an attempt used: [RetryDecision.POD_GONE] means that pod is gone, not
+ * that the forward is over. When the workspace still has a running pod, [PodPortForwarder]
+ * retargets to it and retries; with no replacement the forward ends, which is the connect-time
+ * "pod is gone" behaviour.
  */
 internal class ForwardRetryPolicy(
+    /**
+     * Reads the clock the budgets are measured against. Overridable so a test can put a series
+     * past a budget without waiting for it.
+     */
+    private val nowNanos: () -> Long = System::nanoTime,
     /** Returns pod liveness state to decide whether a failed forward may be retried. */
     private val livenessProvider: suspend (V1Pod) -> PodLiveness
 ) {
@@ -69,6 +88,9 @@ internal class ForwardRetryPolicy(
         /**
          * Safety cap against a stuck socket, not the healing window: retries run only while the
          * Guest keeps re-dialing, so the Guest's own dial window bounds recovery from above.
+         *
+         * Measured from the first failure of the connection and preserved across pod retargets, so
+         * a cluster that keeps replacing the pod cannot restart the wall on every replacement.
          */
         const val STEADY_STATE_OUTAGE_BUDGET_MS: Long = 10 * 60 * 1000L
         const val STEADY_STATE_MAX_DELAY_MS: Long = 5000
@@ -134,7 +156,7 @@ internal class ForwardRetryPolicy(
     }
 
     private fun isElapsed(firstFailureNanos: Long, budgetMs: Long): Boolean =
-        System.nanoTime() - firstFailureNanos >= budgetMs * NANOS_PER_MILLI
+        nowNanos() - firstFailureNanos >= budgetMs * NANOS_PER_MILLI
 
     private fun logFailure(
         retry: RetryDecision,
@@ -160,7 +182,7 @@ internal class ForwardRetryPolicy(
             RetryDecision.POD_GONE ->
                 logger.info(
                     "Port forward handshake $localPort -> $remotePort failed on attempt ${failure.attempt}: " +
-                            "${cause.message} ($context); not retrying"
+                            "${cause.message} ($context); the pod is gone"
                 )
             RetryDecision.ATTEMPTS_EXHAUSTED ->
                 logger.warn(
