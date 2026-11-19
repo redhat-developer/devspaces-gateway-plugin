@@ -386,6 +386,7 @@ class DevSpacesConnectionTest {
                 resolvePod = { null },
                 probe = { true },
                 cachedLink = URI("tcp://127.0.0.1:41500#cb=1"),
+                sessionPod = null,
                 refreshLink = { null },
                 prod = {},
                 session = idleDials(),
@@ -403,11 +404,9 @@ class DevSpacesConnectionTest {
     }
 
     private fun idleDials(): ForwardDials = object : ForwardDials {
-        override val hasActiveForward: Boolean = false
-        override val lastSuccessfulHandshakeNanos: Long? = null
-        override val lastFastFailedDialNanos: Long? = null
+        override val oldestActiveHandshakeNanos: Long? = null
         override val lastLongLivedDialNanos: Long? = null
-        override val fastFailedDials: Long = 0
+        override val failedDials: Long = 0
     }
 
     /** An IDE server that reports "terminated": without the guard, teardown would stop the workspace. */

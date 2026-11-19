@@ -156,7 +156,9 @@ class DevSpacesConnection internal constructor(
             portForwardSession.markEstablished()
             onConnected()
             watchSession(workspace, client, portForwardSession, handleRestarts = registerRestartWatcher)
-            prepareRecovery(workspace, client, portForwardSession, localJoinLink)
+            // the pod the local join link was built against: a different pod serves the same link
+            // with a new idea-server session token, so recovery must treat the link as stale
+            prepareRecovery(workspace, client, portForwardSession, localJoinLink, remoteIdeServer.pod)
             client
         } catch (e: Exception) {
             if (e !is ThinClientLaunchException || connectionLive.get()) {
@@ -255,12 +257,16 @@ class DevSpacesConnection internal constructor(
      *
      * Recovery observes the existing Guest only: it resolves the current workspace pod itself and
      * prods that Guest to re-dial. It never starts a new client and never closes one.
+     *
+     * @param sessionPod the pod [localJoinLink] was built against; when a different pod serves the
+     *   workspace, the link's session token is unknown to it and recovery refreshes the link.
      */
     private fun prepareRecovery(
         workspace: DevWorkspace,
         thinClient: ThinClientHandle,
         session: PortForwardSession,
-        localJoinLink: URI
+        localJoinLink: URI,
+        sessionPod: V1Pod
     ) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         recoveryScope = scope
@@ -269,6 +275,7 @@ class DevSpacesConnection internal constructor(
                 resolvePod = { findRunningPod(workspace) },
                 probe = { pod -> portForwarder.probe(pod, ThinClientJoinLink.REMOTE_IDE_PORT) },
                 cachedLink = localJoinLink,
+                sessionPod = sessionPod,
                 refreshLink = refreshJoinLink(workspace, session.localPort),
                 prod = prodJoinLink(thinClient),
                 session = session,

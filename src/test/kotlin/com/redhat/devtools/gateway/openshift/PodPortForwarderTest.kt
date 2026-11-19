@@ -85,16 +85,23 @@ class PodPortForwarderTest {
          */
         private const val HUNG_OPEN_CAP_MS = 30_000L
 
-        /** Keeps a dialed connection safely past the fast-fail window, so it classifies as long-lived. */
+        /**
+         * Survival a dial needs to count as an established session. Production uses
+         * [DIAL_CONFIRMATION_MS] (15s, more than twice the measured 6.5-6.9s of a stale-link dial);
+         * the tests shrink it so both sides of the threshold are exercised with short dials.
+         */
+        private const val TEST_CONFIRMATION_MS = 200L
+
+        /** Keeps a dialed connection safely past the confirmation threshold, so it is long-lived. */
         private const val LONG_LIVED_MARGIN_MS = 200L
 
         /**
          * Window for a dial to be classified as long-lived. Larger than the dial itself
-         * ([FAST_FAIL_DIAL_MS] + [LONG_LIVED_MARGIN_MS]) by [TIMING_SLACK_MS]: the dial ends with a
-         * `Thread.sleep` on the dispatcher thread, which load can delay past the dial's own length.
+         * ([TEST_CONFIRMATION_MS] + [LONG_LIVED_MARGIN_MS]) by [TIMING_SLACK_MS]: the dial ends with
+         * a `Thread.sleep` on the dispatcher thread, which load can delay past the dial's own length.
          */
         private const val LONG_LIVED_DIAL_TIMEOUT_MS =
-            FAST_FAIL_DIAL_MS + LONG_LIVED_MARGIN_MS + TIMING_SLACK_MS
+            TEST_CONFIRMATION_MS + LONG_LIVED_MARGIN_MS + TIMING_SLACK_MS
 
         private const val NANOS_PER_MILLI = 1_000_000L
     }
@@ -863,41 +870,51 @@ class PodPortForwarderTest {
 
         // when - the Guest dialed and its connection is being copied
         assertThat(session.hasActiveForward).isFalse()
+        assertThat(session.oldestActiveHandshakeNanos).isNull()
         val socket = Socket("127.0.0.1", session.localPort)
         try {
+            // then - the open connection is visible by its handshake, which is what can confirm it
             assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+            assertThat(session.oldestActiveHandshakeNanos).isNotNull()
+            assertThat(session.oldestActiveHandshakeNanos)
+                .isEqualTo(session.lastSuccessfulHandshakeNanos)
         } finally {
             session.close()
             socket.close()
         }
 
-        // then - the connection is over and no longer counts as active
+        // then - the connection is over: neither active nor pending confirmation
         assertThat(awaitTrue(EVENT_TIMEOUT_MS) { !session.hasActiveForward }).isTrue()
+        assertThat(session.oldestActiveHandshakeNanos).isNull()
     }
 
     @Test
-    fun `#forward classifies a dial that ended fast as fast-failed`() {
-        // given - the pod ends the connection well within the fast-fail window
+    fun `#forward classifies a dial that ended before confirmation as failed`() {
+        // given - the pod ends the connection well within the confirmation threshold, like the
+        // 6.5-6.9s stale-link dials measured against the Guest's 6s transport timeout
         val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
         every {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
         } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns eofAfter(FAST_FAIL_DIAL_MS / 20)
+        every {
+            portForwardResult.getInputStream(remotePort)
+        } returns eofAfter(TEST_CONFIRMATION_MS / 4)
         every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
-        val session = PodPortForwarder(client).forward(pod, remotePort)
+        val session = PodPortForwarder(client, confirmationMs = TEST_CONFIRMATION_MS)
+            .forward(pod, remotePort)
 
         try {
             // when
             Socket("127.0.0.1", session.localPort).use {
                 assertThat(
                     awaitTrue(EVENT_TIMEOUT_MS) {
-                        session.lastFastFailedDialNanos != null
+                        session.lastFailedDialNanos != null
                     }
                 ).isTrue()
             }
 
             // then
-            assertThat(session.fastFailedDials).isEqualTo(1)
+            assertThat(session.failedDials).isEqualTo(1)
             assertThat(session.lastLongLivedDialNanos).isNull()
         } finally {
             session.close()
@@ -905,17 +922,18 @@ class PodPortForwarderTest {
     }
 
     @Test
-    fun `#forward classifies a dial that outlived the fast-fail window as long-lived`() {
-        // given - the pod holds the connection past FAST_FAIL_DIAL_MS, like a real RD session
+    fun `#forward classifies a dial that outlived confirmation as long-lived`() {
+        // given - the pod holds the connection past the confirmation threshold, like a real session
         val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
         every {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
         } returns portForwardResult
         every {
             portForwardResult.getInputStream(remotePort)
-        } returns eofAfter(FAST_FAIL_DIAL_MS + LONG_LIVED_MARGIN_MS)
+        } returns eofAfter(TEST_CONFIRMATION_MS + LONG_LIVED_MARGIN_MS)
         every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
-        val session = PodPortForwarder(client).forward(pod, remotePort)
+        val session = PodPortForwarder(client, confirmationMs = TEST_CONFIRMATION_MS)
+            .forward(pod, remotePort)
 
         try {
             // when
@@ -928,8 +946,8 @@ class PodPortForwarderTest {
             }
 
             // then - a long-lived dial is not evidence of a stale link
-            assertThat(session.fastFailedDials).isZero()
-            assertThat(session.lastFastFailedDialNanos).isNull()
+            assertThat(session.failedDials).isZero()
+            assertThat(session.lastFailedDialNanos).isNull()
         } finally {
             session.close()
         }

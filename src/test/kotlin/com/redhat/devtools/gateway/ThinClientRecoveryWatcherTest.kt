@@ -11,6 +11,7 @@
  */
 package com.redhat.devtools.gateway
 
+import com.redhat.devtools.gateway.openshift.DIAL_CONFIRMATION_MS
 import com.redhat.devtools.gateway.openshift.ForwardDials
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
@@ -28,8 +29,11 @@ private const val POLL_MS = 1_000L
 private const val LONG_POLL_MS = 3_000L
 private const val LONG_POLL_AFTER_MS = 4_000L
 private const val REDIAL_WAIT_MS = 2_000L
-private const val BUDGET_MS = 10_000L
-private const val RUN_TIMEOUT_MS = 10_000L
+
+/** Larger than [DIAL_CONFIRMATION_MS], so an episode can wait a connection out and still reach it. */
+private const val BUDGET_MS = 60_000L
+
+private const val RUN_TIMEOUT_MS = 20_000L
 
 /** When the Guest answers a prod: one dial outcome, well inside the redial window. */
 private const val DIAL_AFTER_MS = 300L
@@ -39,16 +43,31 @@ private const val NONCE_PARAMETER = ThinClientJoinLink.RECONNECT_PARAMETER
 private val CACHED_LINK: URI = URI("tcp://127.0.0.1:41000#cb=123&p=1")
 private val REFRESHED_LINK: URI = URI("tcp://127.0.0.1:41000#cb=123&p=2")
 
+private fun pod(name: String, uid: String): V1Pod = V1Pod().apply {
+    metadata = V1ObjectMeta().apply {
+        this.name = name
+        this.uid = uid
+    }
+}
+
+private val OLD_POD = pod("luke-skywalker-roll-old", "764b6480-old-uid")
+private val NEW_POD = pod("luke-skywalker-roll-new", "7a011c35-new-uid")
+
 /**
  * Behaviour of the recovery loop.
  *
  * Every dependency is a fake and the clock is virtual: each sleep advances it and then suspends for
  * a millisecond, so the loop terminates deterministically, `stop()` still cancels it promptly, and
  * the suite never waits out a real interval or touches a cluster.
+ *
+ * The dial outcomes are scripted as *scheduled* events: the Guest answers a prod (or drops a doomed
+ * dial) a moment later, which is what the watcher's observation windows must see.
  */
 class ThinClientRecoveryWatcherTest {
 
     private val harness = Harness()
+
+    // --- polling ------------------------------------------------------------
 
     @Test
     fun `does not prod while the probe fails and keeps polling`() {
@@ -72,6 +91,19 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.prods).isEmpty()
         assertThat(harness.failed).isEqualTo(1)
     }
+
+    @Test
+    fun `polls less often once the outage lasts`() {
+        harness.pod = null
+
+        harness.runWatcher()
+
+        // one poll per second would be 60 list calls; the long-outage interval keeps it far below
+        assertThat(harness.resolvedPods).isGreaterThan(10)
+        assertThat(harness.resolvedPods).isLessThan(30)
+    }
+
+    // --- prods --------------------------------------------------------------
 
     @Test
     fun `prods once with the cached link`() {
@@ -100,18 +132,45 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.prods[1].rawFragment).contains("p=1")
     }
 
+    // --- confirmation-based recovery evidence -------------------------------
+
     @Test
-    fun `falls back to the cached link when no fresh link can be built`() {
-        harness.stopAfterProds = 2
-        harness.refreshedLink = null // the IDE server is not ready yet
-        harness.onProd = { harness.scheduleFastFailedDials(DIAL_AFTER_MS, count = 2) }
+    fun `waits for an open connection to confirm instead of prodding it`() {
+        // the Guest dialed and the connection is being copied, but it has not outlived a stale dial
+        harness.openDial()
 
         harness.runWatcher()
 
-        assertThat(harness.refreshes).isEqualTo(1)
-        assertThat(harness.prods[1]).isNotEqualTo(harness.prods[0])
-        assertThat(harness.prods[1].rawFragment).contains("p=1")
-        assertThat(harness.prods[1].rawFragment).contains("$NONCE_PARAMETER=2")
+        assertThat(harness.prods).isEmpty()
+        assertThat(harness.recovered).isEqualTo(1)
+        assertThat(harness.failed).isZero()
+    }
+
+    @Test
+    fun `does not treat an open connection as recovery before it confirms`() {
+        // the connection ends before the confirmation threshold, like a stale-link dial
+        harness.openDial()
+        harness.scheduleFailedDialEnd(DIAL_CONFIRMATION_MS / 2)
+        harness.stopAfterProds = 1
+
+        harness.runWatcher()
+
+        assertThat(harness.recovered).isZero()
+        assertThat(harness.prods).hasSize(1) // it was a doomed dial: prod
+    }
+
+    @Test
+    fun `reports recovery when a dial ends after it outlived the confirmation threshold`() {
+        harness.onProd = {
+            harness.openDial()
+            harness.scheduleLongLivedDialEnd(DIAL_CONFIRMATION_MS + 500)
+        }
+
+        harness.runWatcher()
+
+        assertThat(harness.recovered).isEqualTo(1)
+        assertThat(harness.prods).hasSize(1)
+        assertThat(harness.failed).isZero()
     }
 
     @Test
@@ -126,21 +185,13 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.isWatcherActive).isFalse()
     }
 
-    @Test
-    fun `reports recovery when a handshake just succeeded`() {
-        harness.onProd = { harness.scheduleHandshake(DIAL_AFTER_MS) }
-
-        harness.runWatcher()
-
-        assertThat(harness.recovered).isEqualTo(1)
-        assertThat(harness.prods).hasSize(1)
-    }
+    // --- stale link by dial evidence ----------------------------------------
 
     @Test
-    fun `treats only fast-failed dials as a stale link and refreshes it`() {
+    fun `refreshes the link after two failed dials since the prod`() {
         harness.refreshedLink = REFRESHED_LINK
         harness.stopAfterProds = 2
-        harness.onProd = { harness.scheduleFastFailedDials(DIAL_AFTER_MS, count = 2) }
+        harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2) }
 
         harness.runWatcher()
 
@@ -151,9 +202,9 @@ class ThinClientRecoveryWatcherTest {
     }
 
     @Test
-    fun `does not refresh the link for a single fast-failed dial`() {
+    fun `does not refresh the link for a single failed dial`() {
         harness.stopAfterProds = 2
-        harness.onProd = { harness.scheduleFastFailedDials(DIAL_AFTER_MS, count = 1) }
+        harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 1) }
 
         harness.runWatcher()
 
@@ -163,35 +214,96 @@ class ThinClientRecoveryWatcherTest {
     }
 
     @Test
-    fun `measures the redial window from the delivered prod`() {
+    fun `survives client-closed failed dials and refreshes the stale link`() {
+        // the live failure (CRW-13910): dials the Guest closes itself fire no onRemoteEnd, so the
+        // episode must not depend on those signals to keep running and reach the stale-link path
         harness.refreshedLink = REFRESHED_LINK
-        // a stale link's status exec takes longer than the whole redial window
-        harness.refreshDelayMs = REDIAL_WAIT_MS * 2
-        harness.onProd = {
-            if (harness.prods.size == 1) {
-                harness.scheduleFastFailedDials(DIAL_AFTER_MS, count = 2)
-            } else {
-                harness.scheduleLongLivedDial(DIAL_AFTER_MS)
-            }
-        }
+        harness.openDial() // a doomed dial is open right now
+        harness.scheduleFailedDialEnd(DIAL_CONFIRMATION_MS / 2)
+        harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2) }
+        harness.stopAfterProds = 2
 
         harness.runWatcher()
 
-        // the window opened when prod 2 was sent, so the Guest's re-dial after it is still observed
+        assertThat(harness.recovered).isZero()
         assertThat(harness.prods).hasSize(2)
-        assertThat(harness.recovered).isEqualTo(1)
-        assertThat(harness.failed).isZero()
+        assertThat(harness.refreshes).isEqualTo(1)
+        assertThat(harness.prods[1].rawFragment).contains("p=2")
+    }
+
+    // --- stale link by pod identity ----------------------------------------
+
+    @Test
+    fun `a replaced pod is stale even while a doomed connection is open`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD
+        harness.refreshedLink = REFRESHED_LINK
+        harness.openDial()
+        harness.stopAfterProds = 1
+
+        harness.runWatcher()
+
+        // an open, unconfirmed dial is not recovery, and the stale link can only be fixed by a
+        // fresh one: the very first prod carries it
+        assertThat(harness.recovered).isZero()
+        assertThat(harness.refreshes).isEqualTo(1)
+        assertThat(harness.prods).hasSize(1)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
     }
 
     @Test
-    fun `reports recovery without a prod when the Guest already holds a connection`() {
-        harness.holdActiveForward()
+    fun `reports recovery after a replaced pod only when a dial confirms`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD
+        harness.refreshedLink = REFRESHED_LINK
+        harness.onProd = { harness.openDial() }
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).hasSize(1)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
+        assertThat(harness.recovered).isEqualTo(1)
+    }
+
+    @Test
+    fun `keeps polling when a replaced pod cannot report a link yet`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD
+        harness.refreshedLink = null
+        harness.stopAfterProds = 2
+
+        harness.runWatcher()
+
+        // falling back per the current rules: the cached link, with the nonce from the second prod on
+        assertThat(harness.prods).hasSize(2)
+        assertThat(harness.refreshes).isEqualTo(2)
+        assertThat(harness.prods[0]).isEqualTo(CACHED_LINK)
+        assertThat(harness.prods[1].rawFragment).contains("$NONCE_PARAMETER=2")
+    }
+
+    @Test
+    fun `does not treat the same pod after a roll check as a roll`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = OLD_POD
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 1
+
+        harness.runWatcher()
+
+        assertThat(harness.refreshes).isZero()
+        assertThat(harness.prods).containsExactly(CACHED_LINK)
+    }
+
+    // --- episode lifecycle --------------------------------------------------
+
+    @Test
+    fun `reports recovery without a prod when the already established session is confirmed`() {
+        harness.openDial(atNanos = 0)
 
         harness.runWatcher()
 
         assertThat(harness.recovered).isEqualTo(1)
         assertThat(harness.prods).isEmpty()
-        assertThat(harness.resolvedPods).isZero()
     }
 
     @Test
@@ -203,16 +315,6 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.recovered).isZero()
         assertThat(harness.failed).isZero()
         assertThat(harness.resolvedPods).isZero()
-    }
-
-    @Test
-    fun `polls less often once the outage lasts`() {
-        harness.pod = null
-
-        harness.runWatcher()
-
-        // 1s polls for the first 4s, then 3s polls: 6 list calls, not 10
-        assertThat(harness.resolvedPods).isEqualTo(6)
     }
 
     @Test
@@ -236,8 +338,20 @@ class ThinClientRecoveryWatcherTest {
     }
 
     @Test
+    fun `repeated episodes report one recovery for the same established session`() {
+        harness.openDial(atNanos = 0)
+        harness.advanceClock(DIAL_CONFIRMATION_MS + 1)
+
+        harness.runWatcher(startTimes = 3)
+
+        // every onRemoteEnd starts an episode; only the first observes a new session
+        assertThat(harness.recovered).isEqualTo(1)
+        assertThat(harness.prods).isEmpty()
+    }
+
+    @Test
     fun `stop ends the loop before the next prod`() {
-        harness.onProd = harness::stopWatcher
+        harness.onProd = { harness.stopWatcher() }
 
         harness.runWatcher()
 
@@ -245,6 +359,8 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.isWatcherActive).isFalse()
         assertThat(harness.failed).isZero()
     }
+
+    // --- failures inside the loop -------------------------------------------
 
     @Test
     fun `retries a throwing probe instead of failing`() {
@@ -260,7 +376,7 @@ class ThinClientRecoveryWatcherTest {
     @Test
     fun `retries a throwing link refresh instead of failing`() {
         harness.refreshFailure = IOException("status exec failed")
-        harness.onProd = { harness.scheduleFastFailedDials(DIAL_AFTER_MS, count = 2) }
+        harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2) }
 
         harness.runWatcher()
 
@@ -332,23 +448,16 @@ private class TestClock {
 
 private const val NANOS_PER_MILLISECOND = 1_000_000L
 
-/** Throws a scripted failure, if the test set one: keeps the fakes free of three throw sites. */
-private fun Exception?.throwIfSet() {
-    if (this != null) throw this
-}
-
-/** Records what the recovery loop did to the Guest's dials. */
+/** Records the Guest's dials as the watcher observes them. */
 private class FakeDials : ForwardDials {
-    override var hasActiveForward: Boolean = false
-    override var lastSuccessfulHandshakeNanos: Long? = null
-    override var lastFastFailedDialNanos: Long? = null
+    override var oldestActiveHandshakeNanos: Long? = null
     override var lastLongLivedDialNanos: Long? = null
-    override var fastFailedDials: Long = 0
+    override var failedDials: Long = 0
 }
 
 /**
- * Everything a watcher test drives: the fakes, the virtual clock, and the hooks that let a fake
- * prod change what the next dial observation looks like.
+ * Everything a watcher test drives: the fakes, the virtual clock, and the hooks that let a test
+ * script what the Guest's dials did.
  */
 private class Harness {
 
@@ -363,7 +472,11 @@ private class Harness {
     var recovered = 0
     var failed = 0
 
-    var pod: V1Pod? = V1Pod().apply { metadata = V1ObjectMeta().apply { name = "luke-skywalker" } }
+    /** The pod the cached link was built against; `null` disables the roll check. */
+    var sessionPod: V1Pod? = null
+
+    /** The pod that serves the workspace now. */
+    var pod: V1Pod? = pod("luke-skywalker", "skywalker-uid")
     var probeSucceeds = true
     var probeFailure: Exception? = null
     var refreshFailure: Exception? = null
@@ -374,10 +487,10 @@ private class Harness {
     /** Virtual time a link refresh takes: a stale link's status exec can outlast the redial window. */
     var refreshDelayMs = 0L
 
-    /** Runs after every prod attempt, so a test can script what the Guest's dial did. */
+    /** Runs after every prod attempt, so a test can script how the Guest answers it. */
     var onProd: () -> Unit = {}
 
-    /** Stops the loop after this many prods: a test that does not want a second iteration. */
+    /** Stops the loop after this many prods: a test that does not want further iterations. */
     var stopAfterProds: Int? = null
 
     lateinit var watcher: ThinClientRecoveryWatcher
@@ -392,31 +505,41 @@ private class Harness {
         sleep = clock::sleep
     )
 
-    /** One fast-failed dial run, [afterMs] after the prod: it ends [count] times, never handshaking. */
-    fun scheduleFastFailedDials(afterMs: Long, count: Int = 2) {
+    /** The Guest opens a connection that is being copied from [atNanos] on. */
+    fun openDial(atNanos: Long = clock.now()) {
+        dials.oldestActiveHandshakeNanos = atNanos
+    }
+
+    /** The open connection ends [afterMs] later, before it can confirm: a failed dial. */
+    fun scheduleFailedDialEnd(afterMs: Long) {
         after(afterMs) {
-            dials.fastFailedDials += count
-            dials.lastFastFailedDialNanos = clock.now()
+            dials.oldestActiveHandshakeNanos = null
+            dials.failedDials++
         }
     }
 
-    /** A handshake that succeeded [afterMs] after the prod and whose connection is still open. */
-    fun scheduleHandshake(afterMs: Long) {
-        after(afterMs) { dials.lastSuccessfulHandshakeNanos = clock.now() }
+    /** The open connection outlives the threshold and then ends: a long-lived dial. */
+    fun scheduleLongLivedDialEnd(afterMs: Long) {
+        after(afterMs) {
+            dials.oldestActiveHandshakeNanos = null
+            dials.lastLongLivedDialNanos = clock.now()
+        }
     }
 
-    /** A connection that stayed up long enough to count as long-lived, ending [afterMs] after the prod. */
+    /** The Guest's answer to a prod: [count] failed dials, [afterMs] later. */
+    fun scheduleFailedDials(afterMs: Long, count: Int = 2) {
+        after(afterMs) {
+            dials.failedDials += count
+        }
+    }
+
+    /** A long-lived dial ends [afterMs] after the prod. */
     fun scheduleLongLivedDial(afterMs: Long) {
         after(afterMs) { dials.lastLongLivedDialNanos = clock.now() }
     }
 
-    private fun after(afterMs: Long, dial: () -> Unit) {
-        clock.schedule(clock.now() + afterMs * NANOS_PER_MILLISECOND, dial)
-    }
-
-    /** The Guest is already bridged: an active forward exists before the loop starts. */
-    fun holdActiveForward() {
-        dials.hasActiveForward = true
+    fun advanceClock(millis: Long) {
+        clock.advance(millis)
     }
 
     fun stopWatcher() {
@@ -425,6 +548,10 @@ private class Harness {
 
     val isWatcherActive: Boolean
         get() = watcher.isActive
+
+    private fun after(afterMs: Long, dial: () -> Unit) {
+        clock.schedule(clock.now() + afterMs * NANOS_PER_MILLISECOND, dial)
+    }
 
     fun newWatcher(): ThinClientRecoveryWatcher {
         watcher = ThinClientRecoveryWatcher(
@@ -439,6 +566,7 @@ private class Harness {
                     probeSucceeds
                 },
                 cachedLink = CACHED_LINK,
+                sessionPod = sessionPod,
                 refreshLink = {
                     refreshes++
                     if (refreshDelayMs > 0) clock.advance(refreshDelayMs)
@@ -462,4 +590,9 @@ private class Harness {
         )
         return watcher
     }
+}
+
+/** Throws a scripted failure, if the test set one: keeps the fakes free of three throw sites. */
+private fun Exception?.throwIfSet() {
+    if (this != null) throw this
 }
