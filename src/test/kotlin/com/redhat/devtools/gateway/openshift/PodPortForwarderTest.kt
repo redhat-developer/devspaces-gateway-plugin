@@ -870,11 +870,13 @@ class PodPortForwarderTest {
 
         // when - the Guest dialed and its connection is being copied
         assertThat(session.hasActiveForward).isFalse()
+        assertThat(session.isClientDialed).isFalse()
         assertThat(session.oldestActiveHandshakeNanos).isNull()
         val socket = Socket("127.0.0.1", session.localPort)
         try {
             // then - the open connection is visible by its handshake, which is what can confirm it
             assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.hasActiveForward }).isTrue()
+            assertThat(session.isClientDialed).isTrue()
             assertThat(session.oldestActiveHandshakeNanos).isNotNull()
             assertThat(session.oldestActiveHandshakeNanos)
                 .isEqualTo(session.lastSuccessfulHandshakeNanos)
@@ -885,7 +887,33 @@ class PodPortForwarderTest {
 
         // then - the connection is over: neither active nor pending confirmation
         assertThat(awaitTrue(EVENT_TIMEOUT_MS) { !session.hasActiveForward }).isTrue()
+        assertThat(session.isClientDialed).isFalse()
         assertThat(session.oldestActiveHandshakeNanos).isNull()
+    }
+
+    @Test
+    fun `#forward reports a dialing client before its handshake`() {
+        // given - the forward handshake never completes (Layer A keeps retrying the pod forward),
+        // so the accepted socket is the only phase the session can report
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } throws IOException("connection reset")
+        val session = PodPortForwarder(client) { PodLiveness.RUNNING }.forward(pod, remotePort)
+
+        val socket = Socket("127.0.0.1", session.localPort)
+        try {
+            // when / then - the dial is visible before any handshake: recovery must not read a
+            // connecting Guest as one that gave up
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.isClientDialed }).isTrue()
+            assertThat(session.oldestActiveHandshakeNanos).isNull()
+            assertThat(session.hasActiveForward).isFalse()
+        } finally {
+            socket.close()
+            session.close()
+        }
+
+        // and it disappears with the dial
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { !session.isClientDialed }).isTrue()
     }
 
     @Test

@@ -404,6 +404,7 @@ class DevSpacesConnectionTest {
     }
 
     private fun idleDials(): ForwardDials = object : ForwardDials {
+        override val isClientDialed: Boolean = false
         override val oldestActiveHandshakeNanos: Long? = null
         override val lastLongLivedDialNanos: Long? = null
         override val failedDials: Long = 0

@@ -46,6 +46,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * identity ([Collaborators.sessionPod] vs. the pod that serves the workspace now), not by guessing
  * from dial lifetimes.
  *
+ * **A prod is a project restart, so it is the last resort.** `updateJoinLink(forceReconnect =
+ * true)` makes the Guest dispose the project and re-open it: state survives server-side, but the
+ * window is replaced by a new frame. The Guest's own seamless loop preserves the frame, so the
+ * watcher lets it finish a dial in flight and only prods once that loop is proven unable to recover.
+ *
  * **It resolves the pod workspace-scoped, not from the session.** The pod the forward was pinned to
  * is exactly the pod that may be gone after a roll, and nothing refreshes it: the forwarder's own
  * re-resolution needs an accepted connection, and in this outage the Guest has stopped dialing, so
@@ -61,8 +66,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 2. a connection older than the confirmation threshold -> recovered, the session is established
  * 3. no running+ready pod, or the probe fails -> poll again (cheap list, no prod)
  * 4. the workspace pod was replaced -> the cached link is stale: refresh it and prod at once
- * 5. the Guest is opening a connection -> wait for it to confirm or fail, then decide
- * 6. otherwise prod and wait one redial window:
+ * 5. the Guest's own seamless reconnection loop is observed first: a dial in flight is awaited, a
+ *    confirmed one is recovery (the frame is preserved); a run of failed dials or a silent redial
+ *    window means that loop cannot recover, and only then is the Guest prodded - a prod restarts
+ *    the project, which the user sees as the window being replaced
+ * 6. the prod starts an observation window:
  *    a confirmed dial -> recovered
  *    a run of failed dials -> the link looks stale, the next attempt refreshes it
  *    anything else -> next attempt prods again
@@ -221,9 +229,10 @@ internal class ThinClientRecoveryWatcher(
             waitForNextPoll(episode)
             return
         }
-        // probing takes seconds: the Guest may have opened a session meanwhile, and prodding would
-        // disconnect it. Only a dial that carries the stale link is not worth waiting for.
-        if (!skipsPendingWait(episode) && awaitPendingConfirmation(episode)) {
+        // Give the Guest's own seamless reconnection loop its chance before prodding: a prod is a
+        // project-level restart that swaps the window, so it is only worth paying when that loop
+        // cannot succeed. A dial carrying a stale link is not worth waiting for.
+        if (!skipsObservation(episode) && observeGuestRecovery(episode) != Observation.PROD) {
             return
         }
         // the attempt and the dial count are committed only once a prod is actually delivered: a
@@ -290,59 +299,100 @@ internal class ThinClientRecoveryWatcher(
      * prod has delivered a refreshed link, the Guest's dials are legitimate again and worth waiting
      * for.
      */
-    private fun skipsPendingWait(episode: Episode): Boolean =
+    /**
+     * Whether observing the Guest's own reconnection loop is pointless.
+     *
+     * After a pod roll the Guest's dials carry the cached link, whose session token the new
+     * idea-server does not know: they can never confirm, and the frame swap of a prod is inherent
+     * because the backend session is new. Once a prod has delivered a refreshed link the dials are
+     * legitimate again and worth observing.
+     */
+    private fun skipsObservation(episode: Episode): Boolean =
         episode.podRolled && !episode.sentRefreshedLink
 
     /**
-     * Waits for the connection the Guest is opening to prove itself, or to end, before prodding.
+     * Gives the Guest's own seamless reconnection loop the chance to recover before prodding.
      *
-     * A prod forces the Guest to disconnect and re-dial, so sending one into a session that is still
-     * establishing would cut a recovery that is under way. The wait is bounded by the confirmation
-     * threshold: a dial still open when it reaches the threshold has confirmed a session; a dial
-     * that ended before it was a stale-link dial, and prodding is the right next step.
+     * A prod is `updateJoinLink(forceReconnect = true)`: the Guest disposes the project and re-opens
+     * it, which the user sees as the window closing and a new frame opening. Its own loop preserves
+     * the frame, so it must be allowed to succeed whenever the link is still valid. CRW-13910 live
+     * testing caught exactly the opposite: a doomed dial ended while a newer seamless dial was
+     * connecting, the watcher prodded, and the prod cancelled the dial that was about to work.
      *
-     * @return `true` when the iteration is over: the session was confirmed (reported as recovered),
-     *   or the loop is stopping.
+     * The observation therefore follows the *dial cycle*, not one dial:
+     * - a dial in flight (accepted socket or unconfirmed handshake) -> wait for it;
+     * - it survives the confirmation threshold -> recovered, no prod, frame preserved;
+     * - it ends before confirming -> count the failed dial and keep observing;
+     * - no dial in flight and a run of failed dials -> the loop runs but cannot succeed (stale
+     *   link): prod, refreshing the link;
+     * - no dial activity at all for a redial window -> the Guest gave up: prod the cached link.
+     *
+     * It always terminates: the failed-dial run bounds the churn case, the idle window bounds the
+     * silent case, and the episode budget bounds both.
      */
-    private suspend fun awaitPendingConfirmation(episode: Episode): Boolean {
-        val handshakeNanos = collaborators.session.oldestActiveHandshakeNanos
-        if (handshakeNanos == null) {
-            return false
-        }
-        val confirmAtNanos = handshakeNanos + millisToNanos(DIAL_CONFIRMATION_MS)
-        while (active.get() && isStillOpen(handshakeNanos) && timing.nowNanos() < confirmAtNanos) {
-            timing.sleep(outcomePollDelay(confirmAtNanos))
-        }
-        return when {
-            !active.get() -> true
-            !didConfirm(handshakeNanos) -> {
-                thisLogger().info(
-                    "The Guest's connection ended before it could confirm a session; prodding it."
-                )
-                false
+    private suspend fun observeGuestRecovery(episode: Episode): Observation {
+        val observationStartNanos = timing.nowNanos()
+        val failedDialsAtStart = collaborators.session.failedDials
+        var lastActivityNanos = observationStartNanos
+        var previous = dialSnapshot()
+        var outcome: Observation? = null
+
+        while (outcome == null && active.get()) {
+            when {
+                !collaborators.isClientPresent() -> {
+                    stopQuietly(episode, "the JetBrains Client is gone")
+                    outcome = Observation.STOPPED
+                }
+
+                reportIfConnectionConfirmed(episode) -> outcome = Observation.RECOVERED
+
+                else -> {
+                    val snapshot = dialSnapshot()
+                    if (snapshot != previous) {
+                        previous = snapshot
+                        lastActivityNanos = timing.nowNanos()
+                    }
+                    outcome = decideObservation(episode, snapshot, failedDialsAtStart, lastActivityNanos)
+                    if (outcome == null) {
+                        timing.sleep(OUTCOME_POLL_INTERVAL_MS)
+                    }
+                }
             }
-            else -> {
-                reportRecovered(
-                    episode,
-                    handshakeNanos,
-                    "the Guest's connection outlived a stale dial"
-                )
-                true
-            }
         }
+        return outcome ?: Observation.STOPPED
     }
 
-    /** Whether [handshakeNanos] is the oldest connection still being copied. */
-    private fun isStillOpen(handshakeNanos: Long): Boolean =
-        collaborators.session.oldestActiveHandshakeNanos == handshakeNanos
-
     /**
-     * Whether the dial with [handshakeNanos] confirmed a session: it is still open past the
-     * threshold, or it ended only after outliving it.
+     * The observation's verdict for the current dial state, or `null` to keep observing.
+     *
+     * A dial in flight always wins: the Guest is still trying, and prodding would cut it. Once
+     * nothing is in flight, a run of failed dials means its loop cannot succeed, while plain
+     * silence means it gave up.
      */
-    private fun didConfirm(handshakeNanos: Long): Boolean =
-        isStillOpen(handshakeNanos) ||
-            collaborators.session.lastLongLivedDialNanos?.let { it > handshakeNanos } == true
+    private fun decideObservation(
+        episode: Episode,
+        snapshot: DialSnapshot,
+        failedDialsAtStart: Long,
+        lastActivityNanos: Long
+    ): Observation? = when {
+        snapshot.isInFlight -> null
+        collaborators.session.failedDials - failedDialsAtStart >= FAILED_DIALS_FOR_STALE -> {
+            staleLink(episode)
+            Observation.PROD
+        }
+
+        timing.nowNanos() - lastActivityNanos >= millisToNanos(timing.redialWaitMs) ->
+            Observation.PROD
+
+        else -> null
+    }
+
+    /** The dial state the observation samples: a dial is in flight from its socket to its end. */
+    private fun dialSnapshot(): DialSnapshot = DialSnapshot(
+        isClientDialed = collaborators.session.isClientDialed,
+        oldestActiveHandshakeNanos = collaborators.session.oldestActiveHandshakeNanos,
+        failedDials = collaborators.session.failedDials
+    )
 
     /**
      * Builds the link and sends one prod.
@@ -553,6 +603,32 @@ internal class ThinClientRecoveryWatcher(
      * attempt, not to the one being measured.
      */
     private class ProdDelivery(val sentAtNanos: Long, val failedDialsAtProd: Long)
+
+    /**
+     * The Guest's dial state at one sample of the observation. Any change counts as activity, so a
+     * Guest that is still trying is never mistaken for one that gave up.
+     */
+    private data class DialSnapshot(
+        val isClientDialed: Boolean,
+        val oldestActiveHandshakeNanos: Long?,
+        val failedDials: Long
+    ) {
+        /** A dial is open (accepted socket, or a handshake that has not confirmed yet). */
+        val isInFlight: Boolean
+            get() = isClientDialed || oldestActiveHandshakeNanos != null
+    }
+
+    /** How the pre-prod observation ended. */
+    private enum class Observation {
+        /** A dial confirmed a session: reported as recovered, no prod was sent. */
+        RECOVERED,
+
+        /** The Guest's own loop cannot recover: prod. */
+        PROD,
+
+        /** The loop was stopped, or the client is gone: no prod, no report. */
+        STOPPED
+    }
 
     /** What the Guest's dials said after a prod. */
     private enum class DialOutcome {

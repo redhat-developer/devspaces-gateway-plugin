@@ -149,8 +149,8 @@ class ThinClientRecoveryWatcherTest {
     @Test
     fun `does not treat an open connection as recovery before it confirms`() {
         // the connection ends before the confirmation threshold, like a stale-link dial
-        harness.openDial()
-        harness.scheduleFailedDialEnd(DIAL_CONFIRMATION_MS / 2)
+        harness.openDial(atNanos = 0)
+        harness.scheduleFailedDialEnd(handshakeNanos = 0, afterMs = DIAL_CONFIRMATION_MS / 2)
         harness.stopAfterProds = 1
 
         harness.runWatcher()
@@ -159,18 +159,61 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.prods).hasSize(1) // it was a doomed dial: prod
     }
 
+    /**
+     * The CRW-13910 live failure: the Guest's doomed dial died while its next seamless attempt was
+     * already connecting. Prodding there cancelled the dial that was about to work and restarted
+     * the project, which the user saw as the window being replaced.
+     */
     @Test
-    fun `reports recovery when a dial ends after it outlived the confirmation threshold`() {
-        harness.onProd = {
-            harness.openDial()
-            harness.scheduleLongLivedDialEnd(DIAL_CONFIRMATION_MS + 500)
-        }
+    fun `does not prod while a newer dial is in flight when the doomed dial dies`() {
+        harness.openDial(atNanos = 0) // dial H, opened while the network was down
+        harness.scheduleDialHandshake(afterMs = 4_000) // the next seamless attempt, about to work
+        harness.scheduleFailedDialEnd(handshakeNanos = 0, afterMs = 6_000) // dial H's timeout
 
         harness.runWatcher()
 
+        assertThat(harness.prods).isEmpty() // the attempt in flight was not cut
         assertThat(harness.recovered).isEqualTo(1)
-        assertThat(harness.prods).hasSize(1)
         assertThat(harness.failed).isZero()
+    }
+
+    @Test
+    fun `waits for a dial that is connecting before its handshake`() {
+        // an accepted socket with no handshake yet: the Guest is dialing, not gone
+        harness.acceptConnectingDial()
+        harness.scheduleDialHandshake(afterMs = REDIAL_WAIT_MS + 1_000)
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).isEmpty()
+        assertThat(harness.recovered).isEqualTo(1)
+    }
+
+    @Test
+    fun `prods the refreshed link when the Guest's own loop keeps failing`() {
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 1
+        harness.scheduleFailedDials(afterMs = DIAL_AFTER_MS, count = 2)
+
+        harness.runWatcher()
+
+        // the seamless loop is running but cannot succeed: stale rules apply, so the very first
+        // prod carries a fresh link
+        assertThat(harness.prods).hasSize(1)
+        assertThat(harness.refreshes).isEqualTo(1)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
+    }
+
+    @Test
+    fun `prods only after the Guest stops dialing`() {
+        harness.stopAfterProds = 1
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).containsExactly(CACHED_LINK)
+        // the Guest gave up: no socket, no handshake, no failed dial for a redial window
+        assertThat(harness.firstProdAtMs).isGreaterThanOrEqualTo(REDIAL_WAIT_MS)
+        assertThat(harness.refreshes).isZero()
     }
 
     @Test
@@ -218,8 +261,8 @@ class ThinClientRecoveryWatcherTest {
         // the live failure (CRW-13910): dials the Guest closes itself fire no onRemoteEnd, so the
         // episode must not depend on those signals to keep running and reach the stale-link path
         harness.refreshedLink = REFRESHED_LINK
-        harness.openDial() // a doomed dial is open right now
-        harness.scheduleFailedDialEnd(DIAL_CONFIRMATION_MS / 2)
+        harness.openDial(atNanos = 0) // a doomed dial is open right now
+        harness.scheduleFailedDialEnd(handshakeNanos = 0, afterMs = DIAL_CONFIRMATION_MS / 2)
         harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2) }
         harness.stopAfterProds = 2
 
@@ -338,13 +381,16 @@ class ThinClientRecoveryWatcherTest {
     }
 
     @Test
-    fun `repeated episodes report one recovery for the same established session`() {
+    fun `repeated episodes report one recovery for the same established session`() = runBlocking {
         harness.openDial(atNanos = 0)
         harness.advanceClock(DIAL_CONFIRMATION_MS + 1)
+        val watcher = harness.newWatcher()
 
-        harness.runWatcher(startTimes = 3)
+        withTimeout(RUN_TIMEOUT_MS) {
+            // every onRemoteEnd of the settling dial churn starts an episode on the same watcher
+            repeat(3) { watcher.start(this)?.join() }
+        }
 
-        // every onRemoteEnd starts an episode; only the first observes a new session
         assertThat(harness.recovered).isEqualTo(1)
         assertThat(harness.prods).isEmpty()
     }
@@ -448,11 +494,43 @@ private class TestClock {
 
 private const val NANOS_PER_MILLISECOND = 1_000_000L
 
-/** Records the Guest's dials as the watcher observes them. */
+/**
+ * Records the Guest's dials as the watcher observes them.
+ *
+ * A dial is visible from the accepted socket on ([isDialConnecting]) and keeps existing once it
+ * handshook (an entry in [openHandshakes]) until it ends. Several dials can overlap, as the live
+ * capture showed: a doomed dial and the Guest's next seamless attempt.
+ */
 private class FakeDials : ForwardDials {
-    override var oldestActiveHandshakeNanos: Long? = null
+    private val openHandshakes = mutableListOf<Long>()
+
+    /** A dial whose socket is accepted but whose forward handshake has not completed yet. */
+    var isDialConnecting: Boolean = false
+
+    override val isClientDialed: Boolean
+        get() = isDialConnecting || openHandshakes.isNotEmpty()
+
+    override val oldestActiveHandshakeNanos: Long?
+        get() = openHandshakes.minOrNull()
+
     override var lastLongLivedDialNanos: Long? = null
     override var failedDials: Long = 0
+
+    /** The dial handshook at [atNanos]: it is now being copied. */
+    fun handshake(atNanos: Long) {
+        isDialConnecting = false
+        openHandshakes += atNanos
+    }
+
+    /** The dial whose handshake was [handshakeNanos] ended: before confirmation, or after. */
+    fun endDial(handshakeNanos: Long, confirmed: Boolean, endNanos: Long) {
+        openHandshakes.remove(handshakeNanos)
+        if (confirmed) {
+            lastLongLivedDialNanos = endNanos
+        } else {
+            failedDials++
+        }
+    }
 }
 
 /**
@@ -471,6 +549,9 @@ private class Harness {
     var refreshes = 0
     var recovered = 0
     var failed = 0
+
+    /** Virtual time of the first prod, so a test can assert when the observation let it through. */
+    var firstProdAtMs: Long = -1
 
     /** The pod the cached link was built against; `null` disables the roll check. */
     var sessionPod: V1Pod? = null
@@ -505,32 +586,34 @@ private class Harness {
         sleep = clock::sleep
     )
 
-    /** The Guest opens a connection that is being copied from [atNanos] on. */
+    /** The Guest dialed and its forward handshake landed at [atNanos]: a connection is copied. */
     fun openDial(atNanos: Long = clock.now()) {
-        dials.oldestActiveHandshakeNanos = atNanos
+        dials.handshake(atNanos)
     }
 
-    /** The open connection ends [afterMs] later, before it can confirm: a failed dial. */
-    fun scheduleFailedDialEnd(afterMs: Long) {
-        after(afterMs) {
-            dials.oldestActiveHandshakeNanos = null
-            dials.failedDials++
-        }
+    /** A dial's socket is accepted but its forward handshake has not completed yet. */
+    fun acceptConnectingDial() {
+        dials.isDialConnecting = true
     }
 
-    /** The open connection outlives the threshold and then ends: a long-lived dial. */
-    fun scheduleLongLivedDialEnd(afterMs: Long) {
-        after(afterMs) {
-            dials.oldestActiveHandshakeNanos = null
-            dials.lastLongLivedDialNanos = clock.now()
-        }
+    /** A connecting dial's handshake lands [afterMs] later. */
+    fun scheduleDialHandshake(afterMs: Long) {
+        after(afterMs) { dials.handshake(clock.now()) }
+    }
+
+    /** The dial that handshook at [handshakeNanos] ends [afterMs] later, before it can confirm. */
+    fun scheduleFailedDialEnd(handshakeNanos: Long, afterMs: Long) {
+        after(afterMs) { dials.endDial(handshakeNanos, confirmed = false, endNanos = clock.now()) }
+    }
+
+    /** The dial that handshook at [handshakeNanos] outlives the threshold and then ends. */
+    fun scheduleLongLivedDialEnd(handshakeNanos: Long, afterMs: Long) {
+        after(afterMs) { dials.endDial(handshakeNanos, confirmed = true, endNanos = clock.now()) }
     }
 
     /** The Guest's answer to a prod: [count] failed dials, [afterMs] later. */
     fun scheduleFailedDials(afterMs: Long, count: Int = 2) {
-        after(afterMs) {
-            dials.failedDials += count
-        }
+        after(afterMs) { dials.failedDials += count }
     }
 
     /** A long-lived dial ends [afterMs] after the prod. */
@@ -575,6 +658,9 @@ private class Harness {
                 },
                 prod = { link ->
                     prods += link
+                    if (firstProdAtMs < 0) {
+                        firstProdAtMs = clock.now() / NANOS_PER_MILLISECOND
+                    }
                     prodFailure.throwIfSet()
                     onProd()
                     if (prods.size == stopAfterProds) {

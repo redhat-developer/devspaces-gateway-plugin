@@ -36,6 +36,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 private const val NANOS_PER_MILLI = 1_000_000L
@@ -72,6 +73,12 @@ internal class SessionPhase(
     private val failedDialCount = AtomicLong(0)
 
     /**
+     * Accepted client sockets that have not ended yet, so a dial is visible from the moment the
+     * Guest's TCP connection arrives - before its forward handshake has completed.
+     */
+    private val clientDials = AtomicInteger(0)
+
+    /**
      * Handshakes of the connections currently being copied, with a count per timestamp.
      *
      * Keyed by [System.nanoTime] of the handshake rather than by connection, because the phase only
@@ -93,6 +100,15 @@ internal class SessionPhase(
     /** Whether the Guest came up for this session; false until [markEstablished]. */
     val isEstablished: Boolean
         get() = established.get()
+
+    /**
+     * Whether the Guest has a dial open right now: an accepted client socket, handshake or not.
+     *
+     * The pre-handshake phase matters to the recovery watcher: a dial connecting through the
+     * forwarder is not "the Guest gave up", even though it has no handshake to report yet.
+     */
+    val isClientDialed: Boolean
+        get() = clientDials.get() > 0
 
     /**
      * Whether at least one connection whose handshake succeeded is still being copied.
@@ -143,6 +159,16 @@ internal class SessionPhase(
         lastHandshakeNanos = atNanos
     }
 
+    /** A client socket was accepted: a dial exists from now on, handshake pending. */
+    fun recordClientDial() {
+        clientDials.incrementAndGet()
+    }
+
+    /** The dial the accepted socket belonged to is over: handshook or not. */
+    fun recordClientDialEnded() {
+        clientDials.decrementAndGet()
+    }
+
     /** A connection's handshake succeeded, so it is being copied from [handshakeNanos] on. */
     fun recordActiveForward(handshakeNanos: Long) {
         activeHandshakes.merge(handshakeNanos, 1, Int::plus)
@@ -182,6 +208,14 @@ internal class SessionPhase(
  * recovery.
  */
 internal interface ForwardDials {
+    /**
+     * Whether the Guest has a dial open right now: an accepted client socket, handshake or not.
+     *
+     * A dial is not evidence of a session; it is evidence that the Guest has not given up, and that
+     * prodding now would cut a reconnection the Guest's own loop is attempting.
+     */
+    val isClientDialed: Boolean
+
     /**
      * The earliest handshake among the connections still being copied, or null when none is. A
      * handshake older than [DIAL_CONFIRMATION_MS] confirms an established RD session.
@@ -225,6 +259,9 @@ internal class PortForwardSession(
     /** Whether a connection whose handshake succeeded is still being copied; see [SessionPhase]. */
     val hasActiveForward: Boolean
         get() = phase.hasActiveForward
+
+    override val isClientDialed: Boolean
+        get() = phase.isClientDialed
 
     /** [System.nanoTime] when the last failed dial ended; see [SessionPhase]. */
     val lastFailedDialNanos: Long?
@@ -527,6 +564,8 @@ internal class PodPortForwarder(
                 val clientSocket = createClientSocket(serverSocket) ?: break
                 clientSocket.tcpNoDelay = true
                 state.clientSockets.add(clientSocket)
+                // visible to the recovery watcher from the first byte: the handshake may take a while
+                state.phase.recordClientDial()
 
                 launch {
                     handleConnection(clientSocket, state)
@@ -563,6 +602,7 @@ internal class PodPortForwarder(
             // this connection is over, whether it was copied, failed or was cancelled: a connection
             // that never handshook passes null and must not decrement the active-forward counter
             state.phase.recordEndedForward(dial.handshakeNanos)
+            state.phase.recordClientDialEnded()
             state.clientSockets.remove(clientSocket)
             closeQuietly(clientSocket)
         }
