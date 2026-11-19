@@ -51,6 +51,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * window is replaced by a new frame. The Guest's own seamless loop preserves the frame, so the
  * watcher lets it finish a dial in flight and only prods once that loop is proven unable to recover.
  *
+ * **A link known stale is never prodded.** Such a prod cannot succeed - the session token is
+ * unknown to the new idea-server - and each one makes the Guest re-open its project against a dead
+ * session, burning its project-open retries: CRW-13910 live testing saw the Guest close itself
+ * (exitCode 178) after two prods carrying a stale link. Without a rebuilt link the watcher waits.
+ *
  * **It resolves the pod workspace-scoped, not from the session.** The pod the forward was pinned to
  * is exactly the pod that may be gone after a roll, and nothing refreshes it: the forwarder's own
  * re-resolution needs an accepted connection, and in this outage the Guest has stopped dialing, so
@@ -405,18 +410,12 @@ internal class ThinClientRecoveryWatcher(
      */
     @Suppress("TooGenericExceptionCaught") // the seams throw whatever the platform throws
     private suspend fun deliverProd(episode: Episode): ProdDelivery? {
-        val link = try {
-            linkFor(episode)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            thisLogger().warn("Could not build a join link to prod the JetBrains Client with.", e)
-            return null
-        }
+        // null link = nothing may be prodded yet; the cached link is never used as a substitute
+        val link = prodLinkOrNull(episode) ?: return null
         return try {
-            collaborators.prod(link)
+            collaborators.prod(link.uri)
             episode.attempt++
-            if (link != collaborators.cachedLink) {
+            if (link.isRefreshed) {
                 episode.sentRefreshedLink = true
             }
             thisLogger().info("Prodded the JetBrains Client to reconnect (attempt ${episode.attempt}).")
@@ -430,31 +429,65 @@ internal class ThinClientRecoveryWatcher(
         }
     }
 
+    /** [linkFor], with a failing link build treated as "nothing to send yet". */
+    @Suppress("TooGenericExceptionCaught") // the seams throw whatever the platform throws
+    private suspend fun prodLinkOrNull(episode: Episode): ProdLink? = try {
+        linkFor(episode)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        thisLogger().warn("Could not build a join link to prod the JetBrains Client with.", e)
+        null
+    }
+
     /**
-     * The link to prod with.
+     * The link to prod with, or `null` when the Guest must not be prodded yet.
      *
-     * The first prod of an episode sends [Collaborators.cachedLink] as-is while that link is still
-     * valid: it costs nothing. A stale link - a replaced pod, or only failed dials - is refreshed
-     * first, on the first attempt too, because prodding the failed link can only fail again. The
-     * reconnect nonce is added from the second attempt on, where the Guest may already have seen
+     * A valid link (the first prod of a non-stale episode) is sent as-is: it costs nothing. A link
+     * known stale - a replaced pod, or only failed dials - is only ever sent rebuilt: prodding the
+     * dead one cannot succeed, and every prod makes the Guest dispose and re-open its project
+     * against a dead session, which burns its project-open retries (CRW-13910 live testing: the
+     * Guest closed itself after two such prods, exitCode 178). While no fresh link exists yet the
+     * answer is therefore `null` - no prod, keep polling.
+     *
+     * The reconnect nonce is added from the second prod on, where the Guest may already have seen
      * the previous link.
      */
-    private suspend fun linkFor(episode: Episode): URI {
+    private suspend fun linkFor(episode: Episode): ProdLink? {
         val attempt = episode.attempt + 1
-        if (attempt == 1 && !episode.mustRefreshLink) {
-            return collaborators.cachedLink
-        }
-        val base = if (episode.mustRefreshLink) {
-            collaborators.refreshLink() ?: collaborators.cachedLink
+        val link = if (episode.mustRefreshLink) {
+            freshLinkOrWait(episode)
         } else {
-            collaborators.cachedLink
+            ProdLink(collaborators.cachedLink, isRefreshed = false)
         }
-        return if (attempt <= 1) {
-            base
-        } else {
-            ThinClientJoinLink.withReconnectNonce(base, attempt.toLong())
-        }
+        return link?.let { ProdLink(withNonceIfNeeded(it.uri, attempt), it.isRefreshed) }
     }
+
+    /**
+     * A rebuilt link, or `null` while the IDE server cannot report one yet.
+     *
+     * The wait is logged once per stretch, not on every poll: the watcher keeps calling this until
+     * the link exists, so a per-call log would flood the one period a live test needs to read.
+     */
+    private suspend fun freshLinkOrWait(episode: Episode): ProdLink? {
+        val refreshed = collaborators.refreshLink()
+        if (refreshed != null) {
+            episode.reportedMissingFreshLink = false
+            return ProdLink(refreshed, isRefreshed = true)
+        }
+        if (!episode.reportedMissingFreshLink) {
+            episode.reportedMissingFreshLink = true
+            thisLogger().info(
+                "The join link is stale and no fresh link is available yet; waiting for the IDE " +
+                    "server to report one."
+            )
+        }
+        return null
+    }
+
+    /** Defeats the Guest's same-link no-op guard from the second prod of an episode on. */
+    private fun withNonceIfNeeded(link: URI, attempt: Int): URI =
+        if (attempt == 1) link else ThinClientJoinLink.withReconnectNonce(link, attempt.toLong())
 
     /**
      * Waits one redial window for the Guest's dials to prove recovery, or to prove the link stale.
@@ -592,8 +625,11 @@ internal class ThinClientRecoveryWatcher(
         var mustRefreshLink: Boolean = false
         var podRolled: Boolean = false
 
-        /** Whether a prod has carried a link different from the cached one. */
+        /** Whether a prod has carried a rebuilt link: only then may the Guest's dials be awaited. */
         var sentRefreshedLink: Boolean = false
+
+        /** Whether the "stale but no fresh link yet" wait of this episode has been logged. */
+        var reportedMissingFreshLink: Boolean = false
         var isFinished: Boolean = false
     }
 
@@ -603,6 +639,12 @@ internal class ThinClientRecoveryWatcher(
      * attempt, not to the one being measured.
      */
     private class ProdDelivery(val sentAtNanos: Long, val failedDialsAtProd: Long)
+
+    /**
+     * A link to prod with, and whether it was rebuilt. Only a rebuilt link can unblock a workspace
+     * whose pod was replaced, which is what re-enables observing the Guest's own dials.
+     */
+    private class ProdLink(val uri: URI, val isRefreshed: Boolean)
 
     /**
      * The Guest's dial state at one sample of the observation. Any change counts as activity, so a

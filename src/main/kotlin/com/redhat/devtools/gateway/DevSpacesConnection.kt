@@ -351,14 +351,23 @@ class DevSpacesConnection internal constructor(
      * [IOException] means "no running, ready pod yet", which is not a recovery failure — the watcher
      * keeps polling. [RemoteIDEServer.getStatus] execs the IDE server status once, bounded by
      * [RemoteIDEServer.STATUS_EXEC_TIMEOUT], and runs off the EDT.
+     *
+     * A server that answers but reports no usable link is logged at info: recovery waits instead of
+     * prodding while that is the case, so "why is it not prodding?" must be answerable from the log.
      */
     @Suppress("TooGenericExceptionCaught") // a malformed link or a failed exec only means "poll again"
     private fun refreshJoinLink(workspace: DevWorkspace, localPort: Int): suspend () -> URI? = {
         try {
             val status = RemoteIDEServer(devSpacesContext, workspace).getStatus()
-            status.joinLink
-                ?.takeIf { status.isReady }
-                ?.let { ThinClientJoinLink.toLocal(URI(it), localPort) }
+            if (status.isReady && status.joinLink != null) {
+                ThinClientJoinLink.toLocal(URI(status.joinLink), localPort)
+            } else {
+                thisLogger().info(
+                    "Workspace '${workspace.name}' reports no join link yet " +
+                        "(ready=${status.isReady}); recovery waits for a fresh link."
+                )
+                null
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {

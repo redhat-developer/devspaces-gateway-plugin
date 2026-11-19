@@ -309,19 +309,52 @@ class ThinClientRecoveryWatcherTest {
     }
 
     @Test
-    fun `keeps polling when a replaced pod cannot report a link yet`() {
+    fun `never prods the cached link after a pod roll while no fresh link exists`() {
+        // the live failure (CRW-13910, idea-server restart in place): the link is known stale and
+        // the replacement server does not report a link yet, so prodding could only burn the
+        // Guest's project-open retries - the Guest closed itself after two such prods
         harness.sessionPod = OLD_POD
         harness.pod = NEW_POD
         harness.refreshedLink = null
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).isEmpty()
+        assertThat(harness.refreshes).isGreaterThan(1) // kept asking for a fresh link
+        assertThat(harness.failed).isEqualTo(1) // the budget, exactly once
+    }
+
+    @Test
+    fun `never prods a stale link proven by failed dials while no fresh link exists`() {
+        harness.refreshedLink = null
+        harness.onProd = {}
+        harness.scheduleFailedDials(afterMs = DIAL_AFTER_MS, count = 2)
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).isEmpty()
+        assertThat(harness.prods).doesNotContain(CACHED_LINK)
+        assertThat(harness.refreshes).isGreaterThan(1)
+        assertThat(harness.failed).isEqualTo(1)
+    }
+
+    @Test
+    fun `prods the fresh link as soon as the IDE server reports one`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD
+        harness.refreshedLink = REFRESHED_LINK
+        // the new server needs a few polls before it can report a link
+        harness.refreshLinkResult = { call -> if (call <= 3) null else REFRESHED_LINK }
         harness.stopAfterProds = 2
 
         harness.runWatcher()
 
-        // falling back per the current rules: the cached link, with the nonce from the second prod on
+        // the cached link was never sent; the first delivered prod already carries the fresh one
         assertThat(harness.prods).hasSize(2)
-        assertThat(harness.refreshes).isEqualTo(2)
-        assertThat(harness.prods[0]).isEqualTo(CACHED_LINK)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
+        assertThat(harness.prods[0].rawFragment).doesNotContain(NONCE_PARAMETER)
         assertThat(harness.prods[1].rawFragment).contains("$NONCE_PARAMETER=2")
+        assertThat(harness.refreshes).isGreaterThan(3) // the null stretch plus one rebuild per prod
     }
 
     @Test
@@ -565,6 +598,9 @@ private class Harness {
     var refreshedLink: URI? = null
     var clientPresent = true
 
+    /** The link a refresh reports, by call number: lets a test model a server that is not ready yet. */
+    var refreshLinkResult: (call: Int) -> URI? = { refreshedLink }
+
     /** Virtual time a link refresh takes: a stale link's status exec can outlast the redial window. */
     var refreshDelayMs = 0L
 
@@ -654,7 +690,7 @@ private class Harness {
                     refreshes++
                     if (refreshDelayMs > 0) clock.advance(refreshDelayMs)
                     refreshFailure.throwIfSet()
-                    refreshedLink
+                    refreshLinkResult(refreshes)
                 },
                 prod = { link ->
                     prods += link
