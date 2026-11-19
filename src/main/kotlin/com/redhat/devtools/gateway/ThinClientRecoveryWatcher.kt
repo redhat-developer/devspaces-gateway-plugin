@@ -16,6 +16,7 @@ import com.redhat.devtools.gateway.openshift.DIAL_CONFIRMATION_MS
 import com.redhat.devtools.gateway.openshift.ForwardDials
 import com.redhat.devtools.gateway.openshift.describePod
 import com.redhat.devtools.gateway.openshift.isSamePod
+import com.redhat.devtools.gateway.util.callerFrames
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -142,6 +143,9 @@ internal class ThinClientRecoveryWatcher(
         /** A lone failed dial is not evidence of a stale link; a run of them is. */
         const val FAILED_DIALS_FOR_STALE: Long = 2
 
+        /** Every nth observation sample is logged (~5 s at the 250 ms poll). */
+        const val OBSERVATION_LOG_EVERY_SAMPLES: Int = 20
+
         const val MIN_SLEEP_MS: Long = 1
         const val NANOS_PER_MILLI: Long = 1_000_000
         const val MILLIS_PER_SECOND: Long = 1_000
@@ -182,6 +186,8 @@ internal class ThinClientRecoveryWatcher(
 
     /** Stops the loop promptly: its next suspension throws, so no further prod is sent. */
     fun stop() {
+        // who cancelled the loop is not visible from the loop's own death log alone
+        thisLogger().info("Stopping connection recovery; caller=${callerFrames(javaClass.name)}")
         active.set(false)
         job?.cancel()
         job = null
@@ -201,6 +207,11 @@ internal class ThinClientRecoveryWatcher(
                 reportFailure()
             }
         } finally {
+            thisLogger().info(
+                "Connection recovery loop ended: active=${active.get()}, " +
+                    "finished=${episode.isFinished}, attempts=${episode.attempt}, " +
+                    "budgetExhausted=${isBudgetExhausted(episode)}"
+            )
             finish()
         }
     }
@@ -341,6 +352,7 @@ internal class ThinClientRecoveryWatcher(
         var lastActivityNanos = observationStartNanos
         var previous = dialSnapshot()
         var outcome: Observation? = null
+        var samples = 0
 
         while (outcome == null && active.get()) {
             when {
@@ -357,6 +369,9 @@ internal class ThinClientRecoveryWatcher(
                         previous = snapshot
                         lastActivityNanos = timing.nowNanos()
                     }
+                    if (++samples % OBSERVATION_LOG_EVERY_SAMPLES == 0) {
+                        logObservationSample(snapshot, failedDialsAtStart, lastActivityNanos)
+                    }
                     outcome = decideObservation(episode, snapshot, failedDialsAtStart, lastActivityNanos)
                     if (outcome == null) {
                         timing.sleep(OUTCOME_POLL_INTERVAL_MS)
@@ -365,6 +380,25 @@ internal class ThinClientRecoveryWatcher(
             }
         }
         return outcome ?: Observation.STOPPED
+    }
+
+    /**
+     * States what the silent observation phase currently sees: whether a dial is in flight, what
+     * the session reports, and how long nothing has changed. Debug only.
+     */
+    private fun logObservationSample(
+        snapshot: DialSnapshot,
+        failedDialsAtStart: Long,
+        lastActivityNanos: Long
+    ) {
+        thisLogger().debug(
+            "Recovery observation: inFlight=${snapshot.isInFlight}, " +
+                "isClientDialed=${snapshot.isClientDialed}, " +
+                "oldestActiveHandshake=${snapshot.oldestActiveHandshakeNanos != null}, " +
+                "failedDials=${snapshot.failedDials} " +
+                "(delta ${snapshot.failedDials - failedDialsAtStart}), " +
+                "lastActivityAgeMs=${(timing.nowNanos() - lastActivityNanos) / NANOS_PER_MILLI}"
+        )
     }
 
     /**

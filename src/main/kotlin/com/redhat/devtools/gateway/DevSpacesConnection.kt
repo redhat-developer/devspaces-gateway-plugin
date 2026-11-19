@@ -30,6 +30,7 @@ import com.redhat.devtools.gateway.openshift.PortForwarder
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
+import com.redhat.devtools.gateway.util.callerFrames
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
@@ -319,6 +320,12 @@ class DevSpacesConnection internal constructor(
     private fun stopRecovery(): Boolean {
         val watcher = recoveryWatcher
         val wasActive = watcher?.isActive == true
+        if (watcher != null) {
+            thisLogger().info(
+                "Stopping connection recovery (wasActive=$wasActive); " +
+                    "caller=${callerFrames(javaClass.name)}"
+            )
+        }
         watcher?.stop()
         recoveryWatcher = null
         recoveryScope?.cancel()
