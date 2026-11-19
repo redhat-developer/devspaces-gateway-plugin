@@ -72,10 +72,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 2. a connection older than the confirmation threshold -> recovered, the session is established
  * 3. no running+ready pod, or the probe fails -> poll again (cheap list, no prod)
  * 4. the workspace pod was replaced -> the cached link is stale: refresh it and prod at once
- * 5. the Guest's own seamless reconnection loop is observed first: a dial in flight is awaited, a
- *    confirmed one is recovery (the frame is preserved); a run of failed dials or a silent redial
- *    window means that loop cannot recover, and only then is the Guest prodded - a prod restarts
- *    the project, which the user sees as the window being replaced
+ * 5. the Guest's own seamless reconnection loop is observed first: a dial in flight is awaited (a
+ *    run of failed dials outranks it - overlapping doomed dials never leave a gap), a confirmed one
+ *    is recovery (the frame is preserved); a run of failed dials or a silent redial window means
+ *    that loop cannot recover, and only then is the Guest prodded - a prod restarts the project,
+ *    which the user sees as the window being replaced
  * 6. the prod starts an observation window:
  *    a confirmed dial -> recovered
  *    a run of failed dials -> the link looks stale, the next attempt refreshes it
@@ -339,8 +340,10 @@ internal class ThinClientRecoveryWatcher(
      * - a dial in flight (accepted socket or unconfirmed handshake) -> wait for it;
      * - it survives the confirmation threshold -> recovered, no prod, frame preserved;
      * - it ends before confirming -> count the failed dial and keep observing;
-     * - no dial in flight and a run of failed dials -> the loop runs but cannot succeed (stale
-     *   link): prod, refreshing the link;
+     * - a run of failed dials -> the loop runs but cannot succeed (stale link): prod, refreshing
+     *   the link. This outranks a dial in flight: the Guest re-dials before the previous doomed dial
+     *   ends, so waiting for a dial to end would never release while the Guest keeps overlapping
+     *   its dials - only the episode budget would end the wait;
      * - no dial activity at all for a redial window -> the Guest gave up: prod the cached link.
      *
      * It always terminates: the failed-dial run bounds the churn case, the idle window bounds the
@@ -404,9 +407,22 @@ internal class ThinClientRecoveryWatcher(
     /**
      * The observation's verdict for the current dial state, or `null` to keep observing.
      *
-     * A dial in flight always wins: the Guest is still trying, and prodding would cut it. Once
-     * nothing is in flight, a run of failed dials means its loop cannot succeed, while plain
-     * silence means it gave up.
+     * A run of failed dials outranks a dial in flight, because overlapping doomed dials never leave
+     * a gap: CRW-13910 live measurement saw the Guest's seamless loop re-dial every ~5 s while each
+     * doomed dial lived ~6.5 s (the Guest's own 6 s transport timeout), so a dial was always in
+     * flight and waiting for one to end would wait forever.
+     *
+     * That is safe because a failed dial is only counted when its forward handshake was delivered
+     * and the Guest still dropped it within the confirmation threshold
+     * ([DIAL_CONFIRMATION_MS]); a dial that never handshook - a network cut - is not counted. With a
+     * working link the RD session establishes and the connection lives for minutes, so two failed
+     * dials prove every dial carrying the cached link is doomed, including the one in flight.
+     * Prodding it costs nothing (it dies at its transport timeout anyway) and its end would change
+     * nothing.
+     *
+     * A network cut keeps its protection: its dials never handshake, so `failedDials` stays flat and
+     * the in-flight guard below holds the prod while the Guest is still trying. Once no dial is in
+     * flight, plain silence for a redial window means the Guest gave up.
      */
     private fun decideObservation(
         episode: Episode,
@@ -414,11 +430,12 @@ internal class ThinClientRecoveryWatcher(
         failedDialsAtStart: Long,
         lastActivityNanos: Long
     ): Observation? = when {
-        snapshot.isInFlight -> null
-        collaborators.session.failedDials - failedDialsAtStart >= FAILED_DIALS_FOR_STALE -> {
+        snapshot.failedDials - failedDialsAtStart >= FAILED_DIALS_FOR_STALE -> {
             staleLink(episode)
             Observation.PROD
         }
+
+        snapshot.isInFlight -> null
 
         timing.nowNanos() - lastActivityNanos >= millisToNanos(timing.redialWaitMs) ->
             Observation.PROD

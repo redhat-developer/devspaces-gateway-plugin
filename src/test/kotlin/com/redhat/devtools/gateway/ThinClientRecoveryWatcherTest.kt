@@ -177,6 +177,33 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.failed).isZero()
     }
 
+    /**
+     * The CRW-13910 in-place idea-server restart, from the live capture: the Guest's seamless loop
+     * re-dialed every ~5 s while each doomed dial lived ~6.5 s (its own 6 s transport timeout), so a
+     * dial was in flight at every sample. Waiting for one to end never terminates; a run of failed
+     * dials must outrank it.
+     */
+    @Test
+    fun `prods while a doomed dial is in flight when the Guest redials before the previous one dies`() {
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 1
+        harness.scheduleDoomedDial(handshakeAtMs = 0, lifetimeMs = 6_500)
+        harness.scheduleDoomedDial(handshakeAtMs = 5_000, lifetimeMs = 6_500)
+        harness.scheduleDoomedDial(handshakeAtMs = 10_000, lifetimeMs = 6_500) // still open at the prod
+
+        harness.runWatcher()
+
+        // stale rules applied from the first prod: overlapping failed dials proved the link stale
+        assertThat(harness.prods).hasSize(1)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
+        assertThat(harness.refreshes).isEqualTo(1)
+        // dial 3 opened at 10 s and only dies at 16.5 s: the prod fired with it still open, as soon
+        // as dials 1 and 2 had both failed. Waiting for the dial to end would postpone it to 16.5 s
+        // at best and forever while the Guest keeps overlapping dials.
+        assertThat(harness.firstProdAtMs).isGreaterThanOrEqualTo(11_000)
+        assertThat(harness.firstProdAtMs).isLessThan(16_500)
+    }
+
     @Test
     fun `waits for a dial that is connecting before its handshake`() {
         // an accepted socket with no handshake yet: the Guest is dialing, not gone
@@ -640,6 +667,19 @@ private class Harness {
     /** The dial that handshook at [handshakeNanos] ends [afterMs] later, before it can confirm. */
     fun scheduleFailedDialEnd(handshakeNanos: Long, afterMs: Long) {
         after(afterMs) { dials.endDial(handshakeNanos, confirmed = false, endNanos = clock.now()) }
+    }
+
+    /**
+     * A doomed dial as the live capture saw it: its handshake lands [handshakeAtMs] after this call
+     * and the Guest drops it [lifetimeMs] later, before it can confirm. Several of them can overlap,
+     * which is what the Guest's seamless loop does while a stale link is cached.
+     */
+    fun scheduleDoomedDial(handshakeAtMs: Long, lifetimeMs: Long) {
+        val handshakeNanos = clock.now() + handshakeAtMs * NANOS_PER_MILLISECOND
+        clock.schedule(handshakeNanos) { dials.handshake(handshakeNanos) }
+        clock.schedule(handshakeNanos + lifetimeMs * NANOS_PER_MILLISECOND) {
+            dials.endDial(handshakeNanos, confirmed = false, endNanos = clock.now())
+        }
     }
 
     /** The dial that handshook at [handshakeNanos] outlives the threshold and then ends. */
