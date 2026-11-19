@@ -80,6 +80,15 @@ class PodPortForwarderTest {
         private const val PROBE_BOUND_MS = 100L
 
         /**
+         * Bound of one port-forward open in the hang tests: production uses [OPEN_TIMEOUT_MS]
+         * (10 s), far too long for a test that provokes the hang.
+         */
+        private const val OPEN_BOUND_MS = 200L
+
+        /** How long a bounded open may take to free its blocked thread after the bound fired. */
+        private const val OPEN_RELEASE_TIMEOUT_MS = 5_000L
+
+        /**
          * Safety cap of the open that outlives [PROBE_BOUND_MS]. The test releases the open itself,
          * so the hang lasts until then: no scheduling delay can shorten the margin under test.
          */
@@ -826,35 +835,110 @@ class PodPortForwarderTest {
 
     @Test
     fun `#probe fails when the open hangs past the bound`() = runBlocking {
-        // given - an API server that does not answer within the (test-shortened) bound
+        // given - the pod websocket never initializes: client-java's open blocks until interrupted
         val releaseOpen = CountDownLatch(1)
         val openFinished = CountDownLatch(1)
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } answers {
-            releaseOpen.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)
-            try {
-                mockk<PortForward.PortForwardResult>(relaxed = true)
-            } finally {
-                openFinished.countDown()
+        val forwarder = PodPortForwarder(
+            client,
+            probeTimeoutMs = PROBE_BOUND_MS,
+            openForward = { _, _ ->
+                try {
+                    releaseOpen.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)
+                    hangingOpenResult()
+                } finally {
+                    openFinished.countDown()
+                }
             }
-        }
-        val forwarder = PodPortForwarder(client, probeTimeoutMs = PROBE_BOUND_MS)
+        )
 
         // when
         val startedAtNanos = System.nanoTime()
         val opened = forwarder.probe(pod, remotePort)
         val elapsedMs = (System.nanoTime() - startedAtNanos) / NANOS_PER_MILLI
 
-        // then - a hanging open counts as a failed probe, and the probe returns while the open is
-        // still pending: the bound ends it, not the open. Both checks are load-independent.
-        assertThat(opened).isFalse()
-        assertThat(openFinished.count).isEqualTo(1)
-        assertThat(elapsedMs).isLessThan(HUNG_OPEN_CAP_MS)
-        // let the abandoned open finish so this test leaves no thread inside the mock
-        releaseOpen.countDown()
-        assertThat(openFinished.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)).isTrue()
-        delay(100.milliseconds)
+        try {
+            // then - a hanging open counts as a failed probe within the bound, and the blocked open
+            // is interrupted, so it does not stay pending for the life of the process
+            assertThat(opened).isFalse()
+            assertThat(elapsedMs).isLessThan(HUNG_OPEN_CAP_MS)
+            assertThat(openFinished.await(OPEN_RELEASE_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+        } finally {
+            // if the interruption ever regressed, fail the assertion above instead of hanging here
+            releaseOpen.countDown()
+        }
+    }
+
+    @Test
+    fun `#forward reclaims a dial whose open hangs`() {
+        // given - the live freeze (CRW-13910): client-java's PortForward.forward blocks in
+        // waitForInitialized() forever, so the dial could neither retry nor end
+        val releaseOpen = CountDownLatch(1)
+        val openAttempts = AtomicInteger()
+        val hangingResult = hangingOpenResult()
+        val forwarder = PodPortForwarder(
+            client,
+            openTimeoutMs = OPEN_BOUND_MS,
+            openForward = { _, _ ->
+                openAttempts.incrementAndGet()
+                // every open blocks until its bound interrupts it, like the stalled websocket
+                releaseOpen.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)
+                hangingResult
+            }
+        ) { PodLiveness.RUNNING }
+        val session = forwarder.forward(pod, remotePort)
+        val socket = Socket("127.0.0.1", session.localPort)
+
+        try {
+            // when / then - the dial is visible, its bounded opens fail retryably, the loop goes on,
+            // and the dial can still end: the state the recovery observation froze on clears again
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { session.isClientDialed }).isTrue()
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { openAttempts.get() >= 2 }).isTrue()
+        } finally {
+            releaseOpen.countDown()
+            socket.close()
+            session.close()
+        }
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { !session.isClientDialed }).isTrue()
+    }
+
+    @Test
+    fun `#forward retries a dial whose open timed out`() {
+        // given - the first open hangs and is bounded; the pod then answers normally
+        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        val releaseOpen = CountDownLatch(1)
+        val openAttempts = AtomicInteger()
+        val forwarder = PodPortForwarder(
+            client,
+            openTimeoutMs = OPEN_BOUND_MS,
+            openForward = { _, _ ->
+                if (openAttempts.incrementAndGet() == 1) {
+                    try {
+                        releaseOpen.await(HUNG_OPEN_CAP_MS, TimeUnit.MILLISECONDS)
+                    } finally {
+                        releaseOpen.countDown()
+                    }
+                }
+                portForwardResult
+            }
+        ) { PodLiveness.RUNNING }
+        val session = forwarder.forward(pod, remotePort)
+        val socket = Socket("127.0.0.1", session.localPort)
+
+        try {
+            // then - the timed-out open is a failed handshake, not a cancellation of the dial
+            assertThat(
+                awaitTrue(STEADY_STATE_RETRY_TIMEOUT_MS) {
+                    session.lastSuccessfulHandshakeNanos != null
+                }
+            ).isTrue()
+            assertThat(openAttempts.get()).isGreaterThanOrEqualTo(2)
+        } finally {
+            releaseOpen.countDown()
+            socket.close()
+            session.close()
+        }
     }
 
     @Test
@@ -1177,6 +1261,10 @@ class PodPortForwarderTest {
             throw IOException("broken pipe")
         }
     }
+
+    /** The result a hanging open would produce if it ever finished: it never does, the bound wins. */
+    private fun hangingOpenResult(): PortForward.PortForwardResult =
+        mockk(relaxed = true)
 
     /** A pod stream that reports EOF after [delayMs]: a dialed connection that ends by itself. */
     private fun eofAfter(delayMs: Long): InputStream = object : InputStream() {

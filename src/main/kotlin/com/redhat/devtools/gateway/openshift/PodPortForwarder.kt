@@ -13,6 +13,7 @@ package com.redhat.devtools.gateway.openshift
 
 import com.intellij.openapi.diagnostic.logger
 import com.redhat.devtools.gateway.util.isCancellationException
+import io.kubernetes.client.PortForward
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.CoroutineScope
@@ -166,7 +167,14 @@ internal class SessionPhase(
 
     /** The dial the accepted socket belonged to is over: handshook or not. */
     fun recordClientDialEnded() {
-        clientDials.decrementAndGet()
+        // clamped: a connection coroutine cancelled before it started has no finally, while the
+        // listener close below resets the count, so a late end must not make it negative
+        clientDials.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
+    }
+
+    /** The session's listener is closed: no dial can be in flight any more. */
+    fun clearClientDials() {
+        clientDials.set(0)
     }
 
     /** A connection's handshake succeeded, so it is being copied from [handshakeNanos] on. */
@@ -431,7 +439,7 @@ private class DialState {
  * DevWorkspace stays Running does not end the session: the forward retargets to the pod that
  * replaced it, so a re-dial reaches whatever pod currently serves the workspace.
  */
-@Suppress("TooManyFunctions") // the forwarder seam plus its socket plumbing form one cohesive unit
+@Suppress("TooManyFunctions", "LongParameterList") // one cohesive unit; the extra params are seams
 internal class PodPortForwarder(
     client: ApiClient,
     /**
@@ -456,6 +464,17 @@ internal class PodPortForwarder(
      */
     private val confirmationMs: Long = DIAL_CONFIRMATION_MS,
     /**
+     * Upper bound of one port-forward open; see [OPEN_TIMEOUT_MS]. Overridable so tests can
+     * exercise a hung open with a short bound instead of waiting the production timeout out.
+     */
+    private val openTimeoutMs: Long = OPEN_TIMEOUT_MS,
+    /**
+     * Opens a pod port forward; see [ForwardAttempt.openForward]. Overridable so a test can block
+     * an open without mocking client-java - the bound interrupts the blocked thread.
+     */
+    private val openForward: (V1Pod, Int) -> PortForward.PortForwardResult =
+        { pod, remotePort -> PortForward(client).forward(pod, listOf(remotePort)) },
+    /**
      * Returns pod liveness state to decide whether a failed forward may be retried.
      * Overridable in tests because [PodLiveness] is module-internal.
      */
@@ -471,7 +490,7 @@ internal class PodPortForwarder(
     }
 
     private val logger = logger<PodPortForwarder>()
-    private val forwardAttempt = ForwardAttempt(client)
+    private val forwardAttempt = ForwardAttempt(client, openTimeoutMs, openForward)
     private val retryPolicy = ForwardRetryPolicy(nowNanos, livenessProvider)
 
     override fun forward(
@@ -541,8 +560,12 @@ internal class PodPortForwarder(
      * coroutine cancellation. Closing the sockets is what makes the client notice the loss.
      */
     private fun closeClientSockets(state: ForwardState) {
-        val sockets = state.clientSockets.toList()
+        // no size-optimised toList(): a connection can end concurrently and empty the set between
+        // its size check and its single-element read, which throws NoSuchElementException
+        val sockets = mutableListOf<Socket>()
+        state.clientSockets.forEach { socket -> sockets += socket }
         state.clientSockets.clear()
+        state.phase.clearClientDials()
         if (sockets.isNotEmpty()) {
             logger.info(
                 "Closing ${sockets.size} client connection(s) of port forward " +

@@ -19,8 +19,15 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeout
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PushbackInputStream
@@ -59,10 +66,41 @@ internal sealed interface AttemptResult {
 }
 
 /**
+ * Upper bound of one port-forward open.
+ *
+ * client-java's `PortForward.forward` ends with `WebSocketStreamHandler.waitForInitialized()`, an
+ * unbounded `Object.wait()` until the port-forward websocket initializes. When that websocket
+ * stalls - observed right after an idea-server process was killed - the open never returns: the
+ * dial hangs inside attempt #1, so the retry policy, the client-gone probe and the dial's end are
+ * all behind a blocked call, and a live `isClientDialed` never clears. Healthy opens take 0.3-0.6 s;
+ * 10 s bounds the hang with headroom for a slow cluster.
+ *
+ * The open is made interruptible ([runInterruptible]): `Object.wait` responds to
+ * `Thread.interrupt`, so the bound actually frees the thread. Accepted trade-off: an interrupted
+ * open can leave its half-initialized websocket unclosed, because client-java hands out no handle
+ * for an open that never completed - a rare, bounded leak instead of an eternal hang.
+ */
+internal const val OPEN_TIMEOUT_MS: Long = 10_000
+
+/**
  * Runs a single forwarding attempt against a pod: opens the port forward, pumps both directions
  * until one side ends the connection, and closes the streams afterwards.
  */
-internal class ForwardAttempt(private val client: ApiClient) {
+internal class ForwardAttempt(
+    client: ApiClient,
+    /**
+     * Upper bound of one open; see [OPEN_TIMEOUT_MS]. Overridable so tests can exercise the bound
+     * with a short hang instead of waiting the production timeout out.
+     */
+    private val openTimeoutMs: Long = OPEN_TIMEOUT_MS,
+    /**
+     * Opens the tunnel to a pod port. Overridable so a test can block it without mocking
+     * client-java: the bound works by interrupting the blocked thread, and interrupting a mocked
+     * call corrupts mockk's global state, which would poison every later test in the class.
+     */
+    private val openForward: (V1Pod, Int) -> PortForward.PortForwardResult =
+        { pod, remotePort -> PortForward(client).forward(pod, listOf(remotePort)) }
+) {
 
     companion object {
         const val COPY_BUFFER_SIZE = 64 * 1024
@@ -97,7 +135,7 @@ internal class ForwardAttempt(private val client: ApiClient) {
         }
     }
 
-    private fun openForward(pod: V1Pod, ports: PortMapping): PortForward.PortForwardResult {
+    private suspend fun openForward(pod: V1Pod, ports: PortMapping): PortForward.PortForwardResult {
         val opened = openForwardTo(pod, ports.remotePort)
         logger.info("forward successful: ${ports.localPort} -> ${ports.remotePort}...")
         return opened
@@ -127,8 +165,38 @@ internal class ForwardAttempt(private val client: ApiClient) {
         }
     }
 
-    private fun openForwardTo(pod: V1Pod, remotePort: Int): PortForward.PortForwardResult =
-        PortForward(client).forward(pod, listOf(remotePort))
+    /**
+     * Opens the forward, bounded to [openTimeoutMs] and interruptible, so a stalled websocket
+     * initialization cannot pin the dial ([OPEN_TIMEOUT_MS]).
+     *
+     * A bound that expires is a *failed handshake*: the connection could not be established, so the
+     * retry loop may try again. It is not the dial's cancellation, which must keep propagating (the
+     * session is closing). [runInterruptible] interrupts the blocked thread, which is what makes
+     * `waitForInitialized` return at all.
+     */
+    private suspend fun openForwardTo(pod: V1Pod, remotePort: Int): PortForward.PortForwardResult =
+        try {
+            withTimeout(openTimeoutMs) {
+                runInterruptible(Dispatchers.IO) {
+                    openForward(pod, remotePort)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw openFailure(e, "timed out after $openTimeoutMs ms")
+        } catch (e: InterruptedException) {
+            throw openFailure(e, "was interrupted before the stream initialized")
+        }
+
+    /**
+     * Classifies a failed bounded open. The dial being cancelled is not a failure of the attempt and
+     * keeps propagating; anything else is a retryable [IOException].
+     */
+    private suspend fun openFailure(cause: Exception, reason: String): Exception =
+        if (currentCoroutineContext().isActive) {
+            IOException("Port forward open $reason", cause)
+        } else {
+            CancellationException("Port forward open cancelled")
+        }
 
     private suspend fun copyStreams(
         clientSocket: Socket,
