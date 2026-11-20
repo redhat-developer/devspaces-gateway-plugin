@@ -9,14 +9,28 @@ import javax.swing.Icon
 
 object Dialogs {
 
+    /**
+     * Shows an error dialog on the EDT.
+     *
+     * Posted with [ModalityState.any]: callers report failures from a background coroutine while a
+     * modal dialog may still be open, and the default (non-modal) modality defers the post until
+     * every open modality closes. CRW-13910 live testing saw the recovery failure dialog appear only
+     * after the user dismissed the Gateway wizard, minutes after the failure was reported.
+     *
+     * @param message The message to display
+     * @param title The dialog title
+     */
     fun error(message: String, title: String) {
-        ApplicationManager.getApplication().invokeLater {
-            Messages.showMessageDialog(
-                message,
-                title,
-                Messages.getErrorIcon(),
-            )
-        }
+        ApplicationManager.getApplication().invokeLater(
+            {
+                Messages.showMessageDialog(
+                    message,
+                    title,
+                    Messages.getErrorIcon(),
+                )
+            },
+            ModalityState.any()
+        )
     }
 
     /**

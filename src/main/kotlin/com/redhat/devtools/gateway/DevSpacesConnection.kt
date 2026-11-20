@@ -292,20 +292,31 @@ class DevSpacesConnection internal constructor(
     }
 
     /**
-     * The forward ended: the Guest lost its connection. Surface the loss and prod the Guest to
-     * re-dial. Starting is idempotent, so a session that keeps ending does not spawn a second loop.
+     * The forward ended: the Guest lost its connection. Start the recovery episode that prods it to
+     * re-dial; starting is idempotent, so a session that keeps ending does not spawn a second loop.
      */
-    private fun onRemoteEnd(client: ThinClientHandle?) {
-        client?.let(clientWindowFocus::requestFocus)
-        startRecovery()
+    internal fun onRemoteEnd(client: ThinClientHandle?) {
+        startRecovery(client)
     }
 
-    private fun startRecovery() {
+    /**
+     * Starts a recovery episode and, only when a new episode actually began, brings the Guest window
+     * to the front once: the Guest repaints its connection-status widget only while focused, so the
+     * loss has to become visible.
+     *
+     * Focusing per connection end would steal the window instead: during an outage the Guest's
+     * dials end every ~4.5 s (live-measured) while [ClientWindowFocus] throttles at 5 s, so the
+     * window would jump to the front every few seconds for the whole outage.
+     */
+    private fun startRecovery(client: ThinClientHandle?) {
         val watcher = recoveryWatcher
         val scope = recoveryScope
         // teardown already running: a connection that ends now must not start a recovery
-        if (!tearDownStarted.get() && watcher != null && scope != null) {
-            watcher.start(scope)
+        if (tearDownStarted.get() || watcher == null || scope == null) {
+            return
+        }
+        if (watcher.start(scope)) {
+            client?.let(clientWindowFocus::requestFocus)
         }
     }
 
@@ -336,9 +347,16 @@ class DevSpacesConnection internal constructor(
     /**
      * Installs the recovery watcher of this session; [prepareRecovery] wires the production one.
      * Internal so a test can emulate a recovery in progress without a cluster.
+     *
+     * @param scope owns the recovery loop; a test that lets a remote end start the watcher must pass
+     *   one, exactly as [prepareRecovery] does.
      */
-    internal fun installRecoveryWatcher(watcher: ThinClientRecoveryWatcher?) {
+    internal fun installRecoveryWatcher(
+        watcher: ThinClientRecoveryWatcher?,
+        scope: CoroutineScope? = null
+    ) {
         recoveryWatcher = watcher
+        recoveryScope = scope
     }
 
     /**

@@ -65,7 +65,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Lifecycle mirrors [com.redhat.devtools.gateway.devworkspace.DevWorkspaceSessionWatch]: an explicit
  * [start]/[stop] pair and an idempotent start, so the repeated `onRemoteEnd` signals of a flapping
- * session never spawn a second loop.
+ * session never spawn a second loop. An episode that ends by exhausting its budget is the session's
+ * last: the Guest's dial churn never stops, and a restarted episode could only report the same
+ * failure again.
  *
  * The loop, per iteration (plan §4.2):
  * 1. the client is gone -> stop quietly; the Guest window no longer exists, nothing to recover
@@ -153,6 +155,19 @@ internal class ThinClientRecoveryWatcher(
     }
 
     private val active = AtomicBoolean(false)
+
+    /**
+     * Latched when an episode ended by exhausting its budget: recovery is then over for this
+     * session, and a later `onRemoteEnd` must not restart a ten-minute episode.
+     *
+     * The Guest's dial churn keeps ending connections after the failure was reported, so without
+     * this latch the watcher started again every time and reported the same failure forever
+     * (CRW-13910 live testing: the second episode began 9 s after the first one failed at 600 s).
+     * Recovery, the client disappearing and [stop] do not set it: those leave recovery pending or
+     * moot, not impossible. No reset is needed - the owner creates one watcher per connect.
+     */
+    private val hasFailedDefinitively = AtomicBoolean(false)
+
     private var job: Job? = null
 
     /**
@@ -174,15 +189,22 @@ internal class ThinClientRecoveryWatcher(
         get() = active.get()
 
     /**
-     * Starts the recovery loop, unless one is already running: `onRemoteEnd` fires once per lost
-     * connection and may fire repeatedly while the session flaps.
+     * Starts a recovery episode, unless one is already running or an earlier one failed
+     * definitively.
+     *
+     * `onRemoteEnd` fires once per lost connection and may fire repeatedly while the session
+     * flaps, so only the first signal of an outage may spawn a loop; once the budget was spent the
+     * session cannot be recovered and every later signal is refused.
+     *
+     * @return true iff *this* call began a new episode: false when a loop is already running, and
+     *   false forever once the episode ended by exhausting its budget.
      */
-    fun start(scope: CoroutineScope): Job? {
-        if (!active.compareAndSet(false, true)) {
-            return job
+    fun start(scope: CoroutineScope): Boolean {
+        if (hasFailedDefinitively.get() || !active.compareAndSet(false, true)) {
+            return false
         }
-        return scope.launch { recoverUntilStopped() }
-            .also { job = it }
+        job = scope.launch { recoverUntilStopped() }
+        return true
     }
 
     /** Stops the loop promptly: its next suspension throws, so no further prod is sent. */
@@ -205,6 +227,9 @@ internal class ThinClientRecoveryWatcher(
                 step(episode)
             }
             if (active.get() && !episode.isFinished) {
+                // the budget, not a stop, ended this episode: recovery is impossible for this
+                // session, so no later onRemoteEnd may start another episode
+                hasFailedDefinitively.set(true)
                 reportFailure()
             }
         } finally {

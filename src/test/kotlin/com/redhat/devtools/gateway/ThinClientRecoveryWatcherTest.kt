@@ -448,11 +448,73 @@ class ThinClientRecoveryWatcherTest {
 
         withTimeout(RUN_TIMEOUT_MS) {
             // every onRemoteEnd of the settling dial churn starts an episode on the same watcher
-            repeat(3) { watcher.start(this)?.join() }
+            repeat(3) {
+                watcher.start(this)
+                watcher.awaitEpisodeEnd()
+            }
         }
 
         assertThat(harness.recovered).isEqualTo(1)
         assertThat(harness.prods).isEmpty()
+    }
+
+    /**
+     * The CRW-13910 live failure: 9 s after the budget-exhausted report the Guest's dial churn fired
+     * `onRemoteEnd` again and started a second ten-minute episode - a failure report every ten
+     * minutes forever instead of exactly one.
+     */
+    @Test
+    fun `refuses to start again once the budget was exhausted`(): Unit = runBlocking {
+        harness.pod = null
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            watcher.awaitEpisodeEnd()
+            val prodsAtFailure = harness.prods.size
+            val podsAtFailure = harness.resolvedPods
+
+            assertThat(watcher.start(this)).isFalse()
+            watcher.awaitEpisodeEnd()
+
+            assertThat(harness.failed).isEqualTo(1)
+            assertThat(harness.prods).hasSize(prodsAtFailure)
+            assertThat(harness.resolvedPods).isEqualTo(podsAtFailure)
+        }
+    }
+
+    @Test
+    fun `starts a new episode after one ended by recovery`(): Unit = runBlocking {
+        harness.openDial(atNanos = 0)
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            watcher.awaitEpisodeEnd()
+            assertThat(harness.recovered).isEqualTo(1)
+
+            // the session is usable again, so the next connection loss must be watched again
+            assertThat(watcher.start(this)).isTrue()
+            watcher.awaitEpisodeEnd()
+        }
+
+        assertThat(harness.recovered).isEqualTo(1) // the same session is still reported once
+    }
+
+    @Test
+    fun `start returns false while an episode is already running`(): Unit = runBlocking {
+        harness.pod = null
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            assertThat(watcher.isActive).isTrue()
+
+            assertThat(watcher.start(this)).isFalse()
+
+            watcher.stop()
+            watcher.awaitEpisodeEnd()
+        }
     }
 
     @Test
@@ -505,10 +567,14 @@ class ThinClientRecoveryWatcherTest {
     private fun Harness.runWatcher(startTimes: Int = 1) = runBlocking {
         withTimeout(RUN_TIMEOUT_MS) {
             val watcher = newWatcher()
-            var job = watcher.start(this)
-            repeat(startTimes - 1) { job = watcher.start(this) }
-            job?.join()
+            repeat(startTimes) { watcher.start(this) }
+            watcher.awaitEpisodeEnd()
         }
+    }
+
+    /** Waits for the episode [ThinClientRecoveryWatcher.start] began: it returns only whether it did. */
+    private suspend fun ThinClientRecoveryWatcher.awaitEpisodeEnd() {
+        while (isActive) delay(1)
     }
 }
 
