@@ -9,6 +9,9 @@ build
 
 .serena/
 
+# Open Code Review cache
+.diffcore/
+
 # JVM / Gradle / IntelliJ
 out/
 *.class

@@ -34,6 +34,7 @@ Relates to #
 - [ ] Unit tests pass (`./gradlew test`)
 - [ ] Full check passes (`./gradlew check`) — unit tests (+ Kover coverage reports)
 - [ ] Manual Gateway smoke test via `./gradlew runIde` (optional)
+- [ ] AI code review run with `/ocr:review`; confirmed findings addressed (skip for docs/config-only changes)
 - [ ] No new warnings or errors
 
 ## Checklist
