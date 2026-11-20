@@ -28,7 +28,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.Closeable
 import java.io.IOException
 import java.io.PushbackInputStream
 import java.net.InetAddress
@@ -36,311 +35,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 
 private const val NANOS_PER_MILLI = 1_000_000L
-
-/**
- * How long a dial must survive to count as an established RD session.
- *
- * A dial against a stale link is dropped by the Guest's own transport-creation timeout (6 s) —
- * measured 6.5–6.9 s in CRW-13910 live testing — while a real session lives for minutes. 15 s is
- * more than twice the failed-dial lifetime.
- */
-internal const val DIAL_CONFIRMATION_MS: Long = 15_000
-
-/**
- * Phase state of one forward session, shared by the session handle ([PortForwardSession]) and the
- * per-connection retry loops.
- *
- * The phase is carried by the session, not by the policy: the same [ForwardRetryPolicy] must fail
- * fast while the wizard waits for the Guest (connect-time) and keep retrying once the Guest is up.
- *
- * The dial outcomes are recorded for the recovery watcher. They are deliberately about *survival*,
- * not about bytes flowing: a stale-link dial is copied for seconds before the Guest drops it, so
- * neither "a connection is being copied" nor "the last dial lasted a while" proves an RD session.
- * Only a dial that outlived [confirmationMs] does.
- */
-internal class SessionPhase(
-    /**
-     * How long a dial must survive to count as an established session. Overridable so tests can
-     * exercise both sides of the threshold with short real dials.
-     */
-    private val confirmationMs: Long = DIAL_CONFIRMATION_MS,
-    /** Clock used to classify an ended dial; overridable so a test can drive the threshold. */
-    private val nowNanos: () -> Long = System::nanoTime
-) {
-    private val established = AtomicBoolean(false)
-    private val failedDialCount = AtomicLong(0)
-
-    /**
-     * Accepted client sockets that have not ended yet, so a dial is visible from the moment the
-     * Guest's TCP connection arrives - before its forward handshake has completed.
-     */
-    private val clientDials = AtomicInteger(0)
-
-    /**
-     * Handshakes of the connections currently being copied, with a count per timestamp.
-     *
-     * Keyed by [System.nanoTime] of the handshake rather than by connection, because the phase only
-     * ever sees that timestamp. A count keeps two connections that handshook in the same nanosecond
-     * distinct: removing one must not hide the other, or the watcher could lose the oldest pending
-     * handshake and prod a session that is still establishing.
-     */
-    private val activeHandshakes = ConcurrentHashMap<Long, Int>()
-
-    @Volatile
-    private var lastHandshakeNanos: Long? = null
-
-    @Volatile
-    private var lastFailedNanos: Long? = null
-
-    @Volatile
-    private var lastLongLivedNanos: Long? = null
-
-    /** Whether the Guest came up for this session; false until [markEstablished]. */
-    val isEstablished: Boolean
-        get() = established.get()
-
-    /**
-     * Whether the Guest has a dial open right now: an accepted client socket, handshake or not.
-     *
-     * The pre-handshake phase matters to the recovery watcher: a dial connecting through the
-     * forwarder is not "the Guest gave up", even though it has no handshake to report yet.
-     */
-    val isClientDialed: Boolean
-        get() = clientDials.get() > 0
-
-    /**
-     * Whether at least one connection whose handshake succeeded is still being copied.
-     *
-     * Not recovery evidence: see the class KDoc. The watcher corroborates with
-     * [oldestActiveHandshakeNanos].
-     */
-    val hasActiveForward: Boolean
-        get() = activeHandshakes.isNotEmpty()
-
-    /** [System.nanoTime] of the last successful handshake, or null when none succeeded yet. */
-    val lastSuccessfulHandshakeNanos: Long?
-        get() = lastHandshakeNanos
-
-    /**
-     * The earliest handshake among the connections still being copied, or null when none is.
-     *
-     * This is how a connection that has not ended yet can still confirm: a handshake this old has
-     * survived longer than [confirmationMs], so it is an established session rather than a dial the
-     * Guest is about to drop.
-     */
-    val oldestActiveHandshakeNanos: Long?
-        get() = activeHandshakes.keys.minOrNull()
-
-    /** [System.nanoTime] when the last failed dial ended; see [DIAL_CONFIRMATION_MS]. */
-    val lastFailedDialNanos: Long?
-        get() = lastFailedNanos
-
-    /** [System.nanoTime] when the last long-lived dial ended; see [DIAL_CONFIRMATION_MS]. */
-    val lastLongLivedDialNanos: Long?
-        get() = lastLongLivedNanos
-
-    /**
-     * Monotone count of failed dials since the forward started. The watcher compares it with the
-     * count it saw at its last prod: the timestamp alone cannot tell several dials apart when more
-     * than one ends between two samples.
-     */
-    val failedDials: Long
-        get() = failedDialCount.get()
-
-    /** Idempotent: the phase only ever moves from connect-time to steady-state. */
-    fun markEstablished() {
-        established.set(true)
-    }
-
-    /** Records *when* the handshake succeeded: the caller keeps the same value per connection. */
-    fun recordSuccessfulHandshake(atNanos: Long) {
-        lastHandshakeNanos = atNanos
-    }
-
-    /** A client socket was accepted: a dial exists from now on, handshake pending. */
-    fun recordClientDial() {
-        clientDials.incrementAndGet()
-    }
-
-    /** The dial the accepted socket belonged to is over: handshook or not. */
-    fun recordClientDialEnded() {
-        // clamped: a connection coroutine cancelled before it started has no finally, while the
-        // listener close below resets the count, so a late end must not make it negative
-        clientDials.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
-    }
-
-    /** The session's listener is closed: no dial can be in flight any more. */
-    fun clearClientDials() {
-        clientDials.set(0)
-    }
-
-    /** A connection's handshake succeeded, so it is being copied from [handshakeNanos] on. */
-    fun recordActiveForward(handshakeNanos: Long) {
-        activeHandshakes.merge(handshakeNanos, 1, Int::plus)
-    }
-
-    /**
-     * A connection ended. [handshakeNanos] is the handshake of *this* connection: `null` when it
-     * never handshook, in which case it never counted as an active forward and is not classified.
-     *
-     * The classification is about survival: a dial that ended within [confirmationMs] of its
-     * handshake failed (the Guest dropped the stale-link dial), a later one was a real session the
-     * server ended.
-     */
-    fun recordEndedForward(handshakeNanos: Long?) {
-        if (handshakeNanos == null) {
-            return
-        }
-        activeHandshakes.computeIfPresent(handshakeNanos) { _, count ->
-            (count - 1).takeIf { it > 0 }
-        }
-        val endNanos = nowNanos()
-        if (endNanos - handshakeNanos < confirmationMs * NANOS_PER_MILLI) {
-            failedDialCount.incrementAndGet()
-            lastFailedNanos = endNanos
-        } else {
-            lastLongLivedNanos = endNanos
-        }
-    }
-}
-
-/**
- * The Guest's dial outcomes on one forward session, as the recovery watcher observes them.
- *
- * Narrower than [PortForwardSession], and deliberately so: it exposes only facts that can confirm a
- * session or prove a link stale. "A connection is being copied" is not one of them - a stale-link
- * dial is copied for seconds before the Guest drops it - so the watcher cannot mistake it for
- * recovery.
- */
-internal interface ForwardDials {
-    /**
-     * Whether the Guest has a dial open right now: an accepted client socket, handshake or not.
-     *
-     * A dial is not evidence of a session; it is evidence that the Guest has not given up, and that
-     * prodding now would cut a reconnection the Guest's own loop is attempting.
-     */
-    val isClientDialed: Boolean
-
-    /**
-     * The earliest handshake among the connections still being copied, or null when none is. A
-     * handshake older than [DIAL_CONFIRMATION_MS] confirms an established RD session.
-     */
-    val oldestActiveHandshakeNanos: Long?
-
-    /** [System.nanoTime] when the last long-lived dial ended, or null when none lasted long. */
-    val lastLongLivedDialNanos: Long?
-
-    /** Monotone count of failed dials; the watcher compares it across a prod. */
-    val failedDials: Long
-}
-
-/**
- * A running port forward session.
- *
- * [localPort] is the loopback port the session listens on, so the forward describes itself and
- * callers do not have to carry the port alongside the session. [close] stops the listener and
- * closes the established connections, so the client reads EOF at once. The listener must not
- * outlive the session it bridges: closing it is what keeps a re-dial away from a stopped
- * workspace. The forward itself may retarget to the pod that replaced the one it was opened
- * against, so a re-dial reaches whichever pod currently serves the workspace.
- */
-internal class PortForwardSession(
-    val localPort: Int,
-    /**
-     * Shared with the retry loops; defaults to a fresh one so a caller that only needs the handle
-     * (tests, fakes) does not have to carry it.
-     */
-    private val phase: SessionPhase = SessionPhase(),
-    private val stopForward: () -> Unit
-) : ForwardDials, Closeable {
-    /** Whether the Guest is up for this session; see [SessionPhase.isEstablished]. */
-    val isEstablished: Boolean
-        get() = phase.isEstablished
-
-    /** [System.nanoTime] of the last successful handshake; see [SessionPhase]. */
-    val lastSuccessfulHandshakeNanos: Long?
-        get() = phase.lastSuccessfulHandshakeNanos
-
-    /** Whether a connection whose handshake succeeded is still being copied; see [SessionPhase]. */
-    val hasActiveForward: Boolean
-        get() = phase.hasActiveForward
-
-    override val isClientDialed: Boolean
-        get() = phase.isClientDialed
-
-    /** [System.nanoTime] when the last failed dial ended; see [SessionPhase]. */
-    val lastFailedDialNanos: Long?
-        get() = phase.lastFailedDialNanos
-
-    override val oldestActiveHandshakeNanos: Long?
-        get() = phase.oldestActiveHandshakeNanos
-
-    override val lastLongLivedDialNanos: Long?
-        get() = phase.lastLongLivedDialNanos
-
-    override val failedDials: Long
-        get() = phase.failedDials
-
-    /** Switches retries to the steady-state policy; call once the Guest is up. Idempotent. */
-    fun markEstablished() = phase.markEstablished()
-
-    override fun close() = stopForward()
-}
-
-/**
- * Opens port forwards to a pod.
- *
- * The seam exists so connection lifecycle and recovery code can be exercised without a cluster:
- * production wires [PodPortForwarder], tests supply a fake.
- */
-internal interface PortForwarder {
-    /**
-     * Starts a forward to [remotePort] on a free loopback port the forwarder picks and binds
-     * itself, so port allocation cannot race between "find a free port" and "listen on it".
-     * The returned session is already listening.
-     *
-     * @param onRemoteEnd invoked when an established connection ends other than by a clean
-     * client-side close: the pod side ended it (EOF or failure), or the copy failed while talking
-     * to the pod. A client that closed itself does not invoke it: the client is already gone.
-     */
-    @Throws(IOException::class)
-    fun forward(pod: V1Pod, remotePort: Int, onRemoteEnd: () -> Unit): PortForwardSession
-
-    /**
-     * Starts a forward that follows the pod which currently serves the workspace.
-     *
-     * When a handshake fails because [pod] is gone, [resolvePod] may name the pod that replaced it,
-     * and the forward retargets to that pod instead of ending. A resolver that returns `null` or
-     * the pod the failed attempt already used keeps the "pod gone" outcome terminal, so a
-     * forwarder that cannot resolve anything behaves exactly like [forward] with a pinned pod.
-     *
-     * @param resolvePod resolves the workspace's current running and ready pod; it may block on
-     * the API server and is therefore called only from the retry loop, never on the caller's
-     * thread.
-     * @param onRemoteEnd see [forward].
-     */
-    @Throws(IOException::class)
-    fun forward(
-        pod: V1Pod,
-        remotePort: Int,
-        resolvePod: () -> V1Pod?,
-        onRemoteEnd: () -> Unit
-    ): PortForwardSession = forward(pod, remotePort, onRemoteEnd)
-
-    /**
-     * Answers "can a port forward to [remotePort] on [pod] be established right now?".
-     *
-     * Opens a real forward and closes it at once: no local listener, no client socket. It proves
-     * the whole path (auth, API server, pod, listener), which a pod liveness query cannot. Bounded:
-     * a hanging open counts as `false`, because a hanging API server cannot serve the Guest either.
-     */
-    suspend fun probe(pod: V1Pod, remotePort: Int): Boolean
-}
 
 /**
  * Mutable state of one running forward: the pod it bridges, the local sockets currently bridged to
@@ -638,66 +334,105 @@ internal class PodPortForwarder(
     ) {
         // wraps the client input so the client-gone probe can push back the byte it has to read (see isClientGone)
         val clientIn = PushbackInputStream(clientSocket.getInputStream(), 1)
-        var firstFailureNanos: Long? = null
-        var attempt = 1
-        var keepRetrying = true
+        val series = RetrySeries()
         // connect-time is capped by the policy; an established session keeps retrying until its
         // outage budget or the client gives up, so the loop itself has no attempt limit
-        while (isActive && keepRetrying) {
+        while (isActive) {
             // one read per iteration: a concurrent connection may retarget the forward between the
             // attempt and the decision, and the decision must judge the pod this attempt used
             val pod = state.pod
-            logger.info("Attempt #$attempt: Connecting ${state.localPort} -> ${state.remotePort}...")
+            logger.info(
+                "Attempt #${series.attempt}: Connecting ${state.localPort} -> ${state.remotePort}..."
+            )
             val result = forwardAttempt.attempt(pod, state.ports, clientSocket, clientIn) {
                 onHandshakeSucceeded(state.phase, dial)
             }
-            keepRetrying = when (result) {
-                // the copy already closed the local socket: any outcome is terminal
-                is AttemptResult.Ended -> {
-                    logCopyEnd(result.copy, state.localPort, state.remotePort, acceptedAtNanos)
-                    // a client-side failure is not a client-initiated close: on a messy pod death
-                    // the client pump often fails first, and the Guest still has to report the loss
-                    if (!result.copy.isClosedByClient) {
-                        state.onRemoteEnd()
-                    }
-                    false
-                }
-
-                is AttemptResult.HandshakeFailed -> {
-                    firstFailureNanos = firstFailureNanos ?: nowNanos()
-                    val failure = FailedHandshake(attempt, firstFailureNanos, result.cause)
-                    val established = state.phase.isEstablished
-                    val retry = retryPolicy.decide(pod, state.ports, established, failure)
-                    when {
-                        retry == RetryDecision.POD_GONE && retarget(state, pod) -> {
-                            // the replacement restarts the attempt (delay) series: the dead pod's
-                            // failure must not shorten it. In steady state it does NOT restart the
-                            // outage budget, which is the safety cap against a stuck socket and
-                            // keeps running from this connection's first failure across any number
-                            // of retargets - otherwise repeated pod churn would defeat the cap.
-                            // Connect-time resets it too: there the window is attempt-capped and
-                            // the dead pod's failure time must not shorten the replacement's 2s.
-                            attempt = 0
-                            firstFailureNanos = seriesStartAfterRetarget(firstFailureNanos, established)
-                            true
-                        }
-
-                        retry != RetryDecision.RETRY -> false
-
-                        clientLeftDuringRetry(clientSocket, clientIn, attempt, established) -> {
-                            logger.info(
-                                "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
-                                    "client disconnected; stopping retries"
-                            )
-                            false
-                        }
-
-                        else -> true
-                    }
-                }
+            val keepRetrying = when (result) {
+                is AttemptResult.Ended -> handleEnded(result, state, acceptedAtNanos)
+                is AttemptResult.HandshakeFailed ->
+                    handleHandshakeFailed(result, pod, state, series, clientSocket, clientIn)
             }
-            attempt++
+            if (!keepRetrying) {
+                return
+            }
+            series.attempt++
         }
+    }
+
+    /**
+     * The attempt's copy already closed the local socket: any outcome is terminal.
+     *
+     * @return whether the loop should keep retrying: never.
+     */
+    private fun handleEnded(
+        result: AttemptResult.Ended,
+        state: ForwardState,
+        acceptedAtNanos: Long
+    ): Boolean {
+        logCopyEnd(result.copy, state.localPort, state.remotePort, acceptedAtNanos)
+        // a client-side failure is not a client-initiated close: on a messy pod death
+        // the client pump often fails first, and the Guest still has to report the loss
+        if (!result.copy.isClosedByClient) {
+            state.onRemoteEnd()
+        }
+        return false
+    }
+
+    /**
+     * The attempt's forward handshake failed: the retry policy decides whether another attempt may
+     * follow, and a pod that is gone is replaced by the pod that serves the workspace now.
+     *
+     * @return whether the loop should keep retrying, against the same or the replacement pod.
+     */
+    private suspend fun handleHandshakeFailed(
+        result: AttemptResult.HandshakeFailed,
+        attemptedPod: V1Pod,
+        state: ForwardState,
+        series: RetrySeries,
+        clientSocket: Socket,
+        clientIn: PushbackInputStream
+    ): Boolean {
+        val firstFailureNanos = series.firstFailureNanos ?: nowNanos().also {
+            series.firstFailureNanos = it
+        }
+        val failure = FailedHandshake(series.attempt, firstFailureNanos, result.cause)
+        val established = state.phase.isEstablished
+        val retry = retryPolicy.decide(attemptedPod, state.ports, established, failure)
+        return when {
+            retry == RetryDecision.POD_GONE && retarget(state, attemptedPod) -> {
+                // the replacement restarts the attempt (delay) series: the dead pod's failure must
+                // not shorten it. In steady state it does NOT restart the outage budget, which is
+                // the safety cap against a stuck socket and keeps running from this connection's
+                // first failure across any number of retargets - otherwise repeated pod churn
+                // would defeat the cap. Connect-time resets it too: there the window is
+                // attempt-capped and the dead pod's failure must not shorten the replacement's 2s.
+                series.attempt = 0
+                series.firstFailureNanos = seriesStartAfterRetarget(firstFailureNanos, established)
+                true
+            }
+
+            retry != RetryDecision.RETRY -> false
+
+            clientLeftDuringRetry(clientSocket, clientIn, series.attempt, established) -> {
+                logger.info(
+                    "Port forward handshake ${state.localPort} -> ${state.remotePort}: " +
+                        "client disconnected; stopping retries"
+                )
+                false
+            }
+
+            else -> true
+        }
+    }
+
+    /**
+     * The retry series of one accepted connection: the attempt number and the first failure of the
+     * series. A retarget restarts the attempt series; only connect-time restarts the failure series
+     * too (see [seriesStartAfterRetarget]).
+     */
+    private class RetrySeries {
+        var attempt: Int = 1
+        var firstFailureNanos: Long? = null
     }
 
     /**
