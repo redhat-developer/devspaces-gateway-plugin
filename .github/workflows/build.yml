@@ -93,6 +93,27 @@ jobs:
           name: ${{ steps.artifact.outputs.filename }}
           path: ./build/distributions/content/*/*
 
+  # Verify generated agent instructions match their source rules
+  generatedFiles:
+    name: Generated files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+      # Check out the current repository
+      - name: Fetch Sources
+        uses: actions/checkout@v7
+
+      # Regenerate and fail on drift so agent instructions cannot go stale
+      - name: Check AGENTS.md is up to date
+        run: |
+          ./gen-agents-md.sh
+          if ! git diff --exit-code AGENTS.md; then
+            echo "::error::AGENTS.md is stale. Run ./gen-agents-md.sh and commit the result."
+            exit 1
+          fi
+
   # Run tests and upload a code coverage report
   test:
     name: Test

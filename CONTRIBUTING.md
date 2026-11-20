@@ -39,6 +39,8 @@ The project uses the Gradle Wrapper (`./gradlew`), so a local Gradle installatio
    ./gradlew buildPlugin
    ```
 
+Optional: set up [Open Code Review](https://github.com/spencermarx/open-code-review) for AI-assisted code reviews — run `scripts/setup-ocr.sh` (requires Node.js). See [AI Code Review](README.md#ai-code-review-ocr) in the README for usage.
+
 Optional: install the [pre-commit](https://pre-commit.com) hook from `.pre-commit-config.yaml` (`pre-commit install`) for a local secret scan before pushing. It is a local convenience only; GitHub runs the same scan on pushes, and CI enforces quality via the build workflow (`.github/workflows/build.yml`).
 
 ## Development Workflow
@@ -64,6 +66,8 @@ Use descriptive branch names:
 3. Add or update unit tests for new functionality.
 4. Update documentation (README, CHANGELOG, KDoc) as needed.
 5. Run the local checks listed below before committing.
+6. Run `./gradlew detektBranch`, fix findings, then request an AI review from the agent prompt with `/ocr:review` (see [AI Code Review](README.md#ai-code-review-ocr)). Re-run the review only if fixes changed logic, and publish it to the PR with `/ocr:post`.
+7. Reviews send the diff and reviewed files to the model configured in the contributor's AI CLI; `/ocr:post` publishes the result as a public PR comment.
 
 ### Running the Plugin Locally
 

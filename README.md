@@ -73,6 +73,41 @@ There're a couple of options to install the plugin:
 
 `detekt` reports pre-existing violations in unchanged code; `detektBranch` limits findings to the current changes. Reports are written to `build/reports/detekt/`.
 
+### AI Code Review (OCR)
+
+Code reviews run through [Open Code Review](https://github.com/spencermarx/open-code-review) (OCR). The skill files and configuration are committed in [`.ocr/`](./.ocr); only the CLI binary is installed locally:
+
+```console
+scripts/setup-ocr.sh
+```
+
+The script requires Node.js/npm and a bash shell (Git Bash or WSL on Windows), and installs the CLI version pinned by the committed `.ocr/` assets. It never replaces a different globally installed version; re-run with `--keep-installed` to accept the drift warning instead.
+
+**Workflow** — run the review from the agent prompt as the final step after generating code, preferably in a fresh agent session:
+
+1. Generate or change code with the AI coding agent.
+2. Run `./gradlew detektBranch` and fix any findings.
+3. Request the review from the agent prompt with `/ocr:review`.
+
+```console
+/ocr:review            # staged changes
+/ocr:review HEAD~3     # last 3 commits
+/ocr:review feature/x  # branch vs. main
+```
+
+4. Fix confirmed findings, re-run `./gradlew detektBranch`, and re-run `/ocr:review` only if the fixes changed logic.
+5. Publish the review to the pull request with `/ocr:post`.
+
+The default team runs one principal and one quality reviewer. Escalate for risky changes with `--team principal:2,security:1,testing:1`, and skip the discourse phase with `--quick` for small diffs.
+
+Further commands:
+- `/ocr:map` — generate a review map for large changesets
+- `ocr doctor` — verify the installation
+
+Reviews send the diff and any files the reviewers open to the model configured in the contributor's AI CLI. `/ocr:post` publishes the synthesized review as a PR comment.
+
+After upgrading the CLI, run `ocr update`, then `./gen-agents-md.sh`, and commit both so `.ocr/` assets and `AGENTS.md` stay in sync.
+
 ### IntelliJ Plugin Verifier
 To check the plugin compatibility against the Gateway versions defined in the [gradle.properties](./gradle.properties) file.
 
