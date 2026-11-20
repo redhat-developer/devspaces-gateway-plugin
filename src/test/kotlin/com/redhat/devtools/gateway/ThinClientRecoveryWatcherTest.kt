@@ -15,6 +15,9 @@ import com.redhat.devtools.gateway.openshift.DIAL_CONFIRMATION_MS
 import com.redhat.devtools.gateway.openshift.ForwardDials
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -284,6 +287,53 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.prods[1].rawFragment).contains("$NONCE_PARAMETER=2")
     }
 
+    /**
+     * The observation window starts at the delivery: failed dials that ended before the prod belong
+     * to the previous attempt and are not counted again for this one.
+     */
+    @Test
+    fun `does not count failed dials that ended before the prod`() {
+        harness.stopAfterProds = 2
+        harness.scheduleFailedDials(afterMs = 0, count = 2)
+        harness.advanceClock(0) // the failures happened before this episode's first prod
+
+        harness.runWatcher()
+
+        assertThat(harness.refreshes).isZero()
+        assertThat(harness.prods).hasSize(2)
+        assertThat(harness.prods[1].rawFragment).contains("p=1")
+    }
+
+    /**
+     * A dial the prod itself kills ends after the snapshot, so it counts toward the stale-link
+     * threshold. A pod roll is the only way to prod while a dial is in flight: the skipped
+     * observation lets the prod through, and the two killed dials then reset the silence escalation
+     * (a stale verdict) instead of escalating it (nothing observed).
+     */
+    @Test
+    fun `counts a handshook dial that the prod kills`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD // the roll lets the prod through despite the dials in flight
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 2
+        harness.openDial(atNanos = 0)
+        harness.openDial(atNanos = 1)
+        harness.onProd = {
+            if (harness.prods.size == 1) {
+                harness.scheduleFailedDialEnd(handshakeNanos = 0, afterMs = DIAL_AFTER_MS)
+                harness.scheduleFailedDialEnd(handshakeNanos = 1, afterMs = DIAL_AFTER_MS)
+            }
+        }
+
+        harness.runWatcher()
+
+        assertThat(harness.prodTimesMs).hasSize(2)
+        // a stale verdict resets the escalation: the next prod follows one base silence window
+        // instead of a doubled one
+        assertThat(harness.prodTimesMs[1] - harness.prodTimesMs[0])
+            .isLessThan(REDIAL_WAIT_MS * 3)
+    }
+
     @Test
     fun `survives client-closed failed dials and refreshes the stale link`() {
         // the live failure (CRW-13910): dials the Guest closes itself fire no onRemoteEnd, so the
@@ -518,6 +568,27 @@ class ThinClientRecoveryWatcherTest {
         }
     }
 
+    /**
+     * An owner scope that is already cancelled cannot run the loop, so starting must roll back the
+     * active latch instead of leaving an orphan that refuses every later start.
+     */
+    @Test
+    fun `start on a cancelled scope leaves the watcher free for a live one`(): Unit = runBlocking {
+        harness.stopAfterProds = 1
+        val watcher = harness.newWatcher()
+        val cancelledScope = CoroutineScope(SupervisorJob()).also { it.cancel() }
+
+        assertThat(watcher.start(cancelledScope)).isFalse()
+        assertThat(watcher.isActive).isFalse()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            watcher.awaitEpisodeEnd()
+        }
+
+        assertThat(harness.prods).hasSize(1)
+    }
+
     @Test
     fun `stop ends the loop before the next prod`() {
         harness.onProd = { harness.stopWatcher() }
@@ -641,6 +712,38 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.prods[1].rawFragment).contains("p=2")
         assertThat(harness.prods.drop(1)).doesNotContain(CACHED_LINK)
         assertThat(harness.refreshes).isEqualTo(1)
+    }
+
+    /**
+     * A delivered refreshed link that later failed dials prove stale again is rebuilt for the next
+     * prod. The delivered refresh keeps the observation phase enabled, so the watcher still waits
+     * out the Guest's silence instead of prodding at once.
+     */
+    @Test
+    fun `refreshes again when failed dials prove the delivered link stale`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = NEW_POD
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 2
+        harness.onProd = {
+            if (harness.prods.size == 1) {
+                harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2)
+            }
+        }
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).hasSize(2)
+        assertThat(harness.prods).doesNotContain(CACHED_LINK)
+        assertThat(harness.prods[0].rawFragment).contains("p=2")
+        assertThat(harness.prods[0].rawFragment).doesNotContain(NONCE_PARAMETER)
+        assertThat(harness.prods[1].rawFragment).contains("p=2")
+        assertThat(harness.prods[1].rawFragment).contains("$NONCE_PARAMETER=2")
+        assertThat(harness.refreshes).isEqualTo(2)
+        // the episode kept observing after the delivered refresh: the next prod follows a full
+        // silence window, not the immediate send a re-disabled observation phase would produce
+        assertThat(harness.prodTimesMs[1] - harness.prodTimesMs[0])
+            .isBetween(REDIAL_WAIT_MS * 2, REDIAL_WAIT_MS * 2 + POLL_MS)
     }
 
     // --- failures inside the loop -------------------------------------------

@@ -11,7 +11,6 @@
  */
 package com.redhat.devtools.gateway
 
-import com.intellij.openapi.diagnostic.thisLogger
 import java.net.URI
 
 /**
@@ -58,8 +57,8 @@ internal enum class LinkState {
 internal class ProdLink(val uri: URI, val isRefreshed: Boolean)
 
 /**
- * The link policy of one recovery episode: which link to prod the Guest with, and when waiting for
- * the IDE server is the only option.
+ * The link policy of one recovery watcher: which link to prod the Guest with, and when waiting for
+ * the IDE server is the only option. One instance serves every episode of that watcher.
  *
  * A valid link (the first prod of a non-stale episode) is sent as-is: it costs nothing. A link
  * known stale - a replaced pod, or only failed dials - is only ever sent rebuilt: prodding the dead
@@ -67,6 +66,9 @@ internal class ProdLink(val uri: URI, val isRefreshed: Boolean)
  * session, which burns its project-open retries (CRW-13910 live testing: the Guest closed itself
  * after two such prods, exitCode 178). While no fresh link exists yet the answer is therefore
  * `null` - no prod, keep polling.
+ *
+ * The policy is pure: it returns the link to send, or `null`, and leaves every consequence - the
+ * log-once of a missing fresh link, the bookkeeping of the episode - to the caller.
  *
  * @param cachedLink the local join link the Guest originally dialed.
  * @param refreshLink a freshly built local join link, or `null` while none can be built yet.
@@ -78,45 +80,22 @@ internal class ProdLinkPolicy(
     /**
      * The link to prod with, or `null` when the Guest must not be prodded yet.
      *
-     * The reconnect nonce is added from the second prod on, where the Guest may already have seen
-     * the previous link.
+     * @param linkState whether the cached link is stale: only a rebuilt link may be prodded then.
+     * @param attempt the upcoming prod attempt number, used for the reconnect nonce. The nonce is
+     *   added from the second prod on, where the Guest may already have seen the previous link.
      */
-    suspend fun linkFor(episode: ThinClientRecoveryWatcher.Episode): ProdLink? {
-        val attempt = episode.attempt + 1
-        val link = if (episode.linkState.mustRefresh) {
-            freshLinkOrWait(episode)
+    suspend fun linkFor(linkState: LinkState, attempt: Int): ProdLink? {
+        val link = if (linkState.mustRefresh) {
+            freshLink()
         } else {
             ProdLink(cachedLink, isRefreshed = false)
         }
         return link?.let { ProdLink(withNonceIfNeeded(it.uri, attempt), it.isRefreshed) }
     }
 
-    /**
-     * A rebuilt link, or `null` while the IDE server cannot report one yet.
-     *
-     * The wait is logged once per stretch, not on every poll: the watcher keeps calling this until
-     * the link exists, so a per-call log would flood the one period a live test needs to read.
-     */
-    private suspend fun freshLinkOrWait(episode: ThinClientRecoveryWatcher.Episode): ProdLink? {
-        val refreshed = refreshLink()
-        if (refreshed != null) {
-            episode.hasReportedMissingFreshLink = false
-        } else {
-            logMissingFreshLinkOnce(episode)
-        }
-        return refreshed?.let { ProdLink(it, isRefreshed = true) }
-    }
-
-    private fun logMissingFreshLinkOnce(episode: ThinClientRecoveryWatcher.Episode) {
-        if (episode.hasReportedMissingFreshLink) {
-            return
-        }
-        episode.hasReportedMissingFreshLink = true
-        thisLogger().info(
-            "The join link is stale and no fresh link is available yet; waiting for the IDE " +
-                "server to report one."
-        )
-    }
+    /** A rebuilt link, or `null` while the IDE server cannot report one yet. */
+    private suspend fun freshLink(): ProdLink? =
+        refreshLink()?.let { ProdLink(it, isRefreshed = true) }
 
     /** Defeats the Guest's same-link no-op guard from the second prod of an episode on. */
     private fun withNonceIfNeeded(link: URI, attempt: Int): URI =

@@ -421,8 +421,12 @@ internal class ThinClientRecoveryWatcher(
         // null link = nothing may be prodded yet; the cached link is never used as a substitute
         val link = prodLinkOrNull(episode) ?: return null
         return try {
-            // capture before the prod: the dial a prod itself kills must not count toward the
-            // stale-link threshold of the window the prod starts
+            // capture before the prod so the observation window's baseline is deterministic: failed
+            // dials that ended before this delivery belong to the previous attempt. A dial this prod
+            // itself kills ends after the snapshot, so it does count toward the threshold; that is
+            // harmless because every prod sent while a dial is in flight already has the link
+            // refresh pending (LinkState != CACHED: only the PROD_STALE and pod-roll paths prod with
+            // a dial in flight), so the STALE verdict cannot change which link the next prod carries.
             val failedDialsBefore = collaborators.session.failedDials
             collaborators.prod(link.uri)
             episode.attempt++
@@ -443,12 +447,35 @@ internal class ThinClientRecoveryWatcher(
     /** [ProdLinkPolicy.linkFor], with a failing link build treated as "nothing to send yet". */
     @Suppress("TooGenericExceptionCaught") // the seams throw whatever the platform throws
     private suspend fun prodLinkOrNull(episode: Episode): ProdLink? = try {
-        linkPolicy.linkFor(episode)
+        val link = linkPolicy.linkFor(episode.linkState, episode.attempt + 1)
+        if (link != null) {
+            episode.hasReportedMissingFreshLink = false
+        } else if (episode.linkState.mustRefresh) {
+            logMissingFreshLinkOnce(episode)
+        }
+        link
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         thisLogger().warn("Could not build a join link to prod the JetBrains Client with.", e)
         null
+    }
+
+    /**
+     * Logs the "stale, no fresh link yet" wait once per stretch.
+     *
+     * The watcher keeps polling until the link exists, so a per-call log would flood the one period
+     * a live test needs to read.
+     */
+    private fun logMissingFreshLinkOnce(episode: Episode) {
+        if (episode.hasReportedMissingFreshLink) {
+            return
+        }
+        episode.hasReportedMissingFreshLink = true
+        thisLogger().info(
+            "The join link is stale and no fresh link is available yet; waiting for the IDE " +
+                "server to report one."
+        )
     }
 
     /**
@@ -591,7 +618,7 @@ internal class ThinClientRecoveryWatcher(
      * proves that link stale again - [hasPodRolled] and [LinkState.hasDeliveredRefreshed] therefore
      * never re-disable the observation, and the cached link is never prodded again.
      */
-    internal class Episode(val startedAtNanos: Long) {
+    private class Episode(val startedAtNanos: Long) {
         /** Delivered prods so far: a failed delivery is retried as the same attempt. */
         var attempt: Int = 0
 
