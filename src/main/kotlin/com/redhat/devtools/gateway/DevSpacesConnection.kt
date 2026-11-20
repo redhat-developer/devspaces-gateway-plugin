@@ -30,7 +30,6 @@ import com.redhat.devtools.gateway.openshift.PortForwarder
 import com.redhat.devtools.gateway.server.RemoteIDEServer
 import com.redhat.devtools.gateway.server.RemoteIDEServerStatus
 import com.redhat.devtools.gateway.util.ProgressCountdown
-import com.redhat.devtools.gateway.util.callerFrames
 import com.redhat.devtools.gateway.util.isCancellationException
 import com.redhat.devtools.gateway.util.isServerContainerNotFound
 import com.redhat.devtools.gateway.view.ui.Dialogs
@@ -247,7 +246,6 @@ class DevSpacesConnection internal constructor(
         thinClient.lifetime.onTermination {
             sessionWatch.stop()
             sessionWatchScope.cancel()
-            stopRecovery()
         }
     }
 
@@ -331,12 +329,6 @@ class DevSpacesConnection internal constructor(
     private fun stopRecovery(): Boolean {
         val watcher = recoveryWatcher
         val wasActive = watcher?.isActive == true
-        if (watcher != null) {
-            thisLogger().info(
-                "Stopping connection recovery (wasActive=$wasActive); " +
-                    "caller=${callerFrames(javaClass.name)}"
-            )
-        }
         watcher?.stop()
         recoveryWatcher = null
         recoveryScope?.cancel()
@@ -364,7 +356,7 @@ class DevSpacesConnection internal constructor(
      * retried on its next poll.
      */
     private fun findRunningPod(workspace: DevWorkspace): V1Pod? =
-        DevWorkspacePods(devSpacesContext.client).findFirstRunning(
+        DevWorkspacePods(devSpacesContext.client).findNewestRunning(
             workspace.namespace,
             "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=${workspace.name}"
         )
@@ -442,7 +434,8 @@ class DevSpacesConnection internal constructor(
         Dialogs.error(
             "The connection to workspace '${workspace.name}' could not be restored. " +
                 "Close the client and connect again.",
-            "Connection Error"
+            "Connection Error",
+            ModalityState.any()
         )
     }
 

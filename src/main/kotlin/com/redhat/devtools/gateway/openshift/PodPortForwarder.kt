@@ -68,7 +68,9 @@ internal class SessionPhase(
      * How long a dial must survive to count as an established session. Overridable so tests can
      * exercise both sides of the threshold with short real dials.
      */
-    private val confirmationMs: Long = DIAL_CONFIRMATION_MS
+    private val confirmationMs: Long = DIAL_CONFIRMATION_MS,
+    /** Clock used to classify an ended dial; overridable so a test can drive the threshold. */
+    private val nowNanos: () -> Long = System::nanoTime
 ) {
     private val established = AtomicBoolean(false)
     private val failedDialCount = AtomicLong(0)
@@ -197,7 +199,7 @@ internal class SessionPhase(
         activeHandshakes.computeIfPresent(handshakeNanos) { _, count ->
             (count - 1).takeIf { it > 0 }
         }
-        val endNanos = System.nanoTime()
+        val endNanos = nowNanos()
         if (endNanos - handshakeNanos < confirmationMs * NANOS_PER_MILLI) {
             failedDialCount.incrementAndGet()
             lastFailedNanos = endNanos
@@ -356,8 +358,8 @@ private class ForwardState(
     val resolvePod: () -> V1Pod?,
     val localPort: Int,
     val remotePort: Int,
-    /** Survival a dial needs to count as an established session; see [SessionPhase]. */
-    confirmationMs: Long,
+    /** Phase state shared with the retry loops; see [SessionPhase]. */
+    val phase: SessionPhase,
     val onRemoteEnd: () -> Unit
 ) {
     /**
@@ -371,7 +373,6 @@ private class ForwardState(
 
     val ports = PortMapping(localPort, remotePort)
     val clientSockets: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
-    val phase = SessionPhase(confirmationMs)
 
     /** The pod this forward currently targets. */
     val pod: V1Pod
@@ -522,7 +523,7 @@ internal class PodPortForwarder(
             resolvePod,
             serverSocket.localPort,
             remotePort,
-            confirmationMs,
+            SessionPhase(confirmationMs, nowNanos),
             onRemoteEnd
         )
         scope.acceptConnections(serverSocket, state)
@@ -538,10 +539,11 @@ internal class PodPortForwarder(
      * [probeTimeoutMs]. No listener and no client socket: the caller only learns whether the path
      * is usable right now.
      *
-     * The open runs in a scope that is not a child of the caller (the [PodLivenessProbe.query]
-     * pattern), so the bound can return `false` without joining the blocking
-     * `PortForward.forward` call, which may keep running in the background. A timeout counts as
-     * `false`: a hanging API server cannot serve the Guest either.
+     * The open itself is interrupt-bounded ([ForwardAttempt.tryOpen] runs it in
+     * `runInterruptible` under the 10 s open bound), so a hung `PortForward.forward` does not pin
+     * the probe past its own timeout. Its residual cost is a half-initialized websocket left behind
+     * per interrupted open, not an unbounded background call. A timeout counts as `false`: a
+     * hanging API server cannot serve the Guest either.
      */
     override suspend fun probe(pod: V1Pod, remotePort: Int): Boolean {
         val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -560,10 +562,7 @@ internal class PodPortForwarder(
      * coroutine cancellation. Closing the sockets is what makes the client notice the loss.
      */
     private fun closeClientSockets(state: ForwardState) {
-        // no size-optimised toList(): a connection can end concurrently and empty the set between
-        // its size check and its single-element read, which throws NoSuchElementException
-        val sockets = mutableListOf<Socket>()
-        state.clientSockets.forEach { socket -> sockets += socket }
+        val sockets = state.clientSockets.toList()
         state.clientSockets.clear()
         state.phase.clearClientDials()
         if (sockets.isNotEmpty()) {

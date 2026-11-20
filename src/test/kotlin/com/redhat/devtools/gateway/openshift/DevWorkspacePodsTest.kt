@@ -243,12 +243,12 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns null when no pod matches`() {
+    fun `#findNewestRunning returns null when no pod matches`() {
         // given
         mockPodList()
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=no-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=no-workspace")
 
         // then
         assertThat(result).isNull()
@@ -256,7 +256,7 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns the new pod when the old one is terminating`() {
+    fun `#findNewestRunning returns the new pod when the old one is terminating`() {
         // given — a pod roll: the old pod still reports Running but has a deletion timestamp
         val terminating = podWith(
             name = "old-pod",
@@ -267,7 +267,7 @@ class DevWorkspacePodsTest {
         mockPodList(terminating, new)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isSameAs(new)
@@ -275,14 +275,14 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns the newest pod when several pods are running`() {
+    fun `#findNewestRunning returns the newest pod when several pods are running`() {
         // given
         val older = podWith(name = "older-pod", creationTimestamp = BEFORE)
         val newer = podWith(name = "newer-pod", creationTimestamp = AFTER)
         mockPodList(older, newer)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isSameAs(newer)
@@ -290,14 +290,14 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning treats a pod without creation timestamp as the oldest`() {
+    fun `#findNewestRunning treats a pod without creation timestamp as the oldest`() {
         // given
         val withoutTimestamp = podWith(name = "no-timestamp-pod")
         val withTimestamp = podWith(name = "timestamped-pod", creationTimestamp = AFTER)
         mockPodList(withoutTimestamp, withTimestamp)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isSameAs(withTimestamp)
@@ -305,7 +305,7 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns null when only terminating pods match`() {
+    fun `#findNewestRunning returns null when only terminating pods match`() {
         // given
         val terminating = podWith(
             name = "terminating-pod",
@@ -314,7 +314,7 @@ class DevWorkspacePodsTest {
         mockPodList(terminating)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isNull()
@@ -322,13 +322,13 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns null when the pod has no Ready condition`() {
+    fun `#findNewestRunning returns null when the pod has no Ready condition`() {
         // given — running but not yet ready (conditions present, Ready=False)
         val notReady = podWith(name = "not-ready-pod", isReady = false)
         mockPodList(notReady)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isNull()
@@ -336,7 +336,7 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning returns null when the pod has no conditions at all`() {
+    fun `#findNewestRunning returns null when the pod has no conditions at all`() {
         // given — running phase but the status carries no conditions
         val withoutConditions = podWith(name = "no-conditions-pod").apply {
             status = V1PodStatus().apply { phase = "Running" }
@@ -344,7 +344,7 @@ class DevWorkspacePodsTest {
         mockPodList(withoutConditions)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isNull()
@@ -352,13 +352,13 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirstRunning ignores pods whose phase is not Running`() {
+    fun `#findNewestRunning ignores pods whose phase is not Running`() {
         // given
         val pending = podWith(name = "pending-pod", phase = "Pending")
         mockPodList(pending)
 
         // when
-        val result = pods.findFirstRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
 
         // then
         assertThat(result).isNull()

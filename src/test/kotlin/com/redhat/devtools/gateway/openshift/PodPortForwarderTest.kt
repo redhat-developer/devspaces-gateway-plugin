@@ -172,6 +172,44 @@ class PodPortForwarderTest {
     }
 
     @Test
+    fun `#forward keeps the client payload written while the handshake retries`() {
+        // given - the first open fails, the client writes during the retry delay, the next succeeds
+        val payload = "ping-payload"
+        val serverOut = ByteArrayOutputStream()
+        val secondResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+        every { secondResult.getInputStream(remotePort) } returns silentPodStream()
+        every { secondResult.getOutboundStream(remotePort) } returns serverOut
+        val attempts = AtomicInteger()
+        val firstAttempt = CountDownLatch(1)
+        every {
+            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
+        } answers {
+            if (attempts.incrementAndGet() == 1) {
+                firstAttempt.countDown()
+                throw IOException("connection reset")
+            }
+            secondResult
+        }
+        val session = PodPortForwarder(client) { PodLiveness.RUNNING }.forward(pod, remotePort)
+
+        try {
+            runBlocking { delay(100.milliseconds) }
+            Socket("127.0.0.1", session.localPort).use { socket ->
+                // the client pays its payload once the first handshake has failed
+                assertThat(firstAttempt.await(EVENT_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+                socket.outputStream.write(payload.toByteArray())
+                socket.outputStream.flush()
+
+                // the probe that detects a live client read one byte and pushed it back: the copy
+                // must still carry the whole payload, first byte included
+                assertThat(awaitTrue(EVENT_TIMEOUT_MS) { serverOut.toString() == payload }).isTrue()
+            }
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `#forward tries several times if connecting fails`() {
         // given
         val attempts = AtomicInteger()

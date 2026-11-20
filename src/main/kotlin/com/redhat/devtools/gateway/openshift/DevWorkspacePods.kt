@@ -77,7 +77,7 @@ class DevWorkspacePods(private val client: ApiClient) {
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    fun findFirstRunning(namespace: String, labelSelector: String): V1Pod? {
+    fun findNewestRunning(namespace: String, labelSelector: String): V1Pod? {
         return list(namespace, labelSelector).items
             .filter(::isRunningAndReady)
             .maxByOrNull { it.metadata?.creationTimestamp ?: OffsetDateTime.MIN }

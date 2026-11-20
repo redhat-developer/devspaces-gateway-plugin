@@ -21,6 +21,7 @@ import io.kubernetes.client.openapi.models.V1Pod
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.URI
 import java.util.concurrent.CancellationException
@@ -97,7 +98,7 @@ internal class ThinClientRecoveryWatcher(
      * The injected dependencies of the watcher.
      *
      * @param resolvePod the pod that currently serves the workspace
-     *   ([com.redhat.devtools.gateway.openshift.DevWorkspacePods.findFirstRunning]).
+     *   ([com.redhat.devtools.gateway.openshift.DevWorkspacePods.findNewestRunning]).
      * @param probe opens and closes a real port forward to the IDE port: proves the whole path.
      * @param cachedLink the local join link the Guest originally dialed.
      * @param sessionPod the pod that link was built against: a different pod means the link is stale.
@@ -152,6 +153,12 @@ internal class ThinClientRecoveryWatcher(
         const val MIN_SLEEP_MS: Long = 1
         const val NANOS_PER_MILLI: Long = 1_000_000
         const val MILLIS_PER_SECOND: Long = 1_000
+
+        /** Cap of the escalating Guest-silence window between prods that yielded nothing. */
+        const val MAX_REDIAL_WAIT_MS: Long = 60_000
+
+        /** Keeps the escalation shift below the range where doubling would overflow. */
+        const val MAX_BACKOFF_SHIFT: Int = 6
     }
 
     private val active = AtomicBoolean(false)
@@ -168,6 +175,7 @@ internal class ThinClientRecoveryWatcher(
      */
     private val hasFailedDefinitively = AtomicBoolean(false)
 
+    @Volatile
     private var job: Job? = null
 
     /**
@@ -203,8 +211,15 @@ internal class ThinClientRecoveryWatcher(
         if (hasFailedDefinitively.get() || !active.compareAndSet(false, true)) {
             return false
         }
-        job = scope.launch { recoverUntilStopped() }
-        return true
+        return if (scope.isActive) {
+            job = scope.launch { recoverUntilStopped() }
+            true
+        } else {
+            // the owner's scope is already cancelled: launching would never run the loop's
+            // finally, leaving `active` latched true with no running episode
+            active.set(false)
+            false
+        }
     }
 
     /** Stops the loop promptly: its next suspension throws, so no further prod is sent. */
@@ -289,9 +304,13 @@ internal class ThinClientRecoveryWatcher(
             DialOutcome.RECOVERED ->
                 reportRecovered(episode, recoveryEvidence(), "a dial confirmed the session")
             DialOutcome.STALE -> staleLink(episode)
-            DialOutcome.NOTHING -> thisLogger().debug(
-                "No re-dial observed after prodding the Guest; prodding again."
-            )
+            DialOutcome.NOTHING -> {
+                episode.consecutiveNothing++
+                thisLogger().debug(
+                    "No re-dial observed after prodding the Guest; prodding again after a " +
+                        "${effectiveRedialWaitMs(episode)} ms silence window."
+                )
+            }
         }
     }
 
@@ -333,14 +352,6 @@ internal class ThinClientRecoveryWatcher(
         )
     }
 
-    /**
-     * Whether waiting for the Guest's open connection is pointless.
-     *
-     * After a pod roll the Guest's current dial still carries the cached link, which the new
-     * idea-server cannot accept: it can never confirm, so waiting would only delay the fix. Once a
-     * prod has delivered a refreshed link, the Guest's dials are legitimate again and worth waiting
-     * for.
-     */
     /**
      * Whether observing the Guest's own reconnection loop is pointless.
      *
@@ -390,6 +401,15 @@ internal class ThinClientRecoveryWatcher(
                 }
 
                 reportIfConnectionConfirmed(episode) -> outcome = Observation.RECOVERED
+
+                isBudgetExhausted(episode) -> {
+                    // the dial churn keeps the snapshot changing, so the idle window alone would
+                    // never let the observation end: the episode budget must bound it too
+                    thisLogger().info(
+                        "Connection recovery budget exhausted while observing the Guest's dials."
+                    )
+                    outcome = Observation.BUDGET_EXHAUSTED
+                }
 
                 else -> {
                     val snapshot = dialSnapshot()
@@ -462,10 +482,21 @@ internal class ThinClientRecoveryWatcher(
 
         snapshot.isInFlight -> null
 
-        timing.nowNanos() - lastActivityNanos >= millisToNanos(timing.redialWaitMs) ->
+        timing.nowNanos() - lastActivityNanos >= millisToNanos(effectiveRedialWaitMs(episode)) ->
             Observation.PROD
 
         else -> null
+    }
+
+    /**
+     * The Guest-silence window before the next prod. It doubles for each prod that yielded no dial
+     * at all: each prod is a project dispose/reopen in the Guest, so hammering it every redial
+     * window can make the Guest close itself (CRW-13910 live testing, exitCode 178). Any dial
+     * outcome resets the escalation.
+     */
+    private fun effectiveRedialWaitMs(episode: Episode): Long {
+        val factor = 1L shl minOf(episode.consecutiveNothing, MAX_BACKOFF_SHIFT)
+        return minOf(timing.redialWaitMs * factor, MAX_REDIAL_WAIT_MS)
     }
 
     /** The dial state the observation samples: a dial is in flight from its socket to its end. */
@@ -489,13 +520,16 @@ internal class ThinClientRecoveryWatcher(
         // null link = nothing may be prodded yet; the cached link is never used as a substitute
         val link = prodLinkOrNull(episode) ?: return null
         return try {
+            // capture before the prod: the dial a prod itself kills must not count toward the
+            // stale-link threshold of the window the prod starts
+            val failedDialsBefore = collaborators.session.failedDials
             collaborators.prod(link.uri)
             episode.attempt++
             if (link.isRefreshed) {
                 episode.sentRefreshedLink = true
             }
             thisLogger().info("Prodded the JetBrains Client to reconnect (attempt ${episode.attempt}).")
-            ProdDelivery(timing.nowNanos(), collaborators.session.failedDials)
+            ProdDelivery(timing.nowNanos(), failedDialsBefore)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -641,6 +675,8 @@ internal class ThinClientRecoveryWatcher(
      * refresh is retried until it yields a link, because a stale link must not be prodded forever.
      */
     private fun staleLink(episode: Episode) {
+        // failed dials are a dial outcome: the Guest is answering, so the silence escalation resets
+        episode.consecutiveNothing = 0
         episode.mustRefreshLink = true
         thisLogger().info(
             "Only failed dials since the prod: the join link for port " +
@@ -707,6 +743,9 @@ internal class ThinClientRecoveryWatcher(
         /** Whether the "stale but no fresh link yet" wait of this episode has been logged. */
         var reportedMissingFreshLink: Boolean = false
         var isFinished: Boolean = false
+
+        /** Consecutive prods that yielded no dial at all; escalates the next silence window. */
+        var consecutiveNothing: Int = 0
     }
 
     /**
@@ -745,7 +784,10 @@ internal class ThinClientRecoveryWatcher(
         PROD,
 
         /** The loop was stopped, or the client is gone: no prod, no report. */
-        STOPPED
+        STOPPED,
+
+        /** The episode budget ended the observation; the outer loop reports the failure. */
+        BUDGET_EXHAUSTED
     }
 
     /** What the Guest's dials said after a prod. */

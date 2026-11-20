@@ -209,10 +209,10 @@ class RemoteIDEServer(
      */
     @Throws(IOException::class)
     private fun findPod(): V1Pod {
-        val selector = "controller.devfile.io/devworkspace_name=${workspace.name}"
+        val selector = "${DevWorkspacePods.WORKSPACE_LABEL_KEY}=${workspace.name}"
 
         return DevWorkspacePods(devSpacesContext.client)
-            .findFirstRunning(
+            .findNewestRunning(
                 workspace.namespace,
                 selector
             ) ?: throw IOException(

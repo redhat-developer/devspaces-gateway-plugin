@@ -22,6 +22,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.net.URI
+import kotlin.concurrent.thread
 
 /** Poll interval of the virtual clock; production uses 5s and 15s. */
 private const val POLL_MS = 1_000L
@@ -528,6 +529,120 @@ class ThinClientRecoveryWatcherTest {
         assertThat(harness.failed).isZero()
     }
 
+    @Test
+    fun `stop from another thread ends the episode`(): Unit = runBlocking {
+        harness.pod = null
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            thread { watcher.stop() }.join()
+            watcher.awaitEpisodeEnd()
+        }
+
+        assertThat(watcher.isActive).isFalse()
+        assertThat(harness.failed).isZero()
+    }
+
+    @Test
+    fun `starts a new episode after one ended by stop`(): Unit = runBlocking {
+        harness.pod = null
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            watcher.stop()
+            watcher.awaitEpisodeEnd()
+            assertThat(harness.failed).isZero()
+
+            // only a budget-ended episode latches the watcher: a stop leaves recovery pending
+            assertThat(watcher.start(this)).isTrue()
+            watcher.stop()
+            watcher.awaitEpisodeEnd()
+        }
+    }
+
+    /**
+     * The Guest churns dials that never handshake: the snapshot keeps changing, so the idle window
+     * never fires and only the episode budget can end the observation.
+     */
+    @Test
+    fun `ends the episode at the budget when dials churn without ever confirming`(): Unit = runBlocking {
+        harness.churnDialsForever(intervalMs = 500)
+        val watcher = harness.newWatcher()
+
+        withTimeout(RUN_TIMEOUT_MS) {
+            assertThat(watcher.start(this)).isTrue()
+            watcher.awaitEpisodeEnd()
+
+            assertThat(harness.prods).isEmpty()
+            assertThat(harness.failed).isEqualTo(1) // exactly one failure report
+            assertThat(watcher.start(this)).isFalse() // the definitive-failure latch is engaged
+        }
+    }
+
+    @Test
+    fun `escalates the silence window after prods that yielded no dial`() {
+        harness.stopAfterProds = 3
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).hasSize(3)
+        val firstGapMs = harness.prodTimesMs[1] - harness.prodTimesMs[0]
+        val secondGapMs = harness.prodTimesMs[2] - harness.prodTimesMs[1]
+        assertThat(secondGapMs).isGreaterThan(firstGapMs)
+    }
+
+    @Test
+    fun `resets the silence escalation when dials are observed`() {
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 2
+        harness.onProd = { harness.scheduleFailedDials(DIAL_AFTER_MS, count = 2) }
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).hasSize(2)
+        // the failed dials of prod 1 reset the escalation: the next silence window stays at the base
+        // redial wait instead of doubling
+        assertThat(harness.prodTimesMs[1] - harness.prodTimesMs[0])
+            .isBetween(REDIAL_WAIT_MS * 2, REDIAL_WAIT_MS * 2 + POLL_MS)
+    }
+
+    // --- client and pod changes mid episode ---------------------------------
+
+    @Test
+    fun `stops quietly when the client disappears while observing a dial`() {
+        harness.acceptConnectingDial()
+        harness.scheduleClientGone(afterMs = 500)
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).isEmpty()
+        assertThat(harness.failed).isZero()
+        assertThat(harness.recovered).isZero()
+    }
+
+    @Test
+    fun `refreshes the link when the pod rolls after a cached-link prod`() {
+        harness.sessionPod = OLD_POD
+        harness.pod = OLD_POD
+        harness.refreshedLink = REFRESHED_LINK
+        harness.stopAfterProds = 2
+        harness.onProd = {
+            if (harness.prods.size == 1) {
+                harness.pod = NEW_POD
+            }
+        }
+
+        harness.runWatcher()
+
+        assertThat(harness.prods).hasSize(2)
+        assertThat(harness.prods[0]).isEqualTo(CACHED_LINK)
+        assertThat(harness.prods[1].rawFragment).contains("p=2")
+        assertThat(harness.prods.drop(1)).doesNotContain(CACHED_LINK)
+        assertThat(harness.refreshes).isEqualTo(1)
+    }
+
     // --- failures inside the loop -------------------------------------------
 
     @Test
@@ -670,6 +785,9 @@ private class Harness {
 
     /** Every prod attempt, in order; a throwing prod is an attempt too. */
     val prods = mutableListOf<URI>()
+
+    /** Virtual time (ms) of every prod attempt, so a test can assert the silence windows. */
+    val prodTimesMs = mutableListOf<Long>()
     val probedPods = mutableListOf<V1Pod>()
     var resolvedPods = 0
     var refreshes = 0
@@ -763,6 +881,25 @@ private class Harness {
         after(afterMs) { dials.lastLongLivedDialNanos = clock.now() }
     }
 
+    /** The Guest window is gone [afterMs] later: the watcher must stop without reporting anything. */
+    fun scheduleClientGone(afterMs: Long) {
+        after(afterMs) { clientPresent = false }
+    }
+
+    /**
+     * The Guest keeps dialing without ever handshaking or failing a dial: the snapshot keeps
+     * changing, so the observation's idle window alone would never let it end.
+     */
+    fun churnDialsForever(intervalMs: Long) {
+        fun scheduleNext() {
+            after(intervalMs) {
+                dials.isDialConnecting = !dials.isDialConnecting
+                scheduleNext()
+            }
+        }
+        scheduleNext()
+    }
+
     fun advanceClock(millis: Long) {
         clock.advance(millis)
     }
@@ -800,6 +937,7 @@ private class Harness {
                 },
                 prod = { link ->
                     prods += link
+                    prodTimesMs += clock.now() / NANOS_PER_MILLISECOND
                     if (firstProdAtMs < 0) {
                         firstProdAtMs = clock.now() / NANOS_PER_MILLISECOND
                     }

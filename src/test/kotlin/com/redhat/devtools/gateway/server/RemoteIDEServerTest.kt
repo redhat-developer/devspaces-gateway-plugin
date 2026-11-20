@@ -69,7 +69,7 @@ class RemoteIDEServerTest {
         }
         resolvedPod = mockPod
         coEvery {
-            anyConstructed<DevWorkspacePods>().findFirstRunning(any(), any())
+            anyConstructed<DevWorkspacePods>().findNewestRunning(any(), any())
         } answers { resolvedPod }
 
         remoteIDEServer = spyk(RemoteIDEServer(devSpacesContext), recordPrivateCalls = true)
@@ -88,7 +88,7 @@ class RemoteIDEServerTest {
 
         // then
         verify {
-            anyConstructed<DevWorkspacePods>().findFirstRunning(
+            anyConstructed<DevWorkspacePods>().findNewestRunning(
                 "other-namespace",
                 "controller.devfile.io/devworkspace_name=other-workspace"
             )
