@@ -16,12 +16,18 @@ import com.jetbrains.gateway.thinClientLink.ThinClientHandle
 import com.redhat.devtools.gateway.ClientWindowFocus
 import com.redhat.devtools.gateway.ThinClientDownloadException
 import com.redhat.devtools.gateway.ThinClientLaunchException
+import com.redhat.devtools.gateway.ThinClientRecoveryWatcher
 import com.redhat.devtools.gateway.DevSpacesConnection
 import com.redhat.devtools.gateway.DevSpacesContext
 import com.redhat.devtools.gateway.download.DevSpacesClientConnectProgress
+import com.redhat.devtools.gateway.openshift.ForwardDials
 import com.redhat.devtools.gateway.openshift.PortForwardSession
 import com.redhat.devtools.gateway.openshift.PortForwarder
+import com.redhat.devtools.gateway.server.RemoteIDEServer
+import io.kubernetes.client.openapi.models.V1Pod
 import io.mockk.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -36,6 +42,29 @@ import org.junit.jupiter.api.assertThrows
 import java.net.URI
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+
+/** Time a wrongly restarted episode needs to poll: its first iteration resolves a pod at once. */
+private const val RESTART_SETTLE_MS = 200L
+
+/**
+ * The window-focus throttle. It outlives the Guest's ~4.5 s dial cadence, so focusing per connection
+ * end would still pull the window to the front every 5–10 s for a whole outage.
+ */
+private const val FOCUS_THROTTLE_MS = 5_000L
+
+/** A forwarder that yields [session] and reports every probe as usable. */
+private fun fixedPortForwarder(session: PortForwardSession): PortForwarder =
+    object : PortForwarder {
+        override fun forward(
+            pod: V1Pod,
+            remotePort: Int,
+            onRemoteEnd: () -> Unit
+        ): PortForwardSession = session
+
+        override suspend fun probe(pod: V1Pod, remotePort: Int): Boolean = true
+    }
 
 class DevSpacesConnectionTest {
 
@@ -191,7 +220,7 @@ class DevSpacesConnectionTest {
         val connectionWithForward = DevSpacesConnection(
             devSpacesContext,
             ClientWindowFocus(),
-            PortForwarder { _, _, _ -> session }
+            fixedPortForwarder(session)
         )
 
         connectionWithForward.onThinClientClosed(
@@ -223,7 +252,7 @@ class DevSpacesConnectionTest {
         val connectionWithForward = DevSpacesConnection(
             devSpacesContext,
             ClientWindowFocus(),
-            PortForwarder { _, _, _ -> session }
+            fixedPortForwarder(session)
         )
         every { anyConstructed<DevWorkspaces>().get(any<String>(), any<String>()) } returns
             mockk(relaxed = true) {
@@ -283,5 +312,198 @@ class DevSpacesConnectionTest {
         // then - the new session may focus at once instead of waiting out the old throttle
         clientWindowFocus.requestFocus(thinClient)
         verify(exactly = 2) { thinClient.focusClientWindow() }
+    }
+
+    @Test
+    fun `teardown during active recovery withholds the workspace stop`() {
+        // given - the Guest is closed while recovery is still polling and the IDE looks terminated
+        val forwardClosed = AtomicBoolean(false)
+        val session = PortForwardSession(41_234) { forwardClosed.set(true) }
+        val connectionWithForward = DevSpacesConnection(
+            devSpacesContext,
+            ClientWindowFocus(),
+            fixedPortForwarder(session)
+        )
+        val watcher = activeRecovery()
+        connectionWithForward.installRecoveryWatcher(watcher)
+        every { anyConstructed<DevWorkspaces>().stop(any(), any()) } just Runs
+
+        // when - the workspace may be merely unreachable, so the stop decision is not ours (§7.9)
+        connectionWithForward.onThinClientClosed(
+            AtomicBoolean(false),
+            AtomicBoolean(true),
+            thinClient,
+            devSpacesContext.devWorkspace,
+            {},
+            {},
+            terminatingServer(),
+            session
+        )
+        awaitForwardClosed(forwardClosed)
+
+        // then - the teardown ran in full, the workspace was not stopped, recovery is cancelled
+        assertThat(forwardClosed).isTrue()
+        assertThat(watcher.isActive).isFalse()
+        verify(exactly = 0) { anyConstructed<DevWorkspaces>().stop(any(), any()) }
+    }
+
+    @Test
+    fun `teardown stops the workspace when recovery already ended`() {
+        // given - recovery gave up (or succeeded) before the Guest was closed
+        val forwardClosed = AtomicBoolean(false)
+        val session = PortForwardSession(41_234) { forwardClosed.set(true) }
+        val connectionWithForward = DevSpacesConnection(
+            devSpacesContext,
+            ClientWindowFocus(),
+            fixedPortForwarder(session)
+        )
+        val watcher = activeRecovery()
+        watcher.stop()
+        connectionWithForward.installRecoveryWatcher(watcher)
+        every { anyConstructed<DevWorkspaces>().stop(any(), any()) } just Runs
+
+        // when - the Guest is closed, the healthy-path close => stop contract is unchanged
+        connectionWithForward.onThinClientClosed(
+            AtomicBoolean(false),
+            AtomicBoolean(true),
+            thinClient,
+            devSpacesContext.devWorkspace,
+            {},
+            {},
+            terminatingServer(),
+            session
+        )
+        awaitForwardClosed(forwardClosed)
+
+        // then
+        verify(exactly = 1) { anyConstructed<DevWorkspaces>().stop(any(), any()) }
+    }
+
+    @Test
+    fun `repeated connection ends during one episode focus the window once`() {
+        // given - a connection whose focus throttle is driven here: the dial churn ends a connection
+        // well past the throttle, so every end would focus if the episode did not bound it
+        val clock = AtomicLong(0)
+        val connectionWithFocus = connectionOn(clock)
+        val watcher = pollingRecovery(pollIntervalMs = 60_000, budgetMs = 600_000)
+        connectionWithFocus.installRecoveryWatcher(watcher, CoroutineScope(Dispatchers.Default))
+
+        try {
+            // when - the Guest's dial churn ends connection after connection during the outage
+            repeat(3) {
+                connectionWithFocus.onRemoteEnd(thinClient)
+                clock.addAndGet(FOCUS_THROTTLE_MS + 1_000)
+            }
+        } finally {
+            watcher.stop()
+        }
+
+        // then - the loss became visible once instead of the window being pulled to the front for
+        // the whole outage
+        verify(exactly = 1) { thinClient.focusClientWindow() }
+    }
+
+    @Test
+    fun `connection ends after a definitive failure neither restart recovery nor focus`() {
+        // given - the budget is spent while the server stays dead
+        val clock = AtomicLong(0)
+        val connectionWithFocus = connectionOn(clock)
+        val failed = AtomicInteger()
+        val resolvedPods = AtomicInteger()
+        val watcher = pollingRecovery(
+            pollIntervalMs = 10,
+            budgetMs = 50,
+            resolvedPods = resolvedPods,
+            onRecoveryFailed = { failed.incrementAndGet() }
+        )
+        connectionWithFocus.installRecoveryWatcher(watcher, CoroutineScope(Dispatchers.Default))
+
+        connectionWithFocus.onRemoteEnd(thinClient)
+        awaitCondition { failed.get() == 1 }
+        assertThat(watcher.isActive).isFalse()
+        val podsBeforeFailure = resolvedPods.get()
+
+        // when - the Guest's dial churn keeps ending connections after the failure was reported
+        repeat(3) {
+            clock.addAndGet(FOCUS_THROTTLE_MS + 1_000)
+            connectionWithFocus.onRemoteEnd(thinClient)
+        }
+
+        // then - no episode restarts (a restarted loop polls at once) and the window is not stolen
+        runBlocking { delay(RESTART_SETTLE_MS) }
+        assertThat(resolvedPods.get()).isEqualTo(podsBeforeFailure)
+        verify(exactly = 1) { thinClient.focusClientWindow() }
+    }
+
+    /** A connection whose focus throttle reads [clock], so a test can space connection ends out. */
+    private fun connectionOn(clock: AtomicLong): DevSpacesConnection = DevSpacesConnection(
+        devSpacesContext,
+        ClientWindowFocus(nowMillis = { clock.get() }, intervalMillis = FOCUS_THROTTLE_MS)
+    )
+
+    /** Teardown runs on Dispatchers.IO: wait until it closed the forward, its last step. */
+    private fun awaitForwardClosed(closed: AtomicBoolean) {
+        awaitCondition { closed.get() }
+    }
+
+    /** Recovery and teardown run off the test thread: wait until [condition] holds. */
+    private fun awaitCondition(condition: () -> Boolean) {
+        runBlocking {
+            withTimeout(2_000) {
+                while (!condition()) {
+                    delay(10)
+                }
+            }
+        }
+    }
+
+    /**
+     * A recovery that never resolves a pod, so it keeps polling until its budget is spent.
+     *
+     * @param resolvedPods counts the loop's pod lookups: a restarted loop polls again at once.
+     * @param onRecoveryFailed counts the definitive failures the watcher reported.
+     */
+    private fun pollingRecovery(
+        pollIntervalMs: Long,
+        budgetMs: Long,
+        resolvedPods: AtomicInteger = AtomicInteger(),
+        onRecoveryFailed: () -> Unit = {}
+    ): ThinClientRecoveryWatcher = ThinClientRecoveryWatcher(
+        ThinClientRecoveryWatcher.Collaborators(
+            resolvePod = {
+                resolvedPods.incrementAndGet()
+                null
+            },
+            probe = { true },
+            cachedLink = URI("tcp://127.0.0.1:41500#cb=1"),
+            sessionPod = null,
+            refreshLink = { null },
+            prod = {},
+            session = idleDials(),
+            isClientPresent = { true },
+            onRecovered = {},
+            onRecoveryFailed = onRecoveryFailed
+        ),
+        ThinClientRecoveryWatcher.Timing(
+            pollIntervalMs = pollIntervalMs,
+            budgetMs = budgetMs
+        )
+    )
+
+    /** A running recovery: no pod is ever resolved, so it keeps polling until it is stopped. */
+    private fun activeRecovery(): ThinClientRecoveryWatcher =
+        pollingRecovery(pollIntervalMs = 60_000, budgetMs = 600_000)
+            .also { it.start(CoroutineScope(Dispatchers.Default)) }
+
+    private fun idleDials(): ForwardDials = object : ForwardDials {
+        override val isClientDialed: Boolean = false
+        override val oldestActiveHandshakeNanos: Long? = null
+        override val lastLongLivedDialNanos: Long? = null
+        override val failedDials: Long = 0
+    }
+
+    /** An IDE server that reports "terminated": without the guard, teardown would stop the workspace. */
+    private fun terminatingServer(): RemoteIDEServer = mockk(relaxed = true) {
+        coEvery { waitServerTerminated(any()) } returns true
     }
 }

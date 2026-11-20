@@ -1,0 +1,23 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>InstanceOfCheckForException:DevSpacesConnection.kt$DevSpacesConnection$e !is ThinClientLaunchException</ID>
+    <ID>LongParameterList:DevSpacesConnection.kt$DevSpacesConnection$( client: ThinClientHandle? = null, workspace: DevWorkspace, onConnectionEnded: () -&gt; Unit, onDevWorkspaceStopped: () -&gt; Unit, remoteIdeServer: RemoteIDEServer?, forwarder: PortForwardSession? )</ID>
+    <ID>LongParameterList:DevSpacesConnection.kt$DevSpacesConnection$( connectFailed: AtomicBoolean, connectionLive: AtomicBoolean, thinClient: ThinClientHandle, workspace: DevWorkspace, onConnectionEnded: () -&gt; Unit, onDevWorkspaceStopped: () -&gt; Unit, remoteIdeServer: RemoteIDEServer?, forwarder: PortForwardSession?, )</ID>
+    <ID>LongParameterList:DevSpacesConnection.kt$DevSpacesConnection$( localJoinLink: URI, workspace: DevWorkspace, onConnected: () -&gt; Unit, onConnectionEnded: () -&gt; Unit, onDevWorkspaceStopped: () -&gt; Unit, remoteIdeServer: RemoteIDEServer?, forwarder: PortForwardSession?, connectFailed: AtomicBoolean, connectionLive: AtomicBoolean, )</ID>
+    <ID>LongParameterList:Dialogs.kt$Dialogs$( message: String, title: String, buttons: Array&lt;String&gt;, confirmOptionIndex: Int, defaultOptionIndex: Int = 0, modalityState: ModalityState? = null )</ID>
+    <ID>LongParameterList:Dialogs.kt$Dialogs$( message: String, title: String, options: Array&lt;String&gt;, defaultOptionIndex: Int = 0, icon: Icon? = Messages.getWarningIcon(), modalityState: ModalityState? = null )</ID>
+    <ID>MagicNumber:RemoteIDEServer.kt$RemoteIDEServer$500</ID>
+    <ID>ReturnCount:DevWorkspacePods.kt$DevWorkspacePods$fun isPodRunning(pod: V1Pod): Boolean</ID>
+    <ID>ThrowsCount:DevSpacesConnection.kt$DevSpacesConnection$private suspend fun waitUntilServerReady( workspace: DevWorkspace, checkCancelled: (() -&gt; Unit)?, onProgress: ((ProgressCountdown.ProgressEvent) -&gt; Unit)?, modalityState: ModalityState? ): RemoteIDEServer</ID>
+    <ID>TooGenericExceptionCaught:DevSpacesConnection.kt$DevSpacesConnection$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DevWorkspacePods.kt$DevWorkspacePods$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ForwardAttempt.kt$ForwardAttempt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:PodPortForwarder.kt$PodPortForwarder$e: Exception</ID>
+    <ID>WildcardImport:DevSpacesConnection.kt$import kotlinx.coroutines.*</ID>
+    <ID>WildcardImport:DevSpacesConnectionTest.kt$import io.mockk.*</ID>
+    <ID>WildcardImport:RemoteIDEServer.kt$import kotlinx.coroutines.*</ID>
+    <ID>WildcardImport:RemoteIDEServerTest.kt$import io.mockk.*</ID>
+  </CurrentIssues>
+</SmellBaseline>

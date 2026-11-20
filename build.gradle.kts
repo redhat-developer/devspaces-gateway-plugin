@@ -180,6 +180,12 @@ changelog {
     repositoryUrl = providers.gradleProperty("pluginRepositoryUrl")
 }
 
+// Pre-existing detekt findings in files this branch touches are frozen; new findings still fail.
+// See config/detekt/baseline.xml.
+detekt {
+    baseline = file("config/detekt/baseline.xml")
+}
+
 // Configure Gradle Kover Plugin - read more: https://github.com/Kotlin/kotlinx-kover#configuration
 kover {
     reports {
@@ -361,6 +367,7 @@ tasks {
                 "(default: main, falling back to origin/main; override with -PdetektBaseRef)."
         notCompatibleWithConfigurationCache("reads git working tree state at execution time")
         setSource(files(changedFiles.map { changed -> changed.all }))
+        baseline.set(layout.projectDirectory.file("config/detekt/baseline.xml"))
         onlyIf {
             // explicitly handling git errors
             val changed = try {

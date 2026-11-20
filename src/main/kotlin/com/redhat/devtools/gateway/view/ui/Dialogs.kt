@@ -9,14 +9,39 @@ import javax.swing.Icon
 
 object Dialogs {
 
+    /**
+     * Shows an error dialog on the EDT with the default modality.
+     *
+     * @param message The message to display
+     * @param title The dialog title
+     */
     fun error(message: String, title: String) {
-        ApplicationManager.getApplication().invokeLater {
-            Messages.showMessageDialog(
-                message,
-                title,
-                Messages.getErrorIcon(),
-            )
-        }
+        error(message, title, ModalityState.defaultModalityState())
+    }
+
+    /**
+     * Shows an error dialog on the EDT, posted with [modalityState].
+     *
+     * Use [ModalityState.any] for a failure reported from a background coroutine while a modal
+     * dialog may still be open: the default modality defers the post until every open modality
+     * closes (CRW-13910 live testing saw the recovery failure dialog appear minutes after the
+     * failure was reported).
+     *
+     * @param message The message to display
+     * @param title The dialog title
+     * @param modalityState The modality the dialog is posted with
+     */
+    fun error(message: String, title: String, modalityState: ModalityState) {
+        ApplicationManager.getApplication().invokeLater(
+            {
+                Messages.showMessageDialog(
+                    message,
+                    title,
+                    Messages.getErrorIcon(),
+                )
+            },
+            modalityState
+        )
     }
 
     /**
