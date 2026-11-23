@@ -92,7 +92,7 @@ dependencies {
     // Kuberntes client
     // OkHttp 5.5.0, kotlin-stdlib 2.2.21 transitively, stdlib opt-out does not filter transitive deps.
     implementation("io.kubernetes:client-java:28.0.0")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.23.0")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.4")
 
     // RedHat Auth dependencies
