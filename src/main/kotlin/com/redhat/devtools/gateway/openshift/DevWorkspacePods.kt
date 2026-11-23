@@ -17,6 +17,7 @@ import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
 import io.kubernetes.client.openapi.models.V1PodList
+import java.time.OffsetDateTime
 
 /**
  * Queries the Kubernetes API for the pods of a DevWorkspace.
@@ -46,7 +47,7 @@ class DevWorkspacePods(private val client: ApiClient) {
         val namespace = pod.metadata?.namespace ?: return false
         return try {
             val current = CoreV1Api(client).readNamespacedPod(name, namespace).execute()
-            current.status?.phase == "Running" && current.metadata?.deletionTimestamp == null
+            !current.isTerminating() && current.isRunning()
         } catch (e: Exception) {
             if (e.isCancellationException()) throw e
             false
@@ -54,19 +55,61 @@ class DevWorkspacePods(private val client: ApiClient) {
     }
 
     /**
-     * Returns the first pod matching the given label selector.
+     * Newest pod that is running, ready and not terminating.
+     *
+     * The newest qualifying pod is the one the DevWorkspace controller currently serves.
+     * A pod without a creation timestamp counts as the oldest, so it never shadows a pod with a
+     * known timestamp.
      *
      * @param namespace the namespace to query.
      * @param labelSelector the Kubernetes label selector, for example
      * `controller.devfile.io/devworkspace_name=my-workspace`.
-     * @return the first matching pod, or `null` if no pod matches.
+     * @return the newest running and ready pod, or `null` if no pod qualifies.
      * @throws ApiException if the Kubernetes API call fails.
      */
     @Throws(ApiException::class)
-    fun findFirst(namespace: String, labelSelector: String): V1Pod? {
-        val pods = list(namespace, labelSelector)
-        return pods.items.firstOrNull()
-    }
+    fun findNewestRunning(namespace: String, labelSelector: String): V1Pod? =
+        newest(namespace, labelSelector) { pod -> pod.isRunningAndReady() }
+
+    /**
+     * Newest pod of [workspaceName] in [namespace] that runs and is not terminating: the pod that
+     * serves it, or - with [requireReady] `false` - the one that is about to.
+     *
+     * Delegates to [newest], so every caller shares one rule for "the serving pod".
+     * Blocks on the Kubernetes API: call off the EDT, from a retry or IO loop.
+     *
+     * @param namespace the workspace's namespace.
+     * @param workspaceName the DevWorkspace name, used as the label selector value.
+     * @param requireReady `true` for a pod that serves *now*; `false` to also hand out a pod whose
+     *   readiness probe has not passed yet, for a caller that polls a starting server instead of
+     *   failing on it ([com.redhat.devtools.gateway.server.RemoteIDEServer]).
+     * @return the newest qualifying pod, or `null` if no pod qualifies.
+     * @throws ApiException if the Kubernetes API call fails.
+     */
+    @Throws(ApiException::class)
+    fun findServingPod(
+        namespace: String,
+        workspaceName: String,
+        requireReady: Boolean = true
+    ): V1Pod? =
+        newest(namespace, workspaceLabelSelector(workspaceName)) { pod ->
+            !pod.isTerminating() && pod.isRunning() && (!requireReady || pod.isReady())
+        }
+
+    /** Label selector matching every pod of [workspaceName]. */
+    private fun workspaceLabelSelector(workspaceName: String): String =
+        "$WORKSPACE_LABEL_KEY=$workspaceName"
+
+    /** Newest of the listed pods that [qualifies]; a pod without a timestamp counts as the oldest. */
+    @Throws(ApiException::class)
+    private inline fun newest(
+        namespace: String,
+        labelSelector: String,
+        qualifies: (V1Pod) -> Boolean
+    ): V1Pod? =
+        list(namespace, labelSelector).items
+            .filter(qualifies)
+            .maxByOrNull { pod -> pod.metadata?.creationTimestamp ?: OffsetDateTime.MIN }
 
     /**
      * Lists the pods matching the given label selector.

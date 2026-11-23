@@ -6,8 +6,10 @@ import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestResult
 import org.gradle.kotlin.dsl.KotlinClosure2
 import io.gitlab.arturbosch.detekt.Detekt
+import org.gradle.api.logging.Logger
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.provider.ProviderFactory
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     id("java") // Java support
@@ -191,7 +193,7 @@ kover {
     }
 }
 
-// Base ref compared by the 'detektBranch' task: 'main' when available, else 'origin/main'.
+// Explicit base ref for the 'detektBranch' task; null falls back to 'main', else 'origin/main'.
 // Override with -PdetektBaseRef=<ref>.
 private val requestedBaseRef = providers.gradleProperty("detektBaseRef").orNull
 
@@ -207,13 +209,23 @@ private class GitChanges(
     private val requestedBaseRef: String?,
 ) {
     private companion object {
-        const val DEFAULT_BASE_REF = "main"
         const val WORKING_TREE_HINT = "Run inside a valid git repository working tree."
         val KOTLIN_FILE_EXTENSIONS = listOf(".kt", ".kts")
-        val DEFAULT_BASE_REF_CANDIDATES = listOf(
-            "refs/heads/$DEFAULT_BASE_REF",
-            "refs/remotes/origin/$DEFAULT_BASE_REF",
+        const val DEFAULT_BASE_REF_NAME = "main"
+        val defaultBaseRefCandidates = listOf(
+            "refs/heads/$DEFAULT_BASE_REF_NAME",
+            "refs/remotes/origin/$DEFAULT_BASE_REF_NAME",
         )
+
+        fun invalidBaseRefMessage(baseRef: String, exitCode: Int): String = buildString {
+            appendLine("Base ref '$baseRef' does not exist (git rev-parse exited with $exitCode).")
+            append("Ensure it exists locally ('git fetch origin') or pass another ref with -PdetektBaseRef.")
+        }
+
+        fun noBaseRefMessage(): String = buildString {
+            appendLine("No base ref found. Tried ${defaultBaseRefCandidates.joinToString()}.")
+            append("Fetch it ('git fetch origin $DEFAULT_BASE_REF_NAME') or pass another ref with -PdetektBaseRef.")
+        }
     }
 
     private data class GitQuery(val output: String, val error: String, val exitCode: Int)
@@ -265,33 +277,17 @@ private class GitChanges(
             if (query.exitCode == 0) {
                 baseRef
             } else {
-                throw GitQueryException(
-                    buildString {
-                        appendLine("Base ref '$baseRef' does not exist (git rev-parse exited with ${query.exitCode}).")
-                        append(
-                            "Ensure it exists locally ('git fetch origin') or " +
-                                "pass another ref with -PdetektBaseRef.",
-                        )
-                    }
-                )
+                throw GitQueryException(invalidBaseRefMessage(baseRef, query.exitCode))
             }
         }
 
     private fun defaultBaseRef(): Provider<String> =
-        query(listOf("for-each-ref", "--format=%(refname)") + DEFAULT_BASE_REF_CANDIDATES)
+        query(listOf("for-each-ref", "--format=%(refname)") + defaultBaseRefCandidates)
             .requireSuccess("for-each-ref", WORKING_TREE_HINT)
             .map { output ->
                 val existingRefs = output.lines().filter { it.isNotBlank() }
-                val existingBaseRef = DEFAULT_BASE_REF_CANDIDATES.firstOrNull { it in existingRefs }
-                    ?: throw GitQueryException(
-                        buildString {
-                            appendLine("No base ref found. Tried ${DEFAULT_BASE_REF_CANDIDATES.joinToString()}.")
-                            append(
-                                "Fetch it ('git fetch origin $DEFAULT_BASE_REF') or " +
-                                    "pass another ref with -PdetektBaseRef.",
-                            )
-                        }
-                    )
+                val existingBaseRef = defaultBaseRefCandidates.firstOrNull { it in existingRefs }
+                    ?: throw GitQueryException(noBaseRefMessage())
                 existingBaseRef.removePrefix("refs/heads/").removePrefix("refs/remotes/")
             }
 
@@ -363,26 +359,7 @@ tasks {
         setSource(files(changedFiles.map { changed -> changed.all }))
         onlyIf {
             // explicitly handling git errors
-            val changed = try {
-                changedFiles.get()
-            } catch (gitFailure: GitChanges.GitQueryException) {
-                logger.info(
-                    "Git query failed, running detektBranch to report it against the task: " +
-                        "${gitFailure.message}",
-                )
-                return@onlyIf true
-            }
-            if (changed.all.isEmpty()) {
-                logger.lifecycle("No Kotlin files (.kt, .kts) changed vs '${changed.baseRef}' - skipping detektBranch.")
-                false
-            } else {
-                logger.lifecycle(
-                    "detektBranch: ${changed.all.size} Kotlin file(s) changed vs '${changed.baseRef}' " +
-                        "(committed: ${changed.committed.size}, uncommitted: ${changed.uncommitted.size}, " +
-                        "untracked: ${changed.untracked.size})",
-                )
-                true
-            }
+            detektBranchShouldRun(changedFiles, logger)
         }
         reports {
             html.required.set(true)
@@ -404,46 +381,86 @@ tasks {
             // Suppress dynamic agent loading trace warnings
             "-Djdk.instrument.traceUsage=false"
         )
-        testLogging {
-            // Exclude standardError, standardOut
-            val showPassed = providers.gradleProperty("showPassed").isPresent
-            if (!showPassed) {
-                println(
-                    """
-                    ℹ️  Passed test output is hidden.
-                       Re-run with -PshowPassed to include PASSED tests in the output.
-                    """.trimIndent()
-                )
-            }
+        configureTestReporting()
+    }
+}
 
-            events("failed", "skipped")
-            if (showPassed) {
-                // Use -PshowPassed to include PASSED tests in the output
-                events("passed")
-            }
-
-            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
-            showExceptions = true
-            showCauses = true
-            showStackTraces = true
-        }
-        afterSuite(
-            KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
-                if (desc.parent == null) {
-                    println(
-                        """
-                    ===============================
-                    Test summary:
-                      Total:   ${result.testCount}
-                      Passed:  ${result.successfulTestCount}
-                      Failed:  ${result.failedTestCount}
-                      Skipped: ${result.skippedTestCount}
-                    ===============================
-                    """.trimIndent()
-                    )
-                }
-            })
+/**
+ * Whether the branch-only lint should run: git failures run it so the task itself reports the
+ * failure; otherwise it runs only when the branch changed at least one Kotlin file.
+ */
+private fun detektBranchShouldRun(
+    changedFiles: Provider<GitChanges.ChangedFiles>,
+    logger: Logger
+): Boolean {
+    val changed = try {
+        changedFiles.get()
+    } catch (gitFailure: GitChanges.GitQueryException) {
+        logger.info(
+            "Git query failed, running detektBranch to report it against the task: " +
+                "${gitFailure.message}",
         )
+        return true
+    }
+    return reportChangedFiles(changed, logger)
+}
+
+private fun reportChangedFiles(changed: GitChanges.ChangedFiles, logger: Logger): Boolean {
+    if (changed.all.isEmpty()) {
+        logger.lifecycle("No Kotlin files (.kt, .kts) changed vs '${changed.baseRef}' - skipping detektBranch.")
+        return false
+    }
+    logger.lifecycle(
+        "detektBranch: ${changed.all.size} Kotlin file(s) changed vs '${changed.baseRef}' " +
+            "(committed: ${changed.committed.size}, uncommitted: ${changed.uncommitted.size}, " +
+            "untracked: ${changed.untracked.size})",
+    )
+    return true
+}
+
+/** Test log verbosity and the end-of-suite summary; '-PshowPassed' includes passed tests. */
+private fun Test.configureTestReporting() {
+    val showPassed = project.providers.gradleProperty("showPassed").isPresent
+    testLogging {
+        if (!showPassed) {
+            println(TestReporting.hiddenPassedNotice())
+        }
+        events("failed", "skipped")
+        if (showPassed) {
+            // Use -PshowPassed to include PASSED tests in the output
+            events("passed")
+        }
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
+    afterSuite(
+        KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
+            if (desc.parent == null) {
+                println(TestReporting.summary(result))
+            }
+        })
+    )
+}
+
+/** Test output messages, kept off the script object so the task action stays configuration-cache safe. */
+private object TestReporting {
+    fun hiddenPassedNotice(): String =
+        "ℹ️  Passed test output is hidden.\n" +
+            "   Re-run with -PshowPassed to include PASSED tests in the output."
+
+    fun summary(result: TestResult): String {
+        val divider = "==============================="
+        return listOf(
+            divider,
+            "Test summary:",
+            "  Total:   ${result.testCount}",
+            "  Passed:  ${result.successfulTestCount}",
+            "  Failed:  ${result.failedTestCount}",
+            "  Skipped: ${result.skippedTestCount}",
+            divider,
+        ).joinToString("\n")
     }
 }
 
