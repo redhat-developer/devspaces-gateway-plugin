@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-11-23
+
+ℹ️  Passed test output is hidden.
+   Re-run with -PshowPassed to include PASSED tests in the output.
+
+### ✨ New Features and Enhancements
+
+- feat(editor): detect JetBrains Toolbox workspaces (CRW-13525) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/405
+- chore(agent): added kotlin code formatting rules by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/411
+- chore(agent): increase agentready rating (CRW-11959) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/384
+- chore(refactor): unify Kubernetes watch event types by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/398
+
+### 🐛 Bug Fixes
+
+- fix: apply IDE-published devfile template on restart (CRW-14029) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/399
+- fix: detect workspace connection loss immediately (CRW-13909) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/392
+- fix: first-time thin client download fails on unstable networks (CRW-12799) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/388
+- chore(ci): fix Codecov coverage upload configuration by @msivasubramaniaan in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/391
+
+### ⬆️ Dependency Updates
+
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.22.1 to 2.22.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/373
+- build(deps): Bump gradle-wrapper from 9.6.1 to 9.7.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/372
+- build(deps): Bump JetBrains/qodana-action from 2026.1.3 to 2026.2.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/380
+- build(deps): Bump gradle/actions from 6.3.0 to 6.4.0 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/379
+- build(deps): Bump junit-jupiter from 6.1.2 to 6.1.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/371
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.22.1 to 2.22.3 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/385
+- build(deps): Bump the github-actions group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/395
+- build(deps): Bump gradle-wrapper from 9.7.1 to 9.8.1 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/386
+- build(deps): Bump com.fasterxml.jackson.core:jackson-databind from 2.22.2 to 2.22.4 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/394
+- build: add detekt and detektBranch linting tasks (CRW-13909) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/396
+- build(deps): Bump gradle/actions from 6.4.0 to 6.4.1 in the github-actions group by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/404
+- build(deps): Bump gradle-wrapper from 9.8.1 to 9.8.2 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/402
+- build(deps): Bump com.fasterxml.jackson.dataformat:jackson-dataformat-yaml from 2.22.3 to 2.22.4 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/401
+- build(deps): Bump com.nimbusds:nimbus-jose-jwt from 10.9.1 to 10.10 by @dependabot[bot] in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/390
+- build(deps): upgrade client-java to 28.0.0 on OkHttp 5 (CRW-14128) by @adietish in https://github.com/redhat-developer/devspaces-gateway-plugin/pull/400
+
 ## [0.0.20] - 2026-10-09
 
 ### ✨ New Features and Enhancements
@@ -360,7 +397,8 @@
 - @azatsarynnyy
 - @tolusha
 
-[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.20...HEAD
+[Unreleased]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.21...HEAD
+[0.0.21]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.20...0.0.21
 [0.0.20]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.19...0.0.20
 [0.0.19]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.18...0.0.19
 [0.0.18]: https://github.com/redhat-developer/devspaces-gateway-plugin/compare/0.0.17...0.0.18
