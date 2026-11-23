@@ -73,6 +73,16 @@ There're a couple of options to install the plugin:
 
 `detekt` reports pre-existing violations in unchanged code; `detektBranch` limits findings to the current changes. Reports are written to `build/reports/detekt/`.
 
+### Code Health
+Grades the files changed on the current branch with [Kimün](https://kimun.tools) (`km`) and fails below `A-`:
+
+```console
+python3 .agents/skills/kimun-branch/scripts/km_branch.py all   # macOS / Linux
+py -3 .agents\skills\kimun-branch\scripts\km_branch.py all     # Windows
+```
+
+Only branch-changed files are scored — committed vs. `upstream/main`, staged, unstaged, and new files under `src/`. Duplication is compared against a baseline snapshot, so pre-existing repo debt does not fail the branch. Install steps for `km` are in [rules/kimun.md](./rules/kimun.md); coding agents run the same gate through the `kimun-branch` skill (see [AGENTS.md](./AGENTS.md)).
+
 ### IntelliJ Plugin Verifier
 To check the plugin compatibility against the Gateway versions defined in the [gradle.properties](./gradle.properties) file.
 
