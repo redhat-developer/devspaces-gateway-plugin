@@ -17,7 +17,12 @@ import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1Pod
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Liveness of a DevWorkspace pod. */
 internal enum class PodLiveness {
@@ -37,10 +42,6 @@ internal enum class PodLiveness {
 internal class PodLivenessProbe(private val client: ApiClient) {
 
     companion object {
-        private const val POD_PHASE_RUNNING = "Running"
-        private const val POD_PHASE_PENDING = "Pending"
-        private const val POD_PHASE_FAILED = "Failed"
-        private const val POD_PHASE_SUCCEEDED = "Succeeded"
         private const val HTTP_STATUS_NOT_FOUND = 404
         private const val POD_LIVENESS_TIMEOUT_MS = 1_000L
     }
@@ -83,6 +84,7 @@ internal class PodLivenessProbe(private val client: ApiClient) {
         }
     }
 
+    @Suppress("TooGenericExceptionCaught") // any API or transport failure only means "unknown"
     private fun queryLiveness(name: String, namespace: String): PodLiveness =
         try {
             CoreV1Api(client).readNamespacedPod(name, namespace).execute().toLiveness()
@@ -93,16 +95,17 @@ internal class PodLivenessProbe(private val client: ApiClient) {
             e.logUnknownLiveness()
         }
 
-    private fun V1Pod.toLiveness(): PodLiveness {
-        if (metadata?.deletionTimestamp != null) return PodLiveness.GONE
-        return when (status?.phase) {
-            POD_PHASE_RUNNING -> PodLiveness.RUNNING
-            // a Pending pod is likely a recreate race on the same name, keep the retry budget
-            POD_PHASE_PENDING -> PodLiveness.UNKNOWN
-            POD_PHASE_FAILED, POD_PHASE_SUCCEEDED -> PodLiveness.GONE
+    /**
+     * `Pending` = recreate race on same name, not dead. Maps to [PodLiveness.UNKNOWN], keeps retry
+     * budget. Same for unknown phases.
+     */
+    private fun V1Pod.toLiveness(): PodLiveness =
+        when {
+            isTerminating() -> PodLiveness.GONE
+            isRunning() -> PodLiveness.RUNNING
+            isInTerminalPhase() -> PodLiveness.GONE
             else -> PodLiveness.UNKNOWN
         }
-    }
 
     private fun Throwable.logUnknownLiveness(): PodLiveness {
         logger.debug("Pod liveness is unknown", this)

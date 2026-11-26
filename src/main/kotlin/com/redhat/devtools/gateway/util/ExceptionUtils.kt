@@ -26,6 +26,26 @@ fun Throwable.isTimeoutException(): Boolean = (this is TimeoutCancellationExcept
 
 fun Throwable.isCancellationException(): Boolean = (this is CancellationException && !isTimeoutException() )
 
+/** Frames a compact caller stack shows: enough to name the trigger, not a stack dump. */
+private const val CALLER_FRAMES = 4
+
+/**
+ * The current call stack as compact `Class.method` frames, for log lines that must attribute an
+ * action - a cancel, a teardown - without dumping a full stack trace.
+ *
+ * Frames of [ownClassName] are skipped, so the first entry is the code that called into it.
+ */
+fun callerFrames(ownClassName: String): String =
+    // only the trace is used here; the message just avoids a bare default-constructed exception.
+    // The first frame is this function; the frames of [ownClassName] are the code being logged.
+    Exception("caller frames").stackTrace
+        .drop(1)
+        .dropWhile { it.className == ownClassName }
+        .take(CALLER_FRAMES)
+        .joinToString(" <- ") { frame ->
+            "${frame.className.substringAfterLast('.')}.${frame.methodName}"
+        }
+
 /**
  * Returns true if this throwable or any of its causes is a `ServerContainerNotFoundException`.
  * Traverses the exception chain to determine if the root cause is a missing server container.

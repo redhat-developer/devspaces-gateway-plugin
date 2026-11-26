@@ -12,69 +12,33 @@
 package com.redhat.devtools.gateway.openshift
 
 import io.kubernetes.client.PortForward
-import io.kubernetes.client.openapi.ApiClient
-import io.kubernetes.client.openapi.ApiException
-import io.kubernetes.client.openapi.apis.CoreV1Api
-import io.kubernetes.client.openapi.models.V1ObjectMeta
-import io.kubernetes.client.openapi.models.V1Pod
-import io.kubernetes.client.openapi.models.V1PodStatus
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.mockkConstructor
-import io.mockk.unmockkAll
-import io.mockk.unmockkConstructor
 import io.mockk.verify
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
 import java.net.Socket
 import java.net.SocketTimeoutException
-import java.time.OffsetDateTime
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
 
-/** Opens a forward that does not observe remote end. */
-@Throws(IOException::class)
-private fun PortForwarder.forward(pod: V1Pod, remotePort: Int): PortForwardSession =
-    forward(pod, remotePort) {}
-
-class PodPortForwarderTest {
+/**
+ * Bridging and pump behaviour of [PodPortForwarder]. Retry, retarget and budget
+ * behaviour lives in [PodPortForwarderRetryTest]; probe and bounded opens in
+ * [PodPortForwarderProbeTest]; the dial state recovery observes in
+ * [PodPortForwarderDialObservationTest].
+ */
+class PodPortForwarderTest : PodPortForwarderTestBase() {
 
     private val serverData = "from server"
 
-    private lateinit var client: ApiClient
-
-    private lateinit var buffer: ByteArray
-
-    private val pod = V1Pod().apply {
-       metadata = V1ObjectMeta().apply {
-            name = "luke-skywalker"
-        }
-    }
-
-    private val remotePort = 8080
-
-    @BeforeEach
-    fun beforeEach() {
-        client = mockk(relaxed = true)
-        buffer = ByteArray(1024)
-        mockkConstructor(PortForward::class)
-    }
-
-    @AfterEach
-    fun afterEach() {
-        unmockkAll()
-    }
+    private val buffer = ByteArray(1024)
 
     @Test
     fun `#forward copies from server to client`() {
@@ -107,77 +71,9 @@ class PodPortForwarderTest {
     }
 
     @Test
-    fun `#forward tries several times if connecting fails`() {
-        // given
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } throws IOException("connection reset")
-        val podsRunning = PodPortForwarder(client) { PodLiveness.RUNNING }
-
-        // when
-        val closeable = podsRunning.forward(pod, remotePort)
-
-        // then
-        // wait for the server to start
-        runBlocking { delay(100.milliseconds) }
-        // the client stays connected and the pod alive: the loop's own caps
-        // (CONNECT_ATTEMPTS / retry budget) are what stop the retries
-        val socket = Socket("127.0.0.1", closeable.localPort)
-        try {
-            // attempts land at ~0s, ~1.2s and ~2.4s (1s reconnect delay + 2x100ms client-gone
-            // probes between attempts); attempt #3 is the last one CONNECT_ATTEMPTS allows, and
-            // by then the 2s budget is exhausted too. Waiting 5s — past where a 4th attempt
-            // (~3.6s) would land — proves the loop stopped rather than retried forever.
-            runBlocking { delay(5000.milliseconds) }
-            verify(atLeast = 2) { // 2+ retries
-                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-            }
-            verify(atMost = 3) { // neither the attempts cap nor the budget allows a 4th attempt
-                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-            }
-        } finally {
-            socket.close()
-            closeable.close()
-        }
-    }
-
-    @Test
-    fun `#forward does not retry when the client disconnects`() {
-        // given - the handshake always fails while the pod stays alive,
-        // so the disconnected client is the only reason to stop retrying
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } throws IOException("connection reset")
-        val podsRunning = PodPortForwarder(client) { PodLiveness.RUNNING }
-
-        // when
-        val closeable = podsRunning.forward(pod, remotePort)
-        try {
-            // wait for the server to start
-            runBlocking { delay(100.milliseconds) }
-            Socket("127.0.0.1", closeable.localPort).apply {
-                close() // the client drops immediately after connecting
-            }
-
-            // then - long enough for another retry to have happened if the close were not detected
-            runBlocking { delay(2500.milliseconds) }
-            verify(exactly = 1) { // the first attempt only, no retries for a gone client
-                anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-            }
-        } finally {
-            closeable.close()
-        }
-    }
-
-    @Test
     fun `#forward closes the local socket when the remote side ends`() {
         // given - the remote stream reports EOF immediately (pod deleted)
-        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
-        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        stubForward(forwardResult(ByteArrayInputStream(ByteArray(0))))
 
         // when
         val closeable = PodPortForwarder(client).forward(pod, remotePort)
@@ -185,7 +81,7 @@ class PodPortForwarderTest {
 
         // then - the local socket is closed instead of staying open waiting for the other direction
         Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         closeable.close()
@@ -196,24 +92,51 @@ class PodPortForwarderTest {
         // given - a forward that is not bridging anything
         val session = PodPortForwarder(client).forward(pod, remotePort)
 
-        // when - the workspace is stopped: the whole forward, listener included, is closed
+        // when - the session ends (teardown): the whole forward, listener included, is closed
         session.close()
 
-        // then - a re-dial is refused instead of reaching the stopped pod
+        // then - a re-dial is refused instead of reaching a dead session
         assertThrows<IOException> {
             Socket("127.0.0.1", session.localPort).close()
         }
     }
 
     @Test
-    fun `#forward reports a connection the pod side cut`() {
-        // given - the remote stream reports EOF immediately (pod deleted)
-        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
+    fun `#dropClientConnections cuts the copied connections but keeps listening`() {
+        // given - a bridged connection whose pod side stays silent, and the opens it took
+        val opens = AtomicInteger()
         every {
             anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
-        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        } answers {
+            opens.incrementAndGet()
+            silentForwardResult()
+        }
+        val remoteEnds = AtomicInteger()
+        val session = PodPortForwarder(client)
+            .forward(pod, remotePort) { remoteEnds.incrementAndGet() }
+        val guest = Socket("127.0.0.1", session.localPort)
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { opens.get() == 1 }).isTrue()
+
+        // when - the workspace stops: the Guest must read EOF at once, not when the pod terminates
+        session.dropClientConnections()
+        guest.soTimeout = EVENT_TIMEOUT_MS.toInt()
+        assertThat(guest.inputStream.read()).isEqualTo(-1)
+        guest.close()
+
+        // then - the cut ends the copy like a pod-side loss: the episode trigger fires
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { remoteEnds.get() == 1 }).isTrue()
+
+        // and - the listener still accepts and bridges the re-dial of a later forced reconnect
+        Socket("127.0.0.1", session.localPort).use { redial ->
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { opens.get() == 2 }).isTrue()
+        }
+        session.close()
+    }
+
+    @Test
+    fun `#forward reports a connection the pod side cut`() {
+        // given - the remote stream reports EOF immediately (pod deleted)
+        stubForward(forwardResult(ByteArrayInputStream(ByteArray(0))))
         val remoteEnds = AtomicInteger()
 
         // when
@@ -221,25 +144,19 @@ class PodPortForwarderTest {
             .forward(pod, remotePort) { remoteEnds.incrementAndGet() }
         runBlocking { delay(100.milliseconds) }
         Socket("127.0.0.1", session.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
-        runBlocking { delay(100.milliseconds) }
 
-        // then
-        assertThat(remoteEnds.get()).isEqualTo(1)
+        // then - the pod-side end is reported, however late the load lets the pump finish
+        assertThat(awaitTrue(EVENT_TIMEOUT_MS) { remoteEnds.get() == 1 }).isTrue()
         session.close()
     }
 
     @Test
     fun `#forward does not report a connection the client closed itself`() {
         // given - the pod stream never ends: only the client can end the connection
-        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
-        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        stubForward(silentForwardResult())
         val remoteEnds = AtomicInteger()
 
         // when
@@ -258,12 +175,9 @@ class PodPortForwarderTest {
     fun `#forward reports a connection whose client pump failed`() {
         // given - a messy pod death: the write into the dying tunnel fails before the pod stream
         // reports EOF, so the client pump is the first to end the copy
-        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns silentPodStream()
+        val portForwardResult = forwardResult(silentPodStream())
         every { portForwardResult.getOutboundStream(remotePort) } returns brokenTunnelStream()
+        stubForward(portForwardResult)
         val remoteEnds = AtomicInteger()
 
         // when
@@ -276,36 +190,12 @@ class PodPortForwarderTest {
                 socket.outputStream.write("ping".toByteArray())
                 socket.outputStream.flush()
             }
-            runBlocking { delay(300.milliseconds) }
+            assertThat(awaitTrue(EVENT_TIMEOUT_MS) { remoteEnds.get() == 1 }).isTrue()
         }
 
         // then - only a clean client-side close suppresses the report
         assertThat(remoteEnds.get()).isEqualTo(1)
         session.close()
-    }
-
-    @Test
-    fun `#forward does not retry when the pod is gone`() {
-        // given
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } throws ApiException("Expected HTTP 101 response but was '404 Not Found'")
-        val podsGone = PodPortForwarder(client) { PodLiveness.GONE }
-
-        // when
-        val closeable = podsGone.forward(pod, remotePort)
-        runBlocking { delay(100.milliseconds) }
-
-        // then - the accepted socket is closed by the first, failing attempt:
-        // the client sees EOF instead of a connection left hanging
-        Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
-            assertThat(socket.inputStream.read()).isEqualTo(-1)
-        }
-        verify(exactly = 1) {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        }
-        closeable.close()
     }
 
     @Test
@@ -326,10 +216,10 @@ class PodPortForwarderTest {
         // when
         val closeable = podsRunning.forward(pod, remotePort)
         val socket = Socket("127.0.0.1", closeable.localPort)
-        runBlocking { delay(500.milliseconds) }
 
-        // then - the copy failure is terminal: one handshake, no liveness query, socket closed
-        socket.soTimeout = 500
+        // then - the copy failure is terminal: one handshake, no liveness query, socket closed.
+        // The read itself waits for that close (bounded), so no fixed sleep is needed.
+        socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
         val readOutcome = runCatching { socket.inputStream.read() }
         assertThat(readOutcome.exceptionOrNull() is SocketTimeoutException).isFalse()
         assertThat(readOutcome.getOrNull() ?: -1).isEqualTo(-1)
@@ -344,12 +234,7 @@ class PodPortForwarderTest {
     @Test
     fun `#forward does not query liveness on normal disconnect`() {
         // given - the remote stream reports EOF immediately (normal end of the connection)
-        val portForwardResult = mockk<PortForward.PortForwardResult>(relaxed = true)
-        every {
-            anyConstructed<PortForward>().forward(pod, listOf(remotePort))
-        } returns portForwardResult
-        every { portForwardResult.getInputStream(remotePort) } returns ByteArrayInputStream(ByteArray(0))
-        every { portForwardResult.getOutboundStream(remotePort) } returns ByteArrayOutputStream()
+        stubForward(forwardResult(ByteArrayInputStream(ByteArray(0))))
         val livenessCalls = AtomicInteger()
         val podsRunning = PodPortForwarder(client) {
             livenessCalls.incrementAndGet()
@@ -359,7 +244,7 @@ class PodPortForwarderTest {
         // when
         val closeable = podsRunning.forward(pod, remotePort)
         Socket("127.0.0.1", closeable.localPort).use { socket ->
-            socket.soTimeout = 2000
+            socket.soTimeout = EVENT_TIMEOUT_MS.toInt()
             assertThat(socket.inputStream.read()).isEqualTo(-1)
         }
         runBlocking { delay(100.milliseconds) }
@@ -367,105 +252,6 @@ class PodPortForwarderTest {
         // then - a normal disconnect costs no Kubernetes API call
         assertThat(livenessCalls.get()).isZero()
         closeable.close()
-    }
-
-    @Test
-    fun `#check returns GONE when the pod is not found`() = runBlocking {
-        // given
-        mockkConstructor(CoreV1Api::class)
-        every {
-            anyConstructed<CoreV1Api>().readNamespacedPod("missing-pod", "test-ns")
-        } returns mockk { every { execute() } throws ApiException(404, "Not Found") }
-
-        // when
-        val liveness = PodLivenessProbe(client).query(podWith(name = "missing-pod", namespace = "test-ns"))
-
-        // then
-        assertThat(liveness).isEqualTo(PodLiveness.GONE)
-        unmockkConstructor(CoreV1Api::class)
-    }
-
-    @Test
-    fun `#check returns GONE when a running pod is terminating`() = runBlocking {
-        // given
-        mockkConstructor(CoreV1Api::class)
-        val terminating = V1Pod().apply {
-            metadata = V1ObjectMeta().apply { deletionTimestamp = OffsetDateTime.now() }
-            status = V1PodStatus().apply { phase = "Running" }
-        }
-        every {
-            anyConstructed<CoreV1Api>().readNamespacedPod("terminating-pod", "test-ns")
-        } returns mockk { every { execute() } returns terminating }
-
-        // when
-        val liveness = PodLivenessProbe(client).query(podWith(name = "terminating-pod", namespace = "test-ns"))
-
-        // then
-        assertThat(liveness).isEqualTo(PodLiveness.GONE)
-        unmockkConstructor(CoreV1Api::class)
-    }
-
-    @Test
-    fun `#check returns GONE when a pod has a terminal phase`() = runBlocking {
-        // given - Failed/Succeeded pods will not serve the forward anymore
-        mockkConstructor(CoreV1Api::class)
-        val failed = V1Pod().apply {
-            status = V1PodStatus().apply { phase = "Failed" }
-        }
-        every {
-            anyConstructed<CoreV1Api>().readNamespacedPod("failed-pod", "test-ns")
-        } returns mockk { every { execute() } returns failed }
-
-        // when
-        val liveness = PodLivenessProbe(client).query(podWith(name = "failed-pod", namespace = "test-ns"))
-
-        // then
-        assertThat(liveness).isEqualTo(PodLiveness.GONE)
-        unmockkConstructor(CoreV1Api::class)
-    }
-
-    @Test
-    fun `#check returns UNKNOWN when the API call fails`() = runBlocking {
-        // given
-        mockkConstructor(CoreV1Api::class)
-        every {
-            anyConstructed<CoreV1Api>().readNamespacedPod("unreachable-pod", "test-ns")
-        } returns mockk { every { execute() } throws IOException("connection refused") }
-
-        // when
-        val liveness = PodLivenessProbe(client).query(podWith(name = "unreachable-pod", namespace = "test-ns"))
-
-        // then
-        assertThat(liveness).isEqualTo(PodLiveness.UNKNOWN)
-        unmockkConstructor(CoreV1Api::class)
-    }
-
-    @Test
-    fun `#check returns UNKNOWN when a pod is pending`() = runBlocking {
-        // given - during a pod recreate race the same pod name can briefly be Pending
-        mockkConstructor(CoreV1Api::class)
-        val pending = V1Pod().apply {
-            status = V1PodStatus().apply { phase = "Pending" }
-        }
-        every {
-            anyConstructed<CoreV1Api>().readNamespacedPod("pending-pod", "test-ns")
-        } returns mockk { every { execute() } returns pending }
-
-        // when
-        val liveness = PodLivenessProbe(client).query(podWith(name = "pending-pod", namespace = "test-ns"))
-
-        // then
-        assertThat(liveness).isEqualTo(PodLiveness.UNKNOWN)
-        unmockkConstructor(CoreV1Api::class)
-    }
-
-    private fun podWith(name: String, namespace: String): V1Pod {
-        return V1Pod().apply {
-            metadata = V1ObjectMeta().apply {
-                this.name = name
-                this.namespace = namespace
-            }
-        }
     }
 
     private fun sendClientData(port: Int, data: String): Int {
@@ -478,32 +264,6 @@ class PodPortForwarderTest {
 
             // server to client
             return it.inputStream.read(buffer)
-        }
-    }
-
-    /**
-     * A pod stream that blocks until it is closed, like a pod that stays silent. A bare
-     * `PipedInputStream` cannot be used: unconnected, it fails with "Pipe not connected" instead
-     * of blocking, and closing it unblocks a reader only after its 1s poll.
-     */
-    private fun silentPodStream(onRead: () -> Unit = {}): InputStream = object : InputStream() {
-        private val released = CountDownLatch(1)
-
-        override fun read(): Int {
-            onRead()
-            released.await()
-            return -1
-        }
-
-        override fun close() {
-            released.countDown()
-        }
-    }
-
-    /** An outbound tunnel that fails on the first write, like a port forward whose pod just died. */
-    private fun brokenTunnelStream(): OutputStream = object : OutputStream() {
-        override fun write(b: Int) {
-            throw IOException("broken pipe")
         }
     }
 }

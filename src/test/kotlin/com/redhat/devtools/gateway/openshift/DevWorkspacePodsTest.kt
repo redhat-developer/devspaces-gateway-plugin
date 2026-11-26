@@ -11,11 +11,13 @@
  */
 package com.redhat.devtools.gateway.openshift
 
+import com.redhat.devtools.gateway.testutil.podWith
 import io.kubernetes.client.openapi.ApiClient
 import io.kubernetes.client.openapi.ApiException
 import io.kubernetes.client.openapi.apis.CoreV1Api
 import io.kubernetes.client.openapi.models.V1ObjectMeta
 import io.kubernetes.client.openapi.models.V1Pod
+import io.kubernetes.client.openapi.models.V1PodCondition
 import io.kubernetes.client.openapi.models.V1PodList
 import io.kubernetes.client.openapi.models.V1PodStatus
 import io.mockk.every
@@ -242,16 +244,12 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirst returns null when no pod matches`() {
+    fun `#findNewestRunning returns null when no pod matches`() {
         // given
-        mockkConstructor(CoreV1Api::class)
-        val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
-        every { listRequest.labelSelector(any()) } returns listRequest
-        every { listRequest.execute() } returns V1PodList().apply { items = emptyList() }
-        every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
+        mockPodList()
 
         // when
-        val result = pods.findFirst("test-ns", "controller.devfile.io/devworkspace_name=no-workspace")
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=no-workspace")
 
         // then
         assertThat(result).isNull()
@@ -259,31 +257,197 @@ class DevWorkspacePodsTest {
     }
 
     @Test
-    fun `#findFirst returns the first matching pod`() {
+    fun `#findServingPod builds the workspace label selector and returns the serving pod`() {
         // given
+        val pod = podWith(name = "serving-pod", creationTimestamp = AFTER)
         mockkConstructor(CoreV1Api::class)
-        val first = podWith(name = "first-pod", namespace = "test-ns")
-        val second = podWith(name = "second-pod", namespace = "test-ns")
         val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
-        every { listRequest.labelSelector(any()) } returns listRequest
-        every { listRequest.execute() } returns V1PodList().apply { items = listOf(first, second) }
+        every {
+            listRequest.labelSelector("controller.devfile.io/devworkspace_name=my-workspace")
+        } returns listRequest
+        every { listRequest.execute() } returns V1PodList().apply { items = listOf(pod) }
         every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
 
         // when
-        val result = pods.findFirst("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+        val result = pods.findServingPod("test-ns", "my-workspace")
 
         // then
-        assertThat(result).isSameAs(first)
+        assertThat(result).isSameAs(pod)
         unmockkConstructor(CoreV1Api::class)
     }
 
-    private fun podWith(name: String, namespace: String): V1Pod {
-        return V1Pod().apply {
-            metadata = V1ObjectMeta().apply {
-                this.name = name
-                this.namespace = namespace
+    @Test
+    fun `#findServingPod returns a running pod that is not ready when readiness is not required`() {
+        // given — a connect that only needs to wait for the IDE server must not see it as missing
+        val notReady = runningPodNotReady(name = "not-ready-pod")
+        mockPodList(notReady)
+
+        // when
+        val result = pods.findServingPod("test-ns", "my-workspace", requireReady = false)
+
+        // then
+        assertThat(result).isSameAs(notReady)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findServingPod without readiness still skips terminating pods`() {
+        // given — a pod roll: the old pod still reports Running but is being deleted
+        val terminating = podWith(
+            name = "terminating-pod",
+            creationTimestamp = AFTER,
+            deletionTimestamp = AFTER,
+        )
+        val starting = runningPodNotReady(name = "starting-pod", creationTimestamp = BEFORE)
+        mockPodList(terminating, starting)
+
+        // when
+        val result = pods.findServingPod("test-ns", "my-workspace", requireReady = false)
+
+        // then
+        assertThat(result).isSameAs(starting)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning returns the new pod when the old one is terminating`() {
+        // given — a pod roll: the old pod still reports Running but has a deletion timestamp
+        val terminating = podWith(
+            name = "old-pod",
+            creationTimestamp = BEFORE,
+            deletionTimestamp = AFTER,
+        )
+        val new = podWith(name = "new-pod", creationTimestamp = AFTER)
+        mockPodList(terminating, new)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isSameAs(new)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning returns the newest pod when several pods are running`() {
+        // given
+        val older = podWith(name = "older-pod", creationTimestamp = BEFORE)
+        val newer = podWith(name = "newer-pod", creationTimestamp = AFTER)
+        mockPodList(older, newer)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isSameAs(newer)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning treats a pod without creation timestamp as the oldest`() {
+        // given
+        val withoutTimestamp = podWith(name = "no-timestamp-pod")
+        val withTimestamp = podWith(name = "timestamped-pod", creationTimestamp = AFTER)
+        mockPodList(withoutTimestamp, withTimestamp)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isSameAs(withTimestamp)
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning returns null when only terminating pods match`() {
+        // given
+        val terminating = podWith(
+            name = "terminating-pod",
+            deletionTimestamp = AFTER,
+        )
+        mockPodList(terminating)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isNull()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning returns null when the pod has no Ready condition`() {
+        // given — running but not yet ready (conditions present, Ready=False)
+        val notReady = podWith(name = "not-ready-pod").apply {
+            status = V1PodStatus().apply {
+                phase = "Running"
+                conditions = listOf(V1PodCondition().apply { type = "Ready"; status = "False" })
             }
+        }
+        mockPodList(notReady)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isNull()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning returns null when the pod has no conditions at all`() {
+        // given — running phase but the status carries no conditions
+        val withoutConditions = podWith(name = "no-conditions-pod").apply {
+            status = V1PodStatus().apply { phase = "Running" }
+        }
+        mockPodList(withoutConditions)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isNull()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    @Test
+    fun `#findNewestRunning ignores pods whose phase is not Running`() {
+        // given — ready, but not running yet: only the phase can disqualify it
+        val pending = podWith(name = "pending-pod").apply {
+            status = V1PodStatus().apply {
+                phase = "Pending"
+                conditions = listOf(V1PodCondition().apply { type = "Ready"; status = "True" })
+            }
+        }
+        mockPodList(pending)
+
+        // when
+        val result = pods.findNewestRunning("test-ns", "controller.devfile.io/devworkspace_name=my-workspace")
+
+        // then
+        assertThat(result).isNull()
+        unmockkConstructor(CoreV1Api::class)
+    }
+
+    /** A pod that runs but still fails its readiness probe. */
+    private fun runningPodNotReady(
+        name: String,
+        creationTimestamp: OffsetDateTime? = null
+    ): V1Pod = podWith(name = name, creationTimestamp = creationTimestamp).apply {
+        status = V1PodStatus().apply {
+            phase = "Running"
+            conditions = listOf(V1PodCondition().apply { type = "Ready"; status = "False" })
         }
     }
 
+    private fun mockPodList(vararg pods: V1Pod) {
+        mockkConstructor(CoreV1Api::class)
+        val listRequest = mockk<CoreV1Api.APIlistNamespacedPodRequest>()
+        every { listRequest.labelSelector(any()) } returns listRequest
+        every { listRequest.execute() } returns V1PodList().apply { items = pods.toList() }
+        every { anyConstructed<CoreV1Api>().listNamespacedPod("test-ns") } returns listRequest
+    }
 }
+
+private val BEFORE: OffsetDateTime = OffsetDateTime.parse("2026-01-01T10:00:00Z")
+private val AFTER: OffsetDateTime = OffsetDateTime.parse("2026-01-01T10:05:00Z")
